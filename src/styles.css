@@ -236,3 +236,18 @@ td.num,th.num{text-align:right;white-space:nowrap}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 
 @media (max-width:560px){.actions .lbl{display:none}}
+
+/* walkthrough */
+.tour-focus{position:relative;z-index:25;box-shadow:0 0 0 3px var(--accent),var(--shadow)!important;transition:box-shadow .2s}
+.tourcard{position:fixed;right:24px;bottom:24px;z-index:35;width:min(360px,calc(100vw - 32px));background:var(--ink);color:var(--bg);border-radius:14px;padding:16px 18px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:10px}
+.tourcard h2{font-size:17px}
+.tourcard p{font-size:13.5px;line-height:1.5;opacity:.88}
+.tourcard .muted{color:inherit;opacity:.6}
+.tourcard .btn{background:transparent;color:var(--bg);border-color:color-mix(in srgb,var(--bg) 35%,transparent);box-shadow:none}
+.tourcard .btn.primary{background:var(--bg);color:var(--ink);border-color:var(--bg)}
+.tourcard .btn.ghost{border-color:transparent;padding-inline:4px}
+.tour-top{display:flex;justify-content:space-between;align-items:center}
+.tour-dots{display:flex;gap:5px}
+.tour-dots i{width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.25}
+.tour-dots i.on{opacity:1;width:16px;border-radius:3px}
+@media (max-width:900px){.tourcard{left:16px;right:16px;width:auto;bottom:calc(76px + env(safe-area-inset-bottom,0px))}}

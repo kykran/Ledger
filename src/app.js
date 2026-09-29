@@ -466,6 +466,8 @@ function render(){
   main.innerHTML = h;
   drawCharts(M);
   if (S.modal) renderModal();
+  if (S.tour == null && !S.tourSeen && S.prof && !S.prof.tourDone){ S.tourSeen = true; if (S.tab !== "overview"){ S.tab = "overview"; return render(); } S.tour = 0; }
+  renderTour();
 }
 
 /* ---------- sign in (hosted) ---------- */
@@ -589,7 +591,7 @@ function renderOverview(M){
   if (!S.clients.length) return `<div class="card"><div class="empty"><b>No clients yet</b><span>${M.unmatched.length ? `Your calendar has ${M.unmatched.length} recurring names that look like clients.` : S.cal.state === "loading" ? "Reading your calendar…" : "Add a client, or put sessions on your calendar with the client's name as the event title."}</span>
     ${M.unmatched.length ? `<button class="btn primary" data-tab="clients">Review suggested clients</button>` : `<button class="btn primary" data-act="new-client">Add client</button>`}</div></div>`;
   const delta = prevT.net ? (T.net - prevT.net) : null;
-  return `<section class="card"><div class="hero">
+  return `<section class="card" data-tour="hero"><div class="hero">
       <div><h3>Net to you · ${esc(mName(k))}</h3>
         <div class="big" style="margin-top:8px">${money(T.net)}${isCur && pr.net > 0 ? ` <small>→ ${money(T.net + pr.net)}</small>` : ""}</div>
         <div class="eq"><span><b>${money(T.earned)}</b> earned</span><span>−</span><span><b>${money(T.rent)}</b> studio rent</span>${delta !== null && !isCur ? `<span class="${delta>=0?"pos":"neg"}">${delta>=0?"▲":"▼"} ${money(Math.abs(delta))} vs ${esc(MONTHS[mStart(mPrev(k)).getMonth()])}</span>` : ""}${isCur && pr.net > 0 ? `<span class="muted">· projected month end</span>` : ""}</div>
@@ -603,7 +605,7 @@ function renderOverview(M){
     <div class="stat"><span class="k">Outstanding</span><span class="v ${owed>0.5?"neg":""}">${money(owed)}</span><span class="d">owed across clients</span></div>
   </div>
   <div class="grid2">
-    <section class="card"><div class="card-h"><h2>Needs attention</h2><span class="small muted">${A2.length ? A2.length + " client" + (A2.length===1?"":"s") : ""}</span></div>
+    <section class="card" data-tour="attention"><div class="card-h"><h2>Needs attention</h2><span class="small muted">${A2.length ? A2.length + " client" + (A2.length===1?"":"s") : ""}</span></div>
       ${A2.length ? `<div class="alist">${A2.map(attnRow).join("")}</div>` : `<div class="empty">Everyone is paid up with sessions left.</div>`}
       ${M.unmatched.length ? `<div class="note">${M.unmatched.length} calendar name${M.unmatched.length===1?"":"s"} not matched to a client yet. <button class="btn link" data-tab="clients">Review</button></div>` : ""}
     </section>
@@ -663,7 +665,7 @@ function renderCalendar(M){
       <div class="stat"><span class="k">Net</span><span class="v">${money(T.net)}</span><span class="d">after rent</span></div>
     </div>
     <div class="grid2">
-      <section class="card" style="padding:12px"><div class="cal" role="grid">${cells}</div></section>
+      <section class="card" style="padding:12px" data-tour="cal"><div class="cal" role="grid">${cells}</div></section>
       <section class="card"><div class="card-h"><h2>${esc(dd.toLocaleDateString(undefined,{weekday:"long", month:"long", day:"numeric"}))}</h2><span class="small muted">${dayItems.length} session${dayItems.length===1?"":"s"}</span></div>
         ${dayItems.length ? `<div class="daylist">${dayItems.map(s => `<div class="row"><span class="t">${esc(fmtT(s.date))}</span>
           <span class="who">${avatar(s.c)}<span style="min-width:0"><a href="#" class="n" data-act="edit" data-id="${s.c.id}">${esc(s.c.name)}</a><div class="s">${esc(s.calName||"")}${s.rent?` · ${money2(s.rent)} rent`:""}${s.future?" · booked":""}</div></span></span>
@@ -698,11 +700,11 @@ function renderClients(M){
         ${st.bill!=="payg" ? `<button class="btn sm" data-act="msg" data-id="${c.id}" data-kind="${st.bill==="package"?(st.status==="owes"?"unpaid":"renew"):"invoice"}">Message</button>` : ""}
         <button class="btn sm" data-act="payment" data-id="${c.id}">Payment</button></div></td></tr>`; };
   const sugg = M.unmatched;
-  return `<section class="card"><div class="card-h"><h2>Clients</h2><span class="small muted">${act.length} active</span></div>
+  return `<section class="card" data-tour="clients"><div class="card-h"><h2>Clients</h2><span class="small muted">${act.length} active</span></div>
     ${act.length ? `<div class="tablewrap"><table><thead><tr><th>Client</th><th>Status</th><th>Package / balance</th><th class="num">Per wk</th><th>Last</th><th>Next</th><th></th></tr></thead><tbody>${act.map(row).join("")}</tbody></table></div>` : `<div class="empty">No clients yet. Add one, or pick from the names found on your calendar below.</div>`}
     ${inact.length ? `<details><summary class="small muted">${inact.length} inactive</summary><div class="tablewrap"><table><tbody>${inact.map(row).join("")}</tbody></table></div></details>` : ""}
   </section>
-  <section class="card"><div class="card-h"><h2>Found on your calendar</h2><span class="small muted">Recurring event names not matched to a client</span></div>
+  <section class="card" data-tour="found"><div class="card-h"><h2>Found on your calendar</h2><span class="small muted">Recurring event names not matched to a client</span></div>
     ${sugg.length ? `<div class="tablewrap"><table><thead><tr><th>Event name</th><th class="num">Times</th><th>Last</th><th>Next</th><th></th></tr></thead><tbody>
       ${sugg.map((u,i) => `<tr><td style="font-weight:600">${esc(u.title)}</td><td class="num">${u.count}</td><td class="small">${fmtD(u.last)}</td><td class="small">${fmtD(u.next)}</td>
       <td><div class="rowacts"><button class="btn sm primary" data-act="sugg-add" data-i="${i}">Add as client</button><button class="btn sm" data-act="sugg-link" data-i="${i}">Same as…</button><button class="btn sm" data-act="sugg-ignore" data-i="${i}">Not a client</button></div></td></tr>`).join("")}
@@ -727,7 +729,7 @@ function renderBilling(M){
     <div class="stat"><span class="k">Open bills</span><span class="v ${openN?"neg":""}">${openN}</span><span class="d">for ${esc(mName(k))}</span></div>
     <div class="stat"><span class="k">Packages sold</span><span class="v">${pkgs.length}</span><span class="d">${money(pkgs.reduce((a,x)=>a+num(x.p.price),0))}</span></div>
   </div>
-  <section class="card"><div class="card-h"><h2>Monthly bills</h2><span class="small muted">${k===cur?"Monthly-bill clients are due at month end":"Sessions × rate, or membership fee"}</span></div>
+  <section class="card" data-tour="bills"><div class="card-h"><h2>Monthly bills</h2><span class="small muted">${k===cur?"Monthly-bill clients are due at month end":"Sessions × rate, or membership fee"}</span></div>
     ${monthly.length ? `<div class="tablewrap"><table><thead><tr><th>Client</th><th>Plan</th><th class="num">Sessions</th><th class="num">Amount</th><th class="num">Paid</th><th>Status</th><th></th></tr></thead><tbody>
     ${monthly.map(({c,st,inv}) => `<tr><td><div class="who">${avatar(c)}<a href="#" class="n" data-act="edit" data-id="${c.id}">${esc(c.name)}</a></div></td><td class="small">${BILLING[st.bill].label}</td>
       <td class="num">${inv.n}${inv.sched?`<span class="muted"> +${inv.sched}</span>`:""}</td><td class="num" style="font-weight:600">${money(inv.amount)}</td><td class="num">${money(inv.paid)}</td><td>${stateChip(inv)}</td>
@@ -758,7 +760,7 @@ function renderTrends(M){
       <div class="stat"><span class="k">Net per session</span><span class="v">${tot.n ? money2(tot.net/tot.n) : "–"}</span><span class="d">after studio rent</span></div>
       <div class="stat"><span class="k">${M.curM.slice(0,4)} projected</span><span class="v">${money(yearProj)}</span><span class="d">net at your current pace</span></div>
     </div>
-  <section class="card"><div class="card-h"><h2>Monthly income</h2>
+  <section class="card" data-tour="trend"><div class="card-h"><h2>Monthly income</h2>
       <div class="seg" role="group" aria-label="Chart">${[["net","Net"],["sessions","Sessions"]].map(([m,l])=>`<button data-act="trend-mode" data-mode="${m}" aria-pressed="${S.trendMode===m}">${l}</button>`).join("")}</div></div>
     <div class="legend">${S.trendMode==="net"?`<span><i class="sw-acc"></i>Net to you</span><span><i class="sw-rent"></i>Studio rent</span>`:`<span><i class="sw-acc"></i>Sessions</span>`}<span><i class="sw-proj"></i>Projected</span></div>
     <div class="chart" data-chart="months"></div>
@@ -809,7 +811,7 @@ function renderSettings(){
     <div class="actions"><button class="btn primary" data-act="save-settings" ${S.readOnly?"disabled":""}>Save</button></div>
   </section></div>
   <div class="grid2">
-  <section class="card"><h2>Backup and export</h2>
+  <section class="card" data-tour="backup"><h2>Backup and export</h2>
     <p class="small muted">Download everything you've entered, or pull your sessions and payments into a spreadsheet. A backup can be restored here or in any other copy of Trainer Tally.</p>
     <div class="actions">
       <button class="btn primary" data-act="export-json">Download backup (.json)</button>
@@ -817,6 +819,7 @@ function renderSettings(){
       <button class="btn" data-act="export-payments">Payments (.csv)</button>
       <button class="btn" data-act="restore-open" ${S.readOnly?"disabled":""}>Restore a backup</button>
     </div>
+    <div class="actions"><button class="btn ghost" data-act="tour-start">Replay the walkthrough</button></div>
   </section>
   <section class="card"><div class="card-h"><h2>Appearance</h2><div class="seg" role="group" aria-label="Appearance">${[["system","Auto"],["light","Light"],["dark","Dark"]].map(([m,l])=>`<button data-act="theme" data-mode="${m}" aria-pressed="${getThemePref()===m}">${l}</button>`).join("")}</div></div>
     <h2>Your data</h2><p class="small muted">Your clients, packages and payments are private to your account. Nothing is ever written to your calendar.</p>
@@ -931,6 +934,34 @@ function drawCharts(M){
     for (let k = mNext(M.curM), i = 0; i < 3; k = mNext(k), i++){ const pr = projectMonth(M,k); bars.push({label:MONTHS[mStart(k).getMonth()], segs:[{v: sess ? Math.round(pr.n) : pr.net, proj:true}], tip:`${mLabel(k)} projected: ${Math.round(pr.n)} sessions, ${money(pr.net)} net`}); }
     barChart(mo, bars, {id:"mo", h:240, label: sess ? "Sessions by month" : "Net income by month", fmt: sess ? (v=>String(Math.round(v))) : (v=> v>=1000 ? "$"+(v/1000).toFixed(v%1000?1:0)+"k" : "$"+v)});
   }
+}
+
+/* ---------- walkthrough ---------- */
+const TOUR = [
+  {tab:"overview", sel:"hero", title:"Your month at a glance", body:"Net is what you keep after studio rent. The dashed line projects where the month will land, using what's booked plus each client's usual pace."},
+  {tab:"overview", sel:"attention", title:"Needs attention", body:"Renewals coming due, unpaid packages and open bills show up here. Each has a ready-made message and a one-tap way to record the payment."},
+  {tab:"clients", sel:"found", title:"Clients come from your calendar", body:"Names that repeat on your calendar land here. Add as client, merge a nickname into an existing client with Same as, or hide it with Not a client."},
+  {tab:"clients", sel:"clients", title:"Set how each client pays", body:"Tap a name to set their rate and plan: package, monthly bill, membership or pay as you go. For packages, Set package tells the tally where they stand today."},
+  {tab:"calendar", sel:"cal", title:"Every session, by day", body:"Each dot is a session. Tap a day to see who, when, and what you netted. Events with words like cancel or free are skipped automatically."},
+  {tab:"billing", sel:"bills", title:"Bills and payments", body:"Monthly-bill and membership clients get a bill each month. Send it as a text or email, then log the payment when it arrives."},
+  {tab:"trends", sel:"trend", title:"Trends and projections", body:"Income by month after rent, plus the next few months at your current pace. Switch to Sessions to see volume instead of dollars."},
+  {tab:"settings", sel:"backup", title:"Your data is yours", body:"Download a backup or spreadsheet any time. Change your calendars, rent or message wording under Setup. You can replay this walkthrough here."}
+];
+function tourEnd(){ S.tour = null; document.querySelectorAll(".tour-focus").forEach(el => el.classList.remove("tour-focus")); const c = $("#tourcard"); if (c) c.remove(); if (!(S.prof && S.prof.tourDone)) saveProfile({tourDone:true}).catch(()=>{}); }
+function tourGo(i){ if (i < 0) i = 0; if (i >= TOUR.length){ tourEnd(); S.tab = "overview"; render(); return; } S.tour = i; S.tab = TOUR[i].tab; render(); window.scrollTo({top:0}); }
+function renderTour(){
+  document.querySelectorAll(".tour-focus").forEach(el => el.classList.remove("tour-focus"));
+  let card = $("#tourcard");
+  if (S.tour == null || !inAppNow()){ if (card) card.remove(); return; }
+  const st = TOUR[S.tour];
+  const el = document.querySelector(`[data-tour="${st.sel}"]`);
+  if (el){ el.classList.add("tour-focus"); try { el.scrollIntoView({block:"center", behavior:"smooth"}); } catch(e){ el.scrollIntoView(); } }
+  if (!card){ card = document.createElement("div"); card.id = "tourcard"; card.className = "tourcard"; card.setAttribute("role","dialog"); card.setAttribute("aria-live","polite"); document.body.appendChild(card); }
+  const last = S.tour === TOUR.length - 1;
+  card.innerHTML = `<div class="tour-top"><span class="small muted">${S.tour+1} of ${TOUR.length}</span><button class="btn sm ghost" data-act="tour-skip">Skip</button></div>
+    <h2>${esc(st.title)}</h2><p>${esc(st.body)}</p>
+    <div class="tour-dots">${TOUR.map((_,i)=>`<i class="${i===S.tour?"on":""}"></i>`).join("")}</div>
+    <div class="actions">${S.tour>0?`<button class="btn" data-act="tour-back">Back</button>`:""}<button class="btn primary" data-act="tour-next">${last?"Done":"Next"}</button></div>`;
 }
 
 /* ---------- modals ---------- */
@@ -1075,7 +1106,7 @@ function applyBillVisibility(){
 /* ---------- actions ---------- */
 async function onClick(e){
   const tabBtn = e.target.closest("[data-tab]");
-  if (tabBtn){ e.preventDefault(); S.tab = tabBtn.getAttribute("data-tab"); S.confirmReset = false; closeModal(); render(); window.scrollTo({top:0}); return; }
+  if (tabBtn){ e.preventDefault(); if (S.tour != null) tourEnd(); S.tab = tabBtn.getAttribute("data-tab"); S.confirmReset = false; closeModal(); render(); window.scrollTo({top:0}); return; }
   const el = e.target.closest("[data-act]"); if (!el) return;
   const act = el.getAttribute("data-act"), id = el.getAttribute("data-id");
   if (act === "close-scrim" && e.target !== el) return;
@@ -1083,6 +1114,10 @@ async function onClick(e){
   const M = S.M;
   switch (act){
     case "close": case "close-scrim": closeModal(); break;
+    case "tour-next": tourGo((S.tour||0) + 1); break;
+    case "tour-back": tourGo((S.tour||0) - 1); break;
+    case "tour-skip": tourEnd(); break;
+    case "tour-start": S.tourSeen = true; tourGo(0); break;
     case "theme": setTheme(el.getAttribute("data-mode")); break;
     case "signin": if (A.signIn) A.signIn(); break;
     case "signout": if (A.signOut) A.signOut(); break;
@@ -1216,7 +1251,7 @@ async function start(adapter){
   document.addEventListener("click", onClick);
   document.addEventListener("change", onChange);
   document.addEventListener("input", onInput);
-  document.addEventListener("keydown", e => { if (e.key === "Escape" && S.modal) closeModal(); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape"){ if (S.modal) closeModal(); else if (S.tour != null) tourEnd(); } });
   let rt; window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => S.M && drawCharts(S.M), 150); });
   renderChrome();
   let info;
