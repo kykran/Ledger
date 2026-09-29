@@ -80,6 +80,16 @@ Test cards: `4242 4242 4242 4242` succeeds, `4000 0000 0000 0341` fails on renew
 ### 5. Google verification (before strangers can sign in)
 While the consent screen is in **Testing**, only listed test users can sign in. To open it to everyone, click **Publish app** and submit for verification. `calendar.readonly` is a *sensitive* scope: Google asks for the privacy policy, a short screen recording of the sign-in and how calendar data is used, and domain verification. Typical turnaround is a few weeks. No paid security audit is needed for this scope.
 
+## Studio side (`/studio.html`)
+
+For studio owners who rent space to trainers. Run `supabase/studio.sql` once after `schema.sql`.
+
+- The owner signs in with Google and picks the studio's shared calendar.
+- Each session is credited to whoever created the event, so trainers should book with their own Google account. A trainer can have more than one booking account (e.g. a partner who books for them).
+- Rent per trainer per month: studio default or per-trainer deal (per session, flat monthly, or none). Statements go out as text or email; payments are logged by hand.
+- Room usage: average spots in use per hour against capacity, busiest slots and quiet prime time.
+- Invites: the owner sends a link (`/?join=CODE`). The trainer signs in to Trainer Tally, is linked to their row, and sees the same statement under Billing. Links are created only by `/api/studio/join`; row-level security lets a linked trainer read only their own row.
+
 ## Moving a trainer from claude.ai to hosted
 In the claude.ai version: Settings → **Download backup (.json)**.
 In the hosted version, after sign-in: first setup screen → **Restore from a backup** (or Settings → Restore a backup).
