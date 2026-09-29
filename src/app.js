@@ -204,11 +204,12 @@ async function loadCalendar(refresh){
   if (seq !== loadSeq) return;
   if (failed){ S.cal.state = "error"; S.cal.error = failed; renderStatus(); render(); return; }
   const me = (P("myEmail")||"").toLowerCase(), seen = new Set(), evs = [];
+  const extra = (P("extraCreators")||[]).map(x => String(x).toLowerCase().trim()).filter(Boolean);
   for (const [e, cal] of results){
     if (!e || e.status === "cancelled" || !e.start || !e.start.dateTime) continue;
     const key = cal.id + ":" + e.id; if (seen.has(key)) continue; seen.add(key);
     const creator = ((e.creator||{}).email||"").toLowerCase(), org = ((e.organizer||{}).email||"").toLowerCase();
-    if (cal.mineOnly && me && creator !== me && org !== me) continue;
+    if (cal.mineOnly && me && creator !== me && org !== me && !extra.includes(creator)) continue;
     evs.push({id:e.id, title:(e.summary||"").trim(), date:new Date(e.start.dateTime), cal:cal.id, calName:cal.name, studio:!!cal.studio});
   }
   evs.sort((a,b)=>a.date-b.date);
@@ -223,7 +224,13 @@ function buildMatcher(){
   list.sort((x,y)=>y.a.length-x.a.length);
   return t => { for (const {a,id} of list){ if (t === a) return id; if (t.startsWith(a+" ") && t.slice(a.length+1).split(" ").length <= 2) return id; } return null; };
 }
-function rentApplies(c, s){ const r = rentCfg(); return !c.noRent && (r.appliesTo === "all" || s.studio); }
+function rentApplies(c, s){
+  const r = rentCfg();
+  if (c.noRent) return false;
+  const nr = (c.noRentNames||[]).map(clean).filter(Boolean);
+  if (nr.length){ const t = clean(s.title||""); if (nr.some(a => t === a || t.startsWith(a + " "))) return false; }
+  return r.appliesTo === "all" || !!s.studio;
+}
 function sessionRent(s, value, c){
   const r = rentCfg();
   if (!rentApplies(c, s)) return 0;
@@ -795,6 +802,7 @@ function renderSettings(){
       <div class="field full"><label for="st-renew">Renewal message</label><textarea id="st-renew">${esc(P("renewalTemplate"))}</textarea><span class="hint">{first} {left} {size} {price} {me}</span></div>
       <div class="field full"><label for="st-inv">Monthly bill message</label><textarea id="st-inv">${esc(P("invoiceTemplate"))}</textarea><span class="hint">{first} {month} {amount} {details} {me}</span></div>
       <div class="field full"><label for="st-ign">Skip events containing these words</label><input id="st-ign" value="${esc((P("ignoreWords")||[]).join(", "))}"><span class="hint">Comma separated. A session titled "Maria cancel" won't count.</span></div>
+      <div class="field full"><label for="st-extra">On shared calendars, also count events created by</label><input id="st-extra" type="email" value="${esc((P("extraCreators")||[]).join(", "))}" placeholder="name@gmail.com"><span class="hint">For someone who books sessions for you. Comma separated.</span></div>
       <div class="field"><label for="st-th">Renewal flag at</label><input id="st-th" type="number" min="0" value="${esc(P("threshold"))}"></div>
     </div>
     ${(P("ignoredTitles")||[]).length ? `<h3>Names marked "not a client"</h3><div class="list">${(P("ignoredTitles")||[]).map((t,i)=>`<div><span>${esc(t)}</span><button class="btn sm" data-act="unignore" data-i="${i}">Restore</button></div>`).join("")}</div>` : ""}
@@ -964,6 +972,7 @@ function renderModal(){
       <div class="field"><label for="ed-email">Email</label><input id="ed-email" type="email" value="${esc(c.email||"")}"></div>
       <div class="field"><label for="ed-phone">Phone</label><input id="ed-phone" type="tel" value="${esc(c.phone||"")}"></div>
       <label class="check full"><input type="checkbox" id="ed-norent" ${c.noRent?"checked":""}> No studio rent for this client</label>
+      <div class="field full"><label for="ed-nrn">No rent when the event is named</label><input id="ed-nrn" value="${esc((c.noRentNames||[]).join(", "))}" placeholder="e.g. a partner billed to this client"><span class="hint">Optional. Comma separated calendar names.</span></div>
       <label class="check full"><input type="checkbox" id="ed-active" ${c.active!==false?"checked":""}> Active</label>
     </div>
     ${m.id && b === "package" ? packageHistory(c) : ""}
@@ -1107,7 +1116,7 @@ async function onClick(e){
         rate: num(val("ed-rate"), num(defs().rate, 100)), packageSize: Math.max(1, Math.round(num(val("ed-size"), 10))),
         packagePrice: val("ed-price") === "" ? null : num(val("ed-price")), fee: num(val("ed-fee")), included: Math.max(0, Math.round(num(val("ed-inc")))),
         overageRate: val("ed-over") === "" ? null : num(val("ed-over")), billingStart: val("ed-bs") || null,
-        email: val("ed-email").trim(), phone: val("ed-phone").trim(), noRent: chk("ed-norent"), active: chk("ed-active"),
+        email: val("ed-email").trim(), phone: val("ed-phone").trim(), noRent: chk("ed-norent"), noRentNames: val("ed-nrn").split(",").map(s=>s.trim()).filter(Boolean), active: chk("ed-active"),
         packages: old.packages || [], payments: old.payments || []};
       const isNew = !m.id;
       closeModal(); saveClient(c).then(()=>toast(isNew ? "Client added" : "Saved")).catch(()=>{});
@@ -1160,7 +1169,7 @@ async function onClick(e){
     case "link-to": { const u = M.unmatched[S.modal.i], c = client(id); closeModal(); if (u && c) saveClient({...c, aliases:[...(c.aliases||[]), u.title]}).then(()=>toast(`Matched to ${c.name}`)).catch(()=>{}); break; }
     case "sugg-ignore": { const u = M.unmatched[+el.getAttribute("data-i")]; if (u) saveProfile({ignoredTitles:[...(P("ignoredTitles")||[]), u.title]}).catch(()=>{}); break; }
     case "unignore": { const i = +el.getAttribute("data-i"); saveProfile({ignoredTitles:(P("ignoredTitles")||[]).filter((_,j)=>j!==i)}).catch(()=>{}); break; }
-    case "save-settings": saveProfile({renewalTemplate:val("st-renew"), invoiceTemplate:val("st-inv"), ignoreWords:val("st-ign").split(",").map(s=>s.trim().toLowerCase()).filter(Boolean), threshold:Math.max(0, Math.round(num(val("st-th"),3)))}).then(()=>toast("Settings saved")).catch(()=>{}); break;
+    case "save-settings": { const ex = val("st-extra").split(",").map(s=>s.trim().toLowerCase()).filter(Boolean); const exChanged = ex.join() !== (P("extraCreators")||[]).join(); saveProfile({extraCreators:ex, renewalTemplate:val("st-renew"), invoiceTemplate:val("st-inv"), ignoreWords:val("st-ign").split(",").map(s=>s.trim().toLowerCase()).filter(Boolean), threshold:Math.max(0, Math.round(num(val("st-th"),3)))}).then(()=>{ toast("Settings saved"); if (exChanged) loadCalendar(false); }).catch(()=>{}); break; }
     case "export-json": offerFile(`trainer-tally-backup-${ymd(new Date())}.json`, JSON.stringify(backupObject(), null, 2)); break;
     case "export-sessions": exportSessions(); break;
     case "export-payments": exportPayments(); break;
