@@ -4,58 +4,23 @@
  * Same contract as adapter-claude.js — see the top of app.js. */
 import "./styles.css";
 import "./app.js";
-import { createClient } from "@supabase/supabase-js";
+import { sb, api, currentSession, signInWithGoogle, storeGoogleToken, calendarCall, downloadFile } from "./supabase.js";
 
-const sb = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY, {
-  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
-});
-const CAL_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
 let session = null;
-
 const fail = (error) => { const e = new Error(error && error.message || "Request failed"); e.code = error && (error.code === "42501" ? "invalid_argument" : "unavailable"); return e; };
-async function token(){ const { data } = await sb.auth.getSession(); session = data.session; return session ? session.access_token : null; }
-async function api(path, body){
-  const t = await token();
-  const r = await fetch(path, { method:"POST", headers:{ "content-type":"application/json", authorization:"Bearer " + t }, body: JSON.stringify(body || {}) });
-  let j = {}; try { j = await r.json(); } catch(e){}
-  if (!r.ok){ const e = new Error(j.message || ("HTTP " + r.status)); e.code = j.code || (r.status >= 500 ? "server_unavailable" : "tool_error"); throw e; }
-  return j;
-}
-
-// Small cache so the app's month-by-month reads don't hit Google twice within 5 minutes.
-const cache = new Map();
-const TTL = 5 * 60 * 1000;
 
 const adapter = {
   name: "hosted",
-  calendar: {
-    async call(tool, input, opts){
-      const key = tool + ":" + JSON.stringify(input);
-      const hit = cache.get(key);
-      if (hit && !(opts && opts.refresh) && Date.now() - hit.at < TTL) return hit.data;
-      const data = await api("/api/calendar", { tool, input });
-      cache.set(key, { at: Date.now(), data });
-      return data;
-    }
-  },
+  calendar: { call: calendarCall },
   async init(){
-    const { data } = await sb.auth.getSession();
-    session = data.session;
+    session = await currentSession();
     if (!session) return { status: "signin" };
-    // Right after Google sign-in, hand the long-lived Google token to the server once.
-    if (session.provider_refresh_token){
-      try { await api("/api/auth/store-token", { refresh_token: session.provider_refresh_token }); } catch(e){ console.warn("Couldn't store Google token", e); }
-    }
+    await storeGoogleToken(session);
     sb.auth.onAuthStateChange((evt) => { if (evt === "SIGNED_OUT") location.reload(); });
     const u = session.user;
     return { status: "ready", account: { email: u.email, name: (u.user_metadata && (u.user_metadata.full_name || u.user_metadata.name) || "").split(" ")[0] } };
   },
-  signIn(){
-    return sb.auth.signInWithOAuth({ provider: "google", options: {
-      scopes: CAL_SCOPE, redirectTo: location.origin,
-      queryParams: { access_type: "offline", prompt: "consent" }
-    }});
-  },
+  signIn(){ return signInWithGoogle("/"); },
   async signOut(){ await sb.auth.signOut(); },
 
   watchProfile(cb, onErr){
@@ -78,11 +43,27 @@ const adapter = {
   async deleteClient(id){ const { error } = await sb.from("clients").delete().eq("user_id", session.user.id).eq("id", id); if (error) throw fail(error); },
   async deleteProfile(){ const { error } = await sb.from("profiles").delete().eq("user_id", session.user.id); if (error) throw fail(error); },
 
-  async saveFile({ filename, data }){
-    const type = filename.endsWith(".json") ? "application/json" : "text/csv";
-    const url = URL.createObjectURL(new Blob([data], { type }));
-    const a = document.createElement("a"); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  async saveFile({ filename, data }){ downloadFile(filename, data); },
+
+  // Studios this trainer has joined, with the statement the studio's owner computed for them.
+  studio: {
+    url: "/studio.html",
+    async memberships(){
+      const { data: mem, error } = await sb.from("studio_members").select("studio_id,trainer_id").eq("user_id", session.user.id);
+      if (error || !mem || !mem.length) return [];
+      const out = [];
+      for (const m of mem){
+        const [{ data: st }, { data: tr }] = await Promise.all([
+          sb.from("studios").select("id,data").eq("id", m.studio_id).maybeSingle(),
+          sb.from("studio_trainers").select("id,data").eq("studio_id", m.studio_id).eq("id", m.trainer_id).maybeSingle()
+        ]);
+        if (st) out.push({ studioId: st.id, studioName: (st.data && st.data.name) || "Studio", trainer: tr ? { id: tr.id, ...tr.data } : null });
+      }
+      return out;
+    },
+    async join(code){ return api("/api/studio/join", { code }); },
+    async leave(studioId){ const { error } = await sb.from("studio_members").delete().eq("studio_id", studioId).eq("user_id", session.user.id); if (error) throw fail(error); },
+    async ownsStudio(){ const { data } = await sb.from("studios").select("id").eq("owner_id", session.user.id).limit(1); return !!(data && data.length); }
   },
 
   billing: import.meta.env.VITE_BILLING_ENABLED === "true" ? {

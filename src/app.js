@@ -723,7 +723,7 @@ function renderBilling(M){
   const collected = monthTotals(M,k).collected;
   const openN = monthly.filter(x=>x.inv.due && x.inv.state!=="paid").length;
   const stateChip = inv => inv.state === "paid" ? `<span class="chip ok">Paid</span>` : inv.state === "partial" ? `<span class="chip low">Part paid</span>` : inv.state === "running" ? `<span class="chip info">In progress</span>` : `<span class="chip owes">Open</span>`;
-  return `<div class="stats">
+  return `${studioRentCard()}<div class="stats">
     <div class="stat"><span class="k">Billed</span><span class="v">${money(billed)}</span><span class="d">bills, packages, paid sessions</span></div>
     <div class="stat"><span class="k">Collected</span><span class="v">${money(collected)}</span><span class="d">payments dated this month</span></div>
     <div class="stat"><span class="k">Open bills</span><span class="v ${openN?"neg":""}">${openN}</span><span class="d">for ${esc(mName(k))}</span></div>
@@ -786,6 +786,31 @@ function renewalForecast(M){
   return `<h3>Renewals coming up</h3><div class="list">${list.map(({c,st}) => `<div><span class="who">${avatar(c)}<span>${esc(c.name)}</span></span><span class="small">${st.remaining<=0?"now":(st.runoutEst?"~":"")+fmtD(st.runout)} · ${money(st.nextPrice)}</span></div>`).join("")}</div>`;
 }
 
+/* ---------- studios (hosted) ---------- */
+function studioRentCard(){
+  if (!A.studio || !S.studios || !S.studios.length) return "";
+  return S.studios.map(ms => { const st = ms.trainer && ms.trainer.statement; const cur = st && st.months && st.months[st.months.length-1];
+    return `<section class="card"><div class="card-h"><h2>Studio rent · ${esc(ms.studioName)}</h2>${st ? `<span class="chip ${st.balance>0.5?"owes":"ok"}">${st.balance>0.5?"You owe "+money(st.balance):"Paid up"}</span>` : ""}</div>
+      ${st ? `<p class="small muted">${esc(st.rule)} · updated ${esc(new Date(st.updatedAt).toLocaleDateString(undefined,{month:"short",day:"numeric"}))} by the studio</p>
+      <div class="tablewrap"><table><thead><tr><th>Month</th><th class="num">Sessions</th><th class="num">Rent</th><th class="num">Paid</th><th>Status</th></tr></thead><tbody>
+      ${[...st.months].reverse().slice(0,4).map(m => `<tr><td>${esc(mLabel(m.month))}</td><td class="num">${m.n}</td><td class="num" style="font-weight:600">${money(m.rent)}</td><td class="num">${money(m.paid)}</td><td><span class="chip ${m.state==="paid"||m.state==="none"?"ok":m.state==="partial"?"low":m.state==="running"?"info":"owes"}">${m.state==="running"?"In progress":m.state==="none"?"No rent":m.state[0].toUpperCase()+m.state.slice(1)}</span></td></tr>`).join("")}
+      </tbody></table></div>` : `<div class="empty">Your studio hasn't sent a statement yet.</div>`}</section>`; }).join("");
+}
+function studiosSettingsCard(){
+  if (!A.studio) return "";
+  const list = S.studios || [];
+  return `<section class="card"><h2>Studios</h2>
+    ${list.length ? `<div class="list">${list.map(ms => `<div><span><b>${esc(ms.studioName)}</b>${ms.trainer?` · ${esc(ms.trainer.name||"")}`:""}</span><button class="btn sm" data-act="studio-leave" data-sid="${esc(ms.studioId)}">Leave</button></div>`).join("")}</div>` : `<p class="small muted">If your studio uses Trainer Tally, join it with the code they sent to see your rent statement here.</p>`}
+    <div class="form"><div class="field"><label for="st-join">Studio code</label><input id="st-join" placeholder="e.g. K7M2QX9A" autocomplete="off"></div></div>
+    <div class="actions"><button class="btn" data-act="studio-join">Join studio</button><a class="btn ghost" href="${esc(A.studio.url)}">${S.ownsStudio ? "Open the studio side →" : "Run a studio? Set up the studio side →"}</a></div>
+  </section>`;
+}
+async function refreshStudios(){ if (!A.studio) return; try { S.studios = await A.studio.memberships(); S.ownsStudio = await A.studio.ownsStudio(); } catch(e){ S.studios = []; } if (inAppNow()) render(); }
+async function joinStudio(code){
+  try { const r = await A.studio.join(code); toast(`You joined ${r.studioName}`); try { localStorage.removeItem("tt-join"); } catch(e){} await refreshStudios(); }
+  catch(err){ toast(err.message || "Couldn't join that studio"); try { localStorage.removeItem("tt-join"); } catch(e){} }
+}
+
 /* ---------- settings ---------- */
 function renderSettings(){
   const r = rentCfg(), d = defs();
@@ -810,6 +835,7 @@ function renderSettings(){
     ${(P("ignoredTitles")||[]).length ? `<h3>Names marked "not a client"</h3><div class="list">${(P("ignoredTitles")||[]).map((t,i)=>`<div><span>${esc(t)}</span><button class="btn sm" data-act="unignore" data-i="${i}">Restore</button></div>`).join("")}</div>` : ""}
     <div class="actions"><button class="btn primary" data-act="save-settings" ${S.readOnly?"disabled":""}>Save</button></div>
   </section></div>
+  ${studiosSettingsCard()}
   <div class="grid2">
   <section class="card" data-tour="backup"><h2>Backup and export</h2>
     <p class="small muted">Download everything you've entered, or pull your sessions and payments into a spreadsheet. A backup can be restored here or in any other copy of Trainer Tally.</p>
@@ -1114,6 +1140,8 @@ async function onClick(e){
   const M = S.M;
   switch (act){
     case "close": case "close-scrim": closeModal(); break;
+    case "studio-join": { const c = val("st-join").trim(); if (!c){ toast("Enter your studio's code"); break; } joinStudio(c); break; }
+    case "studio-leave": { const sid = el.getAttribute("data-sid"); try { await A.studio.leave(sid); toast("You left the studio"); } catch(err){ toast("Couldn't leave. Try again."); } refreshStudios(); break; }
     case "tour-next": tourGo((S.tour||0) + 1); break;
     case "tour-back": tourGo((S.tour||0) - 1); break;
     case "tour-skip": tourEnd(); break;
@@ -1253,6 +1281,7 @@ async function start(adapter){
   document.addEventListener("input", onInput);
   document.addEventListener("keydown", e => { if (e.key === "Escape"){ if (S.modal) closeModal(); else if (S.tour != null) tourEnd(); } });
   let rt; window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => S.M && drawCharts(S.M), 150); });
+  try { const j = new URLSearchParams(location.search).get("join"); if (j){ localStorage.setItem("tt-join", j); history.replaceState(null, "", location.pathname); } } catch(e){}
   renderChrome();
   let info;
   try { info = await A.init(); } catch(e){ info = {status:"nostore"}; }
@@ -1260,7 +1289,9 @@ async function start(adapter){
   if (info.status === "signin"){ S.screen = "signin"; render(); return; }
   if (info.status !== "ready"){ S.screen = "nostore"; render(); return; }
   S.screen = "data";
+  try { const j = new URLSearchParams(location.search).get("join"); if (j){ localStorage.setItem("tt-join", j); history.replaceState(null, "", location.pathname); } } catch(e){}
   try { const q = new URLSearchParams(location.search).get("billing"); if (q){ toast(q === "success" ? "You're subscribed. Thank you!" : "Checkout cancelled"); history.replaceState(null, "", location.pathname); if (q === "success") S.tab = "settings"; } } catch(e){}
+  if (A.studio){ refreshStudios(); let pending = null; try { pending = localStorage.getItem("tt-join"); } catch(e){} if (pending) joinStudio(pending); }
   if (A.billing) A.billing.status().then(s => { S.billingStatus = s; if (S.tab === "settings") render(); }).catch(()=>{});
   let started = false;
   const maybeStart = () => { if (!started && S.profLoaded && S.clientsLoaded && S.prof && S.prof.setupDone){ started = true; loadCalendar(false); } };
