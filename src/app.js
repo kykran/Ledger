@@ -155,6 +155,7 @@ function calErrorText(err){
   if (c === "blocked_by_policy" || c === "approval_required") return "Your organization's policy blocks calendar access here.";
   if (c === "server_unavailable" || c === "rate_limited") return "Google Calendar didn't answer in time. Press Retry in a moment.";
   if (c === "not_granted" || c === "capability_disabled") return "This view can't reach your calendar.";
+  if (c === "calendar_scope") return "Trainer Tally can't see your calendar yet. Sign out, sign back in, and tick the box that allows access to Google Calendar.";
   if (c === "subscription_required") return "Your free trial has ended. Subscribe in Settings to keep counting sessions from your calendar.";
   if (c === "tool_error") return "Google Calendar returned an error: " + (err.message||"");
   return "Couldn't read the calendar" + (err && err.message ? ": " + err.message : ".");
@@ -539,7 +540,8 @@ function renderSetup(){
     <div class="actions">${w.step>1?`<button class="btn" data-act="wiz-back">Back</button>`:""}
       <button class="btn primary" data-act="wiz-next" ${w.step===1 && !(w.cals.some(c=>c.use)) ? "disabled" : ""}>${w.step===3?"Finish and read my calendar":"Next"}</button>
       ${S.rerunning ? `<button class="btn ghost" data-act="wiz-cancel">Cancel</button>` : ""}
-      ${w.step===1 && !S.rerunning ? `<button class="btn ghost" data-act="restore-open">Restore from a backup</button>` : ""}</div>
+      ${w.step===1 && !S.rerunning ? `<button class="btn ghost" data-act="restore-open">Restore from a backup</button>` : ""}
+      ${A.signOut ? `<button class="btn ghost" data-act="signout" style="margin-left:auto">Sign out${S.account && S.account.email ? " (" + esc(S.account.email) + ")" : ""}</button>` : ""}</div>
   </div>`;
 }
 function readWizStep(){

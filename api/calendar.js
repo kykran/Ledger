@@ -24,7 +24,7 @@ async function accessToken(userId){
 async function google(url, access){
   const r = await fetch(url, { headers: { authorization: "Bearer " + access } });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw Object.assign(new Error((j.error && j.error.message) || "Google Calendar error"), { code: r.status === 401 ? "needs_reauth" : r.status >= 500 || r.status === 429 ? "server_unavailable" : "tool_error", status: r.status === 401 ? 401 : 502 });
+  if (!r.ok) throw Object.assign(new Error((j.error && j.error.message) || "Google Calendar error"), { code: (r.status === 401 || /insufficient authentication scopes|ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(JSON.stringify(j))) ? "calendar_scope" : r.status >= 500 || r.status === 429 ? "server_unavailable" : "tool_error", status: r.status === 401 ? 401 : 502 });
   return j;
 }
 
