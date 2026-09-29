@@ -258,3 +258,11 @@ td.num,th.num{text-align:right;white-space:nowrap}
 .heat .hl{text-align:right;padding-right:6px;line-height:22px}
 .heat .hc{height:22px;border-radius:5px}
 .heat .hc.full{box-shadow:inset 0 0 0 2px var(--ink)}
+
+/* public demo banner */
+.demo-strip{display:flex;gap:6px 14px;align-items:center;justify-content:center;flex-wrap:wrap;padding:8px 16px;background:var(--ink);color:var(--bg);font-size:13px;line-height:1.35;text-align:center}
+.demo-strip b{background:var(--accent);color:var(--accent-ink);border-radius:5px;padding:1px 7px;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase}
+.demo-strip span{opacity:.8}
+.demo-strip a{color:inherit;font-weight:600;text-underline-offset:3px}
+.demo-strip a.cta{background:var(--bg);color:var(--ink);border-radius:8px;padding:4px 10px;text-decoration:none}
+@media (max-width:700px){.demo-strip span{display:none}}

@@ -4,7 +4,11 @@
  * per trainer per month, statements go out, payments are logged, and room usage is charted.
  * Statements are saved on each trainer's row so a linked trainer sees the same numbers. */
 import "./styles.css";
-import { sb, api, currentSession, signInWithGoogle, storeGoogleToken, calendarCall, downloadFile } from "./supabase.js";
+import * as real from "./supabase.js";
+// The public demo swaps in an in-memory backend; everything else uses Supabase.
+const B = window.__ttStudioBackend || real;
+const { sb, api, currentSession, signInWithGoogle, storeGoogleToken, calendarCall, downloadFile } = B;
+const HOME = B.homeUrl || "/";
 
 const DAY = 86400000;
 const YEAR0 = new Date().getFullYear() + "-01-01";
@@ -258,7 +262,7 @@ function renderChrome(){
   $("#tabbar").innerHTML = TABS.map(([k,l]) => `<button data-tab="${k}" ${S.tab===k?'aria-current="page"':""} aria-label="${l}">${ic(k)}<span>${l.split(" ")[0]}</span>${badge(k)?'<i class="dot"></i>':""}</button>`).join("");
   const pref = themePref();
   $("#sidefoot").innerHTML = `<div class="seg" role="group" aria-label="Appearance">${[["system","auto"],["light","sun"],["dark","moon"]].map(([m,i])=>`<button data-act="theme" data-mode="${m}" aria-pressed="${pref===m}">${ic(i,' style="width:14px;height:14px"')}</button>`).join("")}</div>
-    <a class="btn sm" href="/" style="align-self:flex-start">← My training</a>${S.session ? `<span>${esc(S.session.user.email)}</span><button class="btn sm ghost" data-act="signout" style="align-self:flex-start;padding-left:0">Sign out</button>` : ""}`;
+    <a class="btn sm" href="${HOME}" style="align-self:flex-start">← My training</a>${S.session ? `<span>${esc(S.session.user.email)}</span><button class="btn sm ghost" data-act="signout" style="align-self:flex-start;padding-left:0">Sign out</button>` : ""}`;
   $("#pagetitle").textContent = inApp ? (TABS.find(x=>x[0]===S.tab)||[])[1] : "Studio";
   $("#pagesub").textContent = inApp ? `${D("name")} · ${S.cal.at ? "calendar read " + fmtT(S.cal.at) : "studio side"}` : "Rent, trainers and room usage for studio owners";
   const ms = $("#monthsw"); ms.hidden = !(inApp && MONTH_TABS.has(S.tab) && S.month);
@@ -317,7 +321,7 @@ function renderSetup(){
   return `<div class="setup"><div><h1>Set up your studio</h1><p class="muted small">Three steps. Trainers are found automatically from who booked each session.</p></div>
     <div class="steps">${["Calendar","Space","Rent"].map((s,i)=>`<span class="${w.step===i+1?"on":""}">${i+1}. ${s}</span>`).join("")}</div>${body}
     <div class="actions">${w.step>1?`<button class="btn" data-act="wiz-back">Back</button>`:""}<button class="btn primary" data-act="wiz-next">${w.step===3?"Finish and read the calendar":"Next"}</button>
-    ${S.studio && S.studio.data && S.studio.data.setupDone ? `<button class="btn ghost" data-act="wiz-cancel">Cancel</button>` : ""}<a class="btn ghost" href="/" style="margin-left:auto">← Back to my training</a></div></div>`;
+    ${S.studio && S.studio.data && S.studio.data.setupDone ? `<button class="btn ghost" data-act="wiz-cancel">Cancel</button>` : ""}<a class="btn ghost" href="${HOME}" style="margin-left:auto">← Back to my training</a></div></div>`;
 }
 function readWiz(){
   const w = S.wiz;
@@ -529,7 +533,7 @@ document.addEventListener("click", async e => {
     case "close": case "close-scrim": closeModal(); break;
     case "theme": try { localStorage.setItem("tt-theme", el.getAttribute("data-mode")); } catch(x){} applyTheme(el.getAttribute("data-mode")); render(); break;
     case "signin": signInWithGoogle("/studio.html"); break;
-    case "signout": await sb.auth.signOut(); location.href = "/"; break;
+    case "signout": await sb.auth.signOut(); location.href = HOME; break;
     case "refresh": loadCalendar(true); break;
     case "cal-list": S.calList = null; S.calListErr = null; render(); break;
     case "mprev": S.month = mPrev(S.month); render(); break;
@@ -599,7 +603,7 @@ let rt; window.addEventListener("resize", () => { clearTimeout(rt); rt = setTime
   S.session = await currentSession();
   if (!S.session){ S.screen = "signin"; render(); return; }
   await storeGoogleToken(S.session);
-  sb.auth.onAuthStateChange(evt => { if (evt === "SIGNED_OUT") location.href = "/"; });
+  sb.auth.onAuthStateChange(evt => { if (evt === "SIGNED_OUT") location.href = HOME; });
   try { await loadStudio(); } catch(e){ toast("Couldn't load your studio. Refresh to try again."); }
   S.screen = "app"; render();
   if (S.studio && S.studio.data && S.studio.data.setupDone) loadCalendar(false);
