@@ -17,6 +17,7 @@ async function accessToken(userId){
   });
   const j = await r.json();
   if (!r.ok) throw Object.assign(new Error("Google access expired"), { code: j.error === "invalid_grant" ? "needs_reauth" : "server_unavailable", status: j.error === "invalid_grant" ? 401 : 502 });
+  if (j.scope && !/calendar(\.readonly)?(\s|$)/.test(j.scope)) throw Object.assign(new Error("Calendar permission wasn't granted"), { code: "calendar_scope", status: 403 });
   tokens.set(userId, { access: j.access_token, exp: Date.now() + (j.expires_in || 3600) * 1000 });
   return j.access_token;
 }

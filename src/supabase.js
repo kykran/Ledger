@@ -19,8 +19,20 @@ export async function api(path, body){
 export function signInWithGoogle(returnPath){
   return sb.auth.signInWithOAuth({ provider: "google", options: {
     scopes: CAL_SCOPE, redirectTo: location.origin + (returnPath || "/"),
-    queryParams: { access_type: "offline", prompt: "consent" }
+    queryParams: { access_type: "offline", prompt: "consent", include_granted_scopes: "true" }
   }});
+}
+
+// If Google sent the user back with an error (e.g. an approval page reused with Back), read and clear it.
+export function takeAuthError(){
+  const q = new URLSearchParams(location.search), h = new URLSearchParams(location.hash.replace(/^#/, ""));
+  const code = q.get("error_code") || h.get("error_code") || q.get("error") || h.get("error");
+  if (!code) return null;
+  const desc = q.get("error_description") || h.get("error_description") || "";
+  history.replaceState(null, "", location.pathname);
+  if (/state/i.test(code + desc)) return "That Google approval page had expired, usually from going back to it. Press Continue with Google once more and approve on the fresh page.";
+  if (/access_denied/i.test(code)) return "Google sign-in was cancelled. Press Continue with Google to try again.";
+  return "Google sign-in didn't finish" + (desc ? ": " + desc.replace(/\+/g, " ") : ".") + " Press Continue with Google to try again.";
 }
 
 // Right after Google sign-in, hand the long-lived Google token to the server once.

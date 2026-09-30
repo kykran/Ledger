@@ -4,7 +4,7 @@
  * Same contract as adapter-claude.js — see the top of app.js. */
 import "./styles.css";
 import "./app.js";
-import { sb, api, currentSession, signInWithGoogle, storeGoogleToken, calendarCall, downloadFile } from "./supabase.js";
+import { sb, api, currentSession, signInWithGoogle, storeGoogleToken, calendarCall, downloadFile, takeAuthError } from "./supabase.js";
 
 let session = null;
 const fail = (error) => { const e = new Error(error && error.message || "Request failed"); e.code = error && (error.code === "42501" ? "invalid_argument" : "unavailable"); return e; };
@@ -13,14 +13,16 @@ const adapter = {
   name: "hosted",
   calendar: { call: calendarCall },
   async init(){
+    const authError = takeAuthError();
     session = await currentSession();
-    if (!session) return { status: "signin" };
+    if (!session) return { status: "signin", error: authError };
     await storeGoogleToken(session);
     sb.auth.onAuthStateChange((evt) => { if (evt === "SIGNED_OUT") location.reload(); });
     const u = session.user;
     return { status: "ready", account: { email: u.email, name: (u.user_metadata && (u.user_metadata.full_name || u.user_metadata.name) || "").split(" ")[0] } };
   },
   signIn(){ return signInWithGoogle("/"); },
+  grantCalendar(){ return signInWithGoogle(location.pathname); },
   async signOut(){ await sb.auth.signOut(); },
 
   watchProfile(cb, onErr){

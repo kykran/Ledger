@@ -155,7 +155,7 @@ function calErrorText(err){
   if (c === "blocked_by_policy" || c === "approval_required") return "Your organization's policy blocks calendar access here.";
   if (c === "server_unavailable" || c === "rate_limited") return "Google Calendar didn't answer in time. Press Retry in a moment.";
   if (c === "not_granted" || c === "capability_disabled") return "This view can't reach your calendar.";
-  if (c === "calendar_scope") return "Trainer Tally can't see your calendar yet. Sign out, sign back in, and tick the box that allows access to Google Calendar.";
+  if (c === "calendar_scope") return "Trainer Tally doesn't have permission to see your calendar yet.";
   if (c === "subscription_required") return "Your free trial has ended. Subscribe in Settings to keep counting sessions from your calendar.";
   if (c === "tool_error") return "Google Calendar returned an error: " + (err.message||"");
   return "Couldn't read the calendar" + (err && err.message ? ": " + err.message : ".");
@@ -443,6 +443,7 @@ function renderStatus(){
   let h = "";
   if (S.readOnly) h += `<div class="banner err"><span>You can see this page but it can't save your data. Ask the owner to share it with you as an Editor, then reload.</span></div>`;
   if (S.cal.state === "loading"){ const pct = S.cal.total ? Math.round(100*S.cal.done/S.cal.total) : 0; h += `<div class="banner"><span class="small">Reading your calendar…</span><div class="prog"><b style="width:${pct}%"></b></div><span class="small">${pct}%</span></div>`; }
+  else if (S.cal.state === "error" && isScopeErr(S.cal.error) && A.grantCalendar) h += calendarPermissionCard();
   else if (S.cal.state === "error") h += `<div class="banner err"><span>${esc(calErrorText(S.cal.error))}</span><button class="btn sm" data-act="refresh">Retry</button></div>`;
   $("#status").innerHTML = inAppNow() ? h : "";
 }
@@ -471,10 +472,23 @@ function render(){
 }
 
 /* ---------- sign in (hosted) ---------- */
+function calendarPermissionCard(){
+  return `<div class="card" style="gap:12px"><h2>One more step: allow calendar access</h2>
+    <p class="small">You're signed in, but Google didn't give Trainer Tally permission to read your calendar. That box is easy to miss.</p>
+    <ol class="small" style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px">
+      <li>Press <b>Allow calendar access</b> below.</li>
+      <li>If Google says the app isn't verified, press <b>Continue</b>.</li>
+      <li>On the next screen, <b>tick the box</b> next to "See and download any calendar you can access".</li>
+      <li>Press <b>Continue</b> once and wait. Don't use the Back button.</li>
+    </ol>
+    <div class="actions"><button class="btn primary" data-act="grant-calendar">Allow calendar access</button><button class="btn ghost" data-act="cal-list">I already did, check again</button></div></div>`;
+}
+const isScopeErr = e => !!(e && e.code === "calendar_scope");
 function renderSignIn(){
   return `<div class="signin"><span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 5v14M9.5 5v14M14 5v14M18.5 5v14M3 16.5 21 7.5"/></svg></span>
     <h1>Trainer Tally</h1>
     <p class="muted">Your training business, counted from the calendar you already use. Packages, monthly bills, rent and renewals in one place.</p>
+    ${S.signinError ? `<div class="banner err" style="text-align:left"><span>${esc(S.signinError)}</span></div>` : ""}
     <button class="btn primary" data-act="signin" style="padding:11px 18px;font-size:14px">Continue with Google</button>
     <p class="small muted">Trainer Tally reads your Google Calendar to count sessions. It never changes or deletes your events. <a href="/privacy.html">Privacy</a></p></div>`;
 }
@@ -498,6 +512,7 @@ function renderSetup(){
     if (A.calendar && !S.calList && !S.calListErr && !S.calLoading){ S.calLoading = true; fetchCalendarList().finally(()=>{ S.calLoading = false; syncWizCals(); render(); }); }
     let cal;
     if (!A.calendar) cal = `<div class="note">Connect Google Calendar to count sessions automatically.</div>`;
+    else if (isScopeErr(S.calListErr) && A.grantCalendar) cal = calendarPermissionCard();
     else if (S.calListErr) cal = `<div class="banner err"><span>${esc(calErrorText(S.calListErr))}</span><button class="btn sm" data-act="cal-list">Retry</button></div>`;
     else if (!S.calList) cal = `<div class="note">Looking up your calendars… Allow Google Calendar if you're asked.</div>`;
     else cal = `<div>${w.cals.map((c,i) => `<div class="calrow">
@@ -1147,7 +1162,8 @@ async function onClick(e){
     case "tour-skip": tourEnd(); break;
     case "tour-start": S.tourSeen = true; tourGo(0); break;
     case "theme": setTheme(el.getAttribute("data-mode")); break;
-    case "signin": if (A.signIn) A.signIn(); break;
+    case "signin": if (A.signIn){ el.disabled = true; el.textContent = "Opening Google…"; A.signIn(); } break;
+    case "grant-calendar": if (A.grantCalendar){ el.disabled = true; el.textContent = "Opening Google…"; A.grantCalendar(); } break;
     case "signout": if (A.signOut) A.signOut(); break;
     case "refresh": loadCalendar(true); break;
     case "cal-list": S.calList = null; S.calListErr = null; render(); break;
@@ -1286,7 +1302,7 @@ async function start(adapter){
   let info;
   try { info = await A.init(); } catch(e){ info = {status:"nostore"}; }
   S.account = info.account || null;
-  if (info.status === "signin"){ S.screen = "signin"; render(); return; }
+  if (info.status === "signin"){ S.signinError = info.error || null; S.screen = "signin"; render(); return; }
   if (info.status !== "ready"){ S.screen = "nostore"; render(); return; }
   S.screen = "data";
   try { const j = new URLSearchParams(location.search).get("join"); if (j){ localStorage.setItem("tt-join", j); history.replaceState(null, "", location.pathname); } } catch(e){}

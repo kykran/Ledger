@@ -115,7 +115,7 @@ async function loadStudio(){
 /* ---------- calendar ---------- */
 function calErrorText(err){
   const c = err && err.code;
-  if (c === "calendar_scope") return "Trainer Tally can't see your calendars yet. Sign out, sign back in, and tick the box that allows access to Google Calendar.";
+  if (c === "calendar_scope") return "Google didn't give Trainer Tally permission to read your calendar. Press Allow calendar access, tick the calendar box on Google's screen, and press Continue once.";
   if (c === "needs_reauth" || c === "server_not_connected") return "Google Calendar access needs reconnecting. Sign out and back in.";
   if (c === "server_unavailable") return "Google Calendar didn't answer in time. Press Retry in a moment.";
   if (c === "tool_error") return "Google Calendar returned an error: " + (err.message||"") + " Check that your account can see the studio calendar.";
@@ -274,7 +274,7 @@ function renderChrome(){
 function renderStatus(){
   renderChrome(); let h = "";
   if (S.cal.state === "loading"){ const pct = S.cal.total ? Math.round(100*S.cal.done/S.cal.total) : 0; h = `<div class="banner"><span class="small">Reading the studio calendar…</span><div class="prog"><b style="width:${pct}%"></b></div><span class="small">${pct}%</span></div>`; }
-  else if (S.cal.state === "error") h = `<div class="banner err"><span>${esc(calErrorText(S.cal.error))}</span><button class="btn sm" data-act="refresh">Retry</button></div>`;
+  else if (S.cal.state === "error") h = `<div class="banner err"><span>${esc(calErrorText(S.cal.error))}</span>${S.cal.error && S.cal.error.code === "calendar_scope" ? `<button class="btn sm primary" data-act="grant-calendar">Allow calendar access</button>` : `<button class="btn sm" data-act="refresh">Retry</button>`}</div>`;
   $("#status").innerHTML = S.screen === "app" ? h : "";
 }
 function render(){
@@ -296,7 +296,7 @@ function renderSetup(){
   const w = S.wiz; let body = "";
   if (w.step === 1){
     if (!S.calList && !S.calListErr && !S.calLoading){ S.calLoading = true; fetchCalendarList().finally(()=>{ S.calLoading = false; render(); }); }
-    const cals = S.calListErr ? `<div class="banner err"><span>${esc(calErrorText(S.calListErr))}</span><button class="btn sm" data-act="cal-list">Retry</button></div>` : !S.calList ? `<div class="note">Looking up your calendars…</div>` :
+    const cals = S.calListErr ? `<div class="banner err"><span>${esc(calErrorText(S.calListErr))}</span>${S.calListErr.code === "calendar_scope" ? `<button class="btn sm primary" data-act="grant-calendar">Allow calendar access</button>` : `<button class="btn sm" data-act="cal-list">Retry</button>`}</div>` : !S.calList ? `<div class="note">Looking up your calendars…</div>` :
       `<div class="choice">${S.calList.map(c => `<label><input type="radio" name="w-cal" value="${esc(c.id)}" ${w.calendarId===c.id?"checked":""}><span><b>${esc(c.summary||c.id)}</b><small>${esc(c.id.length>40?c.id.slice(0,38)+"…":c.id)}</small></span></label>`).join("")}</div>`;
     body = `<div class="card"><h2>Your studio and its shared calendar</h2>
       <div class="field"><label for="w-name">Studio name</label><input id="w-name" value="${esc(w.name)}" placeholder="e.g. Elite Training Group"></div>
@@ -532,7 +532,8 @@ document.addEventListener("click", async e => {
   switch (act){
     case "close": case "close-scrim": closeModal(); break;
     case "theme": try { localStorage.setItem("tt-theme", el.getAttribute("data-mode")); } catch(x){} applyTheme(el.getAttribute("data-mode")); render(); break;
-    case "signin": signInWithGoogle("/studio.html"); break;
+    case "signin": el.disabled = true; el.textContent = "Opening Google…"; signInWithGoogle(location.pathname); break;
+    case "grant-calendar": el.disabled = true; el.textContent = "Opening Google…"; signInWithGoogle(location.pathname); break;
     case "signout": await sb.auth.signOut(); location.href = HOME; break;
     case "refresh": loadCalendar(true); break;
     case "cal-list": S.calList = null; S.calListErr = null; render(); break;
