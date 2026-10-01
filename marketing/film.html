@@ -1,0 +1,312 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Trainer Tally for studios</title>
+<style>
+@font-face{font-family:Onest;font-weight:400;src:url(onest-latin-400-normal.woff2)}
+@font-face{font-family:Onest;font-weight:500;src:url(onest-latin-500-normal.woff2)}
+@font-face{font-family:Onest;font-weight:600;src:url(onest-latin-600-normal.woff2)}
+@font-face{font-family:Onest;font-weight:700;src:url(onest-latin-700-normal.woff2)}
+@font-face{font-family:Onest;font-weight:800;src:url(onest-latin-800-normal.woff2)}
+@font-face{font-family:Mono;font-weight:500;src:url(jetbrains-mono-latin-500-normal.woff2)}
+:root{--bg:#f5f0e6;--surface:#fffcf6;--s2:#eee7da;--ink:#1d1a14;--ink2:#4f493d;--muted:#877f6f;--line:#e2d9c8;--acc:#1f4c9c;--accs:#dfe6f3;
+  --dev:#c2603a;--jess:#2f7a4f;--alex:#1f4c9c;--riley:#b08a1e;--pos:#2f7a4f;--neg:#b33a2f;--warn:#b0641b}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1920px;height:1080px;overflow:hidden;background:var(--bg)}
+body{font-family:Onest,sans-serif;color:var(--ink);font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+.layer{position:absolute;inset:0;opacity:0}
+.center{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+.dark{background:#141311;color:#f5f0e6}
+.mark{width:96px;height:96px;border-radius:26px;background:var(--ink);color:var(--bg);display:grid;place-items:center}
+.cap{position:absolute;left:0;right:0;bottom:84px;text-align:center;font-size:44px;font-weight:600;letter-spacing:-.01em;color:var(--ink)}
+.cap small{display:block;font-size:28px;font-weight:500;color:var(--ink2);margin-top:10px;letter-spacing:0}
+.kicker{font-size:22px;letter-spacing:.14em;text-transform:uppercase;font-weight:700;color:var(--muted)}
+.card{background:var(--surface);border:2px solid var(--line);border-radius:28px;box-shadow:0 18px 50px rgba(60,45,20,.10)}
+.chip{display:inline-flex;align-items:center;gap:8px;padding:8px 16px;border-radius:999px;font-size:22px;font-weight:700}
+.dot{width:14px;height:14px;border-radius:7px;display:inline-block}
+.pill{position:absolute;border-radius:10px;font-size:17px;font-weight:600;padding:6px 10px;color:#fff;white-space:nowrap;overflow:hidden}
+.btn{display:inline-flex;align-items:center;justify-content:center;border-radius:16px;font-weight:700}
+</style></head>
+<body>
+
+<!-- S1 hook -->
+<div class="layer dark" id="s1">
+  <div id="chaos" style="position:absolute;inset:0"></div>
+  <div class="center" style="position:absolute;inset:0">
+    <div id="h1a" style="font-size:54px;font-weight:600;color:#cfc7b6">It's the end of the month.</div>
+    <div id="h1b" style="font-size:96px;font-weight:800;letter-spacing:-.03em;margin-top:18px">4 trainers. 179 sessions.</div>
+    <div id="h1c" style="font-size:110px;font-weight:800;letter-spacing:-.03em;margin-top:14px;color:#8eaeff">Who owes what?</div>
+  </div>
+</div>
+
+<!-- S2 logo -->
+<div class="layer center" id="s2">
+  <div id="logo" class="mark" style="width:150px;height:150px;border-radius:40px"><svg viewBox="0 0 24 24" width="92" height="92" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 5v14M9.5 5v14M14 5v14M18.5 5v14M3 16.5 21 7.5"/></svg></div>
+  <div id="word" style="font-size:112px;font-weight:800;letter-spacing:-.035em;margin-top:40px">Trainer Tally <span style="color:var(--muted);font-weight:600">for studios</span></div>
+  <div id="tag" style="font-size:46px;font-weight:500;color:var(--ink2);margin-top:20px">Your calendar already knows. <b style="color:var(--acc);font-weight:700">We do the math.</b></div>
+</div>
+
+<!-- S3 calendar -->
+<div class="layer" id="s3">
+  <div style="position:absolute;left:150px;top:96px" class="kicker">Step 1 · Connect</div>
+  <div id="calcard" class="card" style="position:absolute;left:150px;top:150px;width:1160px;height:700px;padding:28px 30px">
+    <div style="display:flex;align-items:center;gap:14px;font-size:28px;font-weight:700"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#4f493d" stroke-width="2"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>Harbor Strength Studio <span style="color:var(--muted);font-weight:500;font-size:22px">· shared Google Calendar</span></div>
+    <div id="calgrid" style="position:absolute;left:30px;top:96px;right:30px;bottom:28px"></div>
+    <div id="scan" style="position:absolute;top:96px;bottom:28px;width:6px;border-radius:3px;background:var(--acc);box-shadow:0 0 30px 8px rgba(31,76,156,.35)"></div>
+  </div>
+  <div id="legend" style="position:absolute;left:1370px;top:150px;width:420px;display:flex;flex-direction:column;gap:20px"></div>
+  <div class="cap" id="c3">Connect your studio's Google Calendar.<small>Read-only. Every session is matched to the trainer who booked it.</small></div>
+</div>
+
+<!-- S4 rent -->
+<div class="layer" id="s4">
+  <div style="position:absolute;left:150px;top:96px" class="kicker">Step 2 · Rent, done</div>
+  <div id="total" style="position:absolute;left:150px;top:140px;display:flex;align-items:baseline;gap:24px">
+    <span style="font-size:40px;font-weight:600;color:var(--ink2)">Rent this month</span>
+    <span id="totv" style="font-size:120px;font-weight:800;letter-spacing:-.035em">$0</span>
+  </div>
+  <div id="rentcards" style="position:absolute;left:150px;right:150px;top:340px;display:grid;grid-template-columns:repeat(4,1fr);gap:34px"></div>
+  <div class="cap" id="c4">Rent works itself out.<small>Per session, flat monthly, or none. Off-site sessions are free.</small></div>
+</div>
+
+<!-- S5 heatmap -->
+<div class="layer" id="s5">
+  <div style="position:absolute;left:150px;top:96px" class="kicker">See your space</div>
+  <div class="card" style="position:absolute;left:150px;top:150px;width:1080px;height:700px;padding:30px 34px">
+    <div style="font-size:30px;font-weight:700">Room usage <span style="color:var(--muted);font-weight:500;font-size:24px">· last 8 weeks</span></div>
+    <div id="heat" style="position:absolute;left:34px;right:34px;top:100px;bottom:30px;display:grid;grid-template-columns:70px repeat(7,1fr);gap:6px"></div>
+  </div>
+  <div id="heatstats" style="position:absolute;left:1300px;top:170px;width:470px;display:flex;flex-direction:column;gap:26px">
+    <div class="card hs" style="padding:28px 32px"><div style="font-size:24px;color:var(--muted);font-weight:600">Busiest hour</div><div style="font-size:64px;font-weight:800;letter-spacing:-.02em">Tue · 6pm</div></div>
+    <div class="card hs" style="padding:28px 32px"><div style="font-size:24px;color:var(--muted);font-weight:600">Room usage</div><div style="font-size:64px;font-weight:800;letter-spacing:-.02em"><span id="util">0</span>%</div><div style="font-size:22px;color:var(--ink2)">of open capacity</div></div>
+    <div class="card hs" style="padding:28px 32px"><div style="font-size:24px;color:var(--muted);font-weight:600">Open slots to fill</div><div style="font-size:54px;font-weight:800;letter-spacing:-.02em">Weekdays 1–3pm</div></div>
+  </div>
+  <div class="cap" id="c5" style="bottom:70px">See how full your studio is, hour by hour.</div>
+</div>
+
+<!-- S6 sign-off -->
+<div class="layer" id="s6">
+  <div style="position:absolute;left:150px;top:96px" class="kicker">Step 3 · Everyone agrees</div>
+  <!-- phone -->
+  <div id="phone" style="position:absolute;left:190px;top:140px;width:450px;height:720px;border-radius:64px;background:#1d1a14;padding:16px;box-shadow:0 30px 70px rgba(30,20,10,.25)">
+    <div style="width:100%;height:100%;border-radius:50px;background:var(--bg);padding:58px 30px 30px;position:relative;overflow:hidden">
+      <div style="position:absolute;top:18px;left:50%;transform:translateX(-50%);width:130px;height:30px;border-radius:15px;background:#1d1a14"></div>
+      <div style="font-size:18px;color:var(--muted);font-weight:600">Alex's Trainer Tally</div>
+      <div style="font-size:30px;font-weight:800;margin-top:4px">Billing</div>
+      <div class="card" style="margin-top:22px;padding:22px;border-radius:22px">
+        <div style="font-size:16px;letter-spacing:.1em;text-transform:uppercase;font-weight:700;color:var(--muted)">Studio rent · Harbor Strength</div>
+        <div style="font-size:26px;font-weight:800;margin-top:12px">September</div>
+        <div style="display:flex;justify-content:space-between;margin-top:16px;font-size:20px"><span style="color:var(--ink2)">Studio counted</span><b>52 · $1,040</b></div>
+        <div style="display:flex;justify-content:space-between;margin-top:10px;font-size:20px"><span style="color:var(--ink2)">Your calendar</span><b>52</b></div>
+        <div style="margin-top:14px"><span class="chip" style="background:#e3efe6;color:var(--pos);font-size:18px;padding:6px 12px">● Matches</span></div>
+        <div id="cbtn" class="btn" style="margin-top:22px;height:64px;width:100%;background:var(--ink);color:var(--bg);font-size:24px">Confirm</div>
+        <div class="btn" style="margin-top:10px;height:54px;width:100%;border:2px solid var(--line);font-size:20px;color:var(--ink2)">Dispute</div>
+      </div>
+      <div id="tap" style="position:absolute;width:70px;height:70px;border-radius:35px;background:rgba(31,76,156,.28);border:3px solid rgba(31,76,156,.6);left:180px;top:440px;opacity:0"></div>
+    </div>
+  </div>
+  <!-- arrow -->
+  <svg id="arrow" style="position:absolute;left:690px;top:440px" width="170" height="60" viewBox="0 0 170 60" fill="none" stroke="#877f6f" stroke-width="5" stroke-linecap="round" stroke-dasharray="10 12"><path d="M5 30h150M135 12l20 18-20 18"/></svg>
+  <!-- studio panel -->
+  <div class="card" id="sopanel" style="position:absolute;left:900px;top:170px;width:860px;padding:34px 40px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline"><div style="font-size:32px;font-weight:800">Sign-off · September</div><div id="socount" style="font-size:22px;color:var(--muted);font-weight:600"></div></div>
+    <div id="sorows" style="margin-top:20px"></div>
+  </div>
+  <div class="cap" id="c6">Trainers confirm their own numbers.<small>No more month-end back-and-forth.</small></div>
+</div>
+
+<!-- S7 payments -->
+<div class="layer" id="s7">
+  <div style="position:absolute;left:150px;top:96px" class="kicker">Get paid</div>
+  <div class="card" style="position:absolute;left:150px;top:160px;width:820px;height:560px;padding:44px 50px">
+    <div style="font-size:28px;color:var(--muted);font-weight:600">Outstanding rent</div>
+    <div id="owed" style="font-size:150px;font-weight:800;letter-spacing:-.04em;margin-top:6px;color:var(--neg)">$1,635</div>
+    <div id="owedsub" style="font-size:28px;color:var(--ink2)">owed by 2 trainers</div>
+    <div id="paidrows" style="margin-top:34px;display:flex;flex-direction:column;gap:16px"></div>
+  </div>
+  <div id="toast" class="card" style="position:absolute;left:1060px;top:260px;width:700px;padding:30px 36px;display:flex;align-items:center;gap:24px">
+    <div style="width:70px;height:70px;border-radius:35px;background:#e3efe6;display:grid;place-items:center"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#2f7a4f" stroke-width="3" stroke-linecap="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>
+    <div><div id="toastt" style="font-size:34px;font-weight:800">Devon paid $975</div><div id="toasts" style="font-size:24px;color:var(--ink2)">Venmo · logged in one tap</div></div>
+  </div>
+  <div class="cap" id="c7">Log payments in a tap.<small>Statements and balances update instantly.</small></div>
+</div>
+
+<!-- S8 privacy -->
+<div class="layer center" id="s8">
+  <div id="lock" style="width:160px;height:160px;border-radius:44px;background:var(--accs);display:grid;place-items:center"><svg width="90" height="90" viewBox="0 0 24 24" fill="none" stroke="#1f4c9c" stroke-width="2" stroke-linecap="round"><rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></svg></div>
+  <div id="p1" style="font-size:104px;font-weight:800;letter-spacing:-.035em;margin-top:44px">Private by design.</div>
+  <div id="p2" style="font-size:44px;font-weight:500;color:var(--ink2);margin-top:22px;line-height:1.4">Read-only calendar access.<br>Trainers' rates and income stay theirs.</div>
+</div>
+
+<!-- S9 CTA -->
+<div class="layer dark center" id="s9">
+  <div id="cmark" class="mark" style="width:120px;height:120px;border-radius:32px;background:#f5f0e6;color:#141311"><svg viewBox="0 0 24 24" width="74" height="74" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 5v14M9.5 5v14M14 5v14M18.5 5v14M3 16.5 21 7.5"/></svg></div>
+  <div id="ct1" style="font-size:120px;font-weight:800;letter-spacing:-.04em;margin-top:44px">Set up in 10 minutes.</div>
+  <div id="ct2" style="font-size:44px;font-weight:500;color:#cfc7b6;margin-top:18px">Less spreadsheet. More training.</div>
+  <div id="ct3" class="btn" style="margin-top:56px;padding:30px 54px;background:#f5f0e6;color:#141311;font-size:44px;border-radius:24px">ledger-iota-bay.vercel.app/studio</div>
+  <div id="ct4" style="font-size:30px;color:#8a8478;margin-top:28px">Try the demo first: ledger-iota-bay.vercel.app/demo-studio.html</div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const clamp = (x,a=0,b=1) => Math.max(a, Math.min(b, x));
+const seg = (t,a,b) => clamp((t-a)/(b-a));
+const eo = x => 1 - Math.pow(1-x, 3);
+const eio = x => x < .5 ? 4*x*x*x : 1 - Math.pow(-2*x+2, 3)/2;
+const back = x => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3*Math.pow(x-1,3) + c1*Math.pow(x-1,2); };
+const money = v => "$" + Math.round(v).toLocaleString("en-US");
+function rise(el, p, dist=40){ el.style.opacity = p; el.style.transform = `translateY(${(1-eo(p))*dist}px)`; }
+// seeded random
+let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+
+const SCENES = [["s1",0,5.2],["s2",5,9.4],["s3",9.2,16.4],["s4",16.2,23.4],["s5",23.2,29.4],["s6",29.2,37.6],["s7",37.4,42.6],["s8",42.4,45.6],["s9",45.4,51]];
+const TR = [{n:"Devon Clarke",c:"var(--dev)",rule:"$25 / session",s:41,r:1025},{n:"Jess Morgan",c:"var(--jess)",rule:"$660 flat / month",s:57,r:660},{n:"Alex Rivera",c:"var(--alex)",rule:"$20 / session",s:52,r:1040},{n:"Riley Park",c:"var(--riley)",rule:"$20 / session",s:29,r:580}];
+const COL = ["#c2603a","#2f7a4f","#1f4c9c","#b08a1e"];
+
+/* S1 chaos pills */
+const chaos = []; const names = ["Maya","Jordan","Priya","Sam","Chris","Nina","Taylor","Elena","Marco","Leah","Omar","Grace","Ben","Ava"];
+for (let i = 0; i < 46; i++){ const d = document.createElement("div"); d.className = "pill"; d.textContent = names[i % names.length] + " " + (6 + (i*5)%13) + (i%3?"pm":"am");
+  d.style.background = COL[i%4]; d.style.opacity = 0; $("chaos").appendChild(d);
+  let x, y; do { x = 60 + rnd()*1740; y = 40 + rnd()*980; } while (x > 230 && x < 1620 && y > 330 && y < 760);
+  chaos.push({d, x, y, t: rnd()*2.6, r: (rnd()-.5)*14, vx:(rnd()-.5)*900, vy:(rnd()-.5)*700}); }
+
+/* S3 calendar grid: 6 days x 14 hours */
+const days = ["Mon","Tue","Wed","Thu","Fri","Sat"], grid = $("calgrid");
+const gw = 1100, gh = 576, cw = (gw-60)/6, rh = gh/14;
+for (let i = 0; i < 6; i++){ const h = document.createElement("div"); h.textContent = days[i]; Object.assign(h.style,{position:"absolute",left:(60+i*cw)+"px",top:"-34px",width:cw+"px",textAlign:"center",fontSize:"20px",fontWeight:700,color:"#877f6f"}); grid.appendChild(h); }
+for (let r = 0; r <= 14; r++){ const l = document.createElement("div"); Object.assign(l.style,{position:"absolute",left:"60px",right:"0",top:(r*rh)+"px",height:"1px",background:"#eee7da"}); grid.appendChild(l);
+  if (r < 14 && r % 2 === 0){ const t = document.createElement("div"); const hr = 6 + r; t.textContent = (hr>12?hr-12:hr) + (hr>=12?"p":"a"); Object.assign(t.style,{position:"absolute",left:"0",top:(r*rh-10)+"px",fontSize:"17px",color:"#877f6f",fontWeight:600}); grid.appendChild(t); } }
+const cal = []; const who = [0,2,1,3,0,1,2,2,1,0,3,1,2,0,1,2,3,1,0,2,1,2,0,1,3,2,1,0];
+let k = 0;
+for (let dI = 0; dI < 6; dI++){ for (let s = 0; s < 5; s++){ const hour = [0,1,3,5,6,7,10,11,12,13][Math.floor(rnd()*10)]; if (cal.some(e => e.d===dI && Math.abs(e.h-hour)<1)) continue;
+  const tI = who[k++ % who.length]; const sub = Math.floor(rnd()*2);
+  const e = document.createElement("div"); e.className = "pill"; e.textContent = names[(k*3)%names.length];
+  const x = 60 + dI*cw + 6 + sub*(cw/2-3), y = hour*rh + 3;
+  Object.assign(e.style,{left:x+"px",top:y+"px",width:(cw/2-12)+"px",height:(rh-6)+"px",fontSize:"16px",padding:"4px 8px"});
+  grid.appendChild(e); cal.push({e, d:dI, h:hour, t:tI, x}); } }
+TR.forEach((t,i) => { const r = document.createElement("div"); r.className = "card leg"; Object.assign(r.style,{padding:"22px 26px",display:"flex",alignItems:"center",gap:"18px",borderRadius:"22px"});
+  r.innerHTML = `<span class="dot" style="background:${t.c};width:22px;height:22px;border-radius:11px"></span><div style="flex:1"><div style="font-size:28px;font-weight:700">${t.n}</div><div style="font-size:20px;color:#877f6f">booked by ${t.n.split(" ")[0].toLowerCase()}@harbor…</div></div><div class="lc" style="font-size:40px;font-weight:800">0</div>`;
+  $("legend").appendChild(r); });
+
+/* S4 rent cards */
+TR.forEach((t,i) => { const c = document.createElement("div"); c.className = "card rc"; c.style.padding = "34px 34px 30px"; c.style.position = "relative";
+  c.innerHTML = `<div style="display:flex;align-items:center;gap:14px"><span class="dot" style="background:${t.c};width:20px;height:20px;border-radius:10px"></span><span style="font-size:30px;font-weight:800">${t.n}</span></div>
+    <div style="font-size:22px;color:#877f6f;margin-top:8px;font-weight:600">${t.rule}</div>
+    <div style="margin-top:36px;font-size:22px;color:#4f493d">Sessions</div><div class="rs" style="font-size:56px;font-weight:800">0</div>
+    <div style="margin-top:14px;font-size:22px;color:#4f493d">Rent</div><div class="rr" style="font-size:72px;font-weight:800;letter-spacing:-.03em">$0</div>
+    ${i===2?`<div class="free" style="position:absolute;left:34px;bottom:-26px;padding:10px 16px;box-shadow:0 8px 20px rgba(60,45,20,.12);border-radius:14px;background:#eee7da;font-size:19px;font-weight:700;color:#4f493d">Sarah · home <span style="color:#2f7a4f">· no rent</span></div>`:""}`;
+  $("rentcards").appendChild(c); });
+
+/* S5 heat */
+const heat = $("heat"); const hcells = [];
+heat.appendChild(document.createElement("span"));
+["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].forEach(d => { const s = document.createElement("div"); s.textContent = d; Object.assign(s.style,{textAlign:"center",fontSize:"19px",fontWeight:700,color:"#877f6f"}); heat.appendChild(s); });
+for (let h = 6; h < 21; h++){ const l = document.createElement("div"); l.textContent = (h>12?h-12:h)+(h>=12?"pm":"am"); Object.assign(l.style,{fontSize:"16px",color:"#877f6f",fontWeight:600,alignSelf:"center"}); heat.appendChild(l);
+  for (let d = 0; d < 7; d++){ const c = document.createElement("div"); c.style.borderRadius = "6px"; c.style.background = "#eee7da";
+    const peak = (h>=6&&h<=8 ? .85 : h>=16&&h<=19 ? .95 : h>=11&&h<=12 ? .5 : .18) * (d===6 ? .3 : d===5 ? (h<12?.9:.25) : 1) * (d===1&&h===18 ? 1.2 : 1);
+    const u = clamp(peak * (.75 + rnd()*.4)); heat.appendChild(c); hcells.push({c, u, o: (d*0.06 + (h-6)*0.03)}); } }
+
+/* S6 sign-off rows */
+const SO = [{n:"Alex Rivera",c:COL[2],us:"52 · $1,040",at:32.6,res:"Confirmed"},{n:"Devon Clarke",c:COL[0],us:"41 · $1,025",at:33.5,res:"Confirmed"},{n:"Jess Morgan",c:COL[1],us:"57 · $660",at:34.4,res:"Confirmed"},{n:"Riley Park",c:COL[3],us:"29 · $580",at:35.3,res:"Disputed",note:"“The 14th was a cancel.”"}];
+SO.forEach(r => { const d = document.createElement("div"); Object.assign(d.style,{display:"flex",alignItems:"center",gap:"18px",padding:"20px 0",borderTop:"2px solid #eee7da"});
+  d.innerHTML = `<div style="width:56px;height:56px;border-radius:28px;background:${r.c};color:#fff;display:grid;place-items:center;font-weight:800;font-size:22px">${r.n.split(" ").map(x=>x[0]).join("")}</div>
+   <div style="flex:1"><div style="font-size:28px;font-weight:700">${r.n}</div><div class="sn" style="font-size:20px;color:#4f493d">Studio: ${r.us}</div></div><div class="sc"></div>`;
+  $("sorows").appendChild(d); r.el = d; });
+
+/* S7 rows */
+[["Devon Clarke","$975 · Aug",COL[0]],["Jess Morgan","$660 · Sep",COL[1]]].forEach(([n,a,c]) => { const d = document.createElement("div"); Object.assign(d.style,{display:"flex",alignItems:"center",gap:"16px",fontSize:"28px"});
+  d.innerHTML = `<span class="dot" style="background:${c};width:18px;height:18px;border-radius:9px"></span><b style="flex:1">${n}</b><span class="pa" style="color:#b33a2f;font-weight:700">${a}</span>`; $("paidrows").appendChild(d); });
+
+const chipHTML = (txt, ok) => `<span class="chip" style="background:${ok===1?"#e3efe6":ok===0?"#f6e8d6":"#eee7da"};color:${ok===1?"#2f7a4f":ok===0?"#b0641b":"#4f493d"}">${ok===1?"✓ ":ok===0?"! ":""}${txt}</span>`;
+
+function render(t){
+  // scene opacity with crossfades
+  for (const [id,a,b] of SCENES){ const el = $(id); const o = Math.min(seg(t,a,a+.35), 1 - seg(t,b-.35,b)); el.style.opacity = o; el.style.visibility = o > 0 ? "visible" : "hidden"; }
+
+  /* S1 */
+  if (t < 5.4){
+    for (const p of chaos){ const a = seg(t, p.t*.9, p.t*.9+.3), out = seg(t, 4.1, 5.0);
+      const jx = Math.sin(t*7 + p.x)*4, jy = Math.cos(t*6 + p.y)*4;
+      p.d.style.opacity = a * (1-out) * .9;
+      p.d.style.transform = `translate(${p.x + jx + eio(out)*p.vx}px, ${p.y + jy + eio(out)*p.vy}px) rotate(${p.r + out*40}deg) scale(${.6 + .4*eo(a)})`; }
+    rise($("h1a"), seg(t,.2,.8)); rise($("h1b"), seg(t,1.3,1.9)); rise($("h1c"), seg(t,2.6,3.2));
+    $("h1c").style.transform += ` scale(${1 + .05*Math.sin(clamp(t-3.2,0,1)*Math.PI)})`;
+  }
+  /* S2 */
+  if (t > 4.8 && t < 9.6){
+    const p = seg(t,5.2,5.9); $("logo").style.transform = `scale(${back(p)}) rotate(${(1-eo(p))*-20}deg)`; $("logo").style.opacity = p;
+    rise($("word"), seg(t,5.7,6.3)); rise($("tag"), seg(t,6.6,7.2));
+  }
+  /* S3 */
+  if (t > 9 && t < 16.6){
+    rise($("calcard"), seg(t,9.3,9.9), 60);
+    const sx = seg(t,10.6,13.2); const scanX = 30 + 60 + sx*(gw-60);
+    $("scan").style.left = scanX + "px"; $("scan").style.opacity = sx > 0 && sx < 1 ? 1 : 0;
+    cal.forEach((c,i) => { const appear = seg(t, 9.7 + i*.025, 10.0 + i*.025); const lit = (sx*(gw-60) + 60) > c.x + 20 && sx > 0;
+      c.e.style.opacity = appear; c.e.style.transform = `scale(${.8 + .2*eo(appear)})`;
+      c.e.style.background = lit ? COL[c.t] : "#cfc7b6"; c.e.style.color = lit ? "#fff" : "#fffcf6"; });
+    document.querySelectorAll(".leg").forEach((l,i) => { rise(l, seg(t, 11 + i*.45, 11.5 + i*.45), 30);
+      const cnt = Math.round(TR[i].s * eo(seg(t, 11.3 + i*.45, 14.2))); l.querySelector(".lc").textContent = cnt; });
+    rise($("c3"), seg(t,10,10.6), 20);
+  }
+  /* S4 */
+  if (t > 16 && t < 23.6){
+    let tot = 0;
+    document.querySelectorAll(".rc").forEach((c,i) => { const a = seg(t, 16.5 + i*.3, 17.1 + i*.3); rise(c, a, 60);
+      const cp = eo(seg(t, 17.4 + i*.3, 20 + i*.3)); c.querySelector(".rs").textContent = Math.round(TR[i].s * cp);
+      const rent = TR[i].rule.includes("flat") ? (cp > 0 ? TR[i].r : 0) : TR[i].r * cp; c.querySelector(".rr").textContent = money(rent); tot += rent;
+      const f = c.querySelector(".free"); if (f){ const fp = seg(t, 20.8, 21.3); f.style.opacity = fp; f.style.transform = `scale(${.7+.3*back(fp)})`; } });
+    $("totv").textContent = money(tot); rise($("total"), seg(t,16.4,17));
+    rise($("c4"), seg(t,17.2,17.8), 20);
+  }
+  /* S5 */
+  if (t > 23 && t < 29.6){
+    hcells.forEach(h => { const p = eo(seg(t, 23.8 + h.o, 24.4 + h.o)); const u = h.u * p;
+      h.c.style.background = u < .02 ? "#eee7da" : `color-mix(in srgb, #1f4c9c ${Math.round(18 + u*82)}%, #eee7da)`; });
+    document.querySelectorAll(".hs").forEach((c,i) => rise(c, seg(t, 25.4 + i*.5, 26 + i*.5), 40));
+    $("util").textContent = Math.round(41 * eo(seg(t, 25.9, 27.4)));
+    rise($("c5"), seg(t,24,24.6), 20);
+  }
+  /* S6 */
+  if (t > 29 && t < 37.8){
+    rise($("phone"), seg(t,29.4,30.1), 80); rise($("sopanel"), seg(t,29.8,30.5), 60);
+    $("arrow").style.opacity = seg(t,30.6,31.1); $("arrow").style.strokeDashoffset = -t*40;
+    const tap = seg(t, 31.6, 32.3); $("tap").style.opacity = tap > 0 && tap < 1 ? Math.sin(tap*Math.PI) : 0; $("tap").style.transform = `scale(${.6 + tap*.9})`;
+    const done = t > 32.1; const b = $("cbtn"); b.style.background = done ? "#2f7a4f" : "#1d1a14"; b.textContent = done ? "✓  Confirmed" : "Confirm"; b.style.transform = `scale(${1 - .06*Math.sin(clamp((t-31.9)/.3,0,1)*Math.PI)})`;
+    let conf = 0, disp = 0;
+    SO.forEach(r => { const on = t > r.at; const sc = r.el.querySelector(".sc"), sn = r.el.querySelector(".sn");
+      if (on && r.res === "Confirmed") conf++; if (on && r.res === "Disputed") disp++;
+      const html = on ? chipHTML(r.res, r.res === "Confirmed" ? 1 : 0) : chipHTML("Waiting", 2); if (sc.innerHTML !== html) sc.innerHTML = html;
+      const p = clamp((t - r.at)/.35); sc.style.transform = `scale(${on ? .85 + .15*back(p) : 1})`;
+      const ntxt = `Studio: ${r.us}` + (on && r.note ? `  ·  <i style="color:#b0641b">${r.note}</i>` : ""); if (sn.innerHTML !== ntxt) sn.innerHTML = ntxt; });
+    $("socount").textContent = `${conf} confirmed · ${disp} disputed · ${4-conf-disp} waiting`;
+    rise($("c6"), seg(t,30.2,30.8), 20);
+  }
+  /* S7 */
+  if (t > 37.2 && t < 42.8){
+    const tp = seg(t, 38.9, 39.4); $("toast").style.opacity = tp; $("toast").style.transform = `translateX(${(1-eo(tp))*120}px)`;
+    const swap = t > 40.4; $("toastt").textContent = swap ? "Jess paid $660" : "Devon paid $975"; $("toasts").textContent = swap ? "Zelle · logged in one tap" : "Venmo · logged in one tap";
+    const owe = 1635 - 975*eo(seg(t,39.3,39.9)) - 660*eo(seg(t,40.6,41.2));
+    const o = $("owed"); o.textContent = money(owe); o.style.color = owe < 1 ? "#2f7a4f" : "#b33a2f";
+    $("owedsub").textContent = owe < 1 ? "Everyone's paid up" : owe < 1000 ? "owed by 1 trainer" : "owed by 2 trainers";
+    document.querySelectorAll(".pa").forEach((p,i) => { const paid = i === 0 ? t > 39.6 : t > 40.9; p.textContent = paid ? "✓ Paid" : (i === 0 ? "$975 · Aug" : "$660 · Sep"); p.style.color = paid ? "#2f7a4f" : "#b33a2f"; });
+    rise($("c7"), seg(t,37.8,38.4), 20);
+  }
+  /* S8 */
+  if (t > 42.2 && t < 45.8){
+    const p = seg(t,42.6,43.2); $("lock").style.transform = `scale(${back(p)})`; $("lock").style.opacity = p;
+    rise($("p1"), seg(t,43,43.6)); rise($("p2"), seg(t,43.6,44.2));
+  }
+  /* S9 */
+  if (t > 45.2){
+    const p = seg(t,45.6,46.2); $("cmark").style.transform = `scale(${back(p)})`; $("cmark").style.opacity = p;
+    rise($("ct1"), seg(t,46,46.6)); rise($("ct2"), seg(t,46.6,47.2)); rise($("ct3"), seg(t,47.2,47.8)); rise($("ct4"), seg(t,47.8,48.4));
+    $("ct3").style.transform += ` scale(${1 + .03*Math.sin(clamp(t-48,0,3)*Math.PI*1.2)})`;
+    // final fade out
+    $("s9").style.opacity = Math.min(1, seg(t,45.4,45.8)) * (1 - seg(t, 50.4, 51));
+  }
+}
+window.render = render; window.DURATION = 51;
+document.fonts.ready.then(() => { window.READY = true; });
+// live preview when opened directly
+if (!location.search.includes("capture")){ const st = performance.now(); const loop = () => { render(((performance.now()-st)/1000) % 51); requestAnimationFrame(loop); }; loop(); }
+</script>
+</body></html>
