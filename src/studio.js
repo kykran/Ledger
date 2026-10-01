@@ -294,7 +294,38 @@ function render(){
   main.innerHTML = S.tab === "overview" ? renderOverview(M) : S.tab === "trainers" ? renderTrainers(M) : S.tab === "rooms" ? renderRooms(M) : S.tab === "revenue" ? renderRevenue(M) : S.tab === "trends" ? renderTrends(M) : renderSettings();
   drawCharts(M);
   if (S.modal) renderModal();
+  if (S.tour == null && !S.tourSeen && !D("tourDone") && S.trainers.length){ S.tourSeen = true; if (S.tab !== "overview"){ S.tab = "overview"; return render(); } S.tour = 0; }
+  renderTour();
   syncStatements(M);
+}
+
+/* ---------- walkthrough ---------- */
+const TOUR = [
+  {tab:"overview", sel:"hero", title:"Studio rent at a glance", body:"Rent billed this month from every session on the studio calendar, with a projection for month end and the last six months beside it."},
+  {tab:"overview", sel:"signoff", title:"Monthly sign-off", body:"Trainers who link their Trainer Tally confirm or dispute your statement each month. A confirmed month is locked unless you reopen it. You see only their answer, their count and their note."},
+  {tab:"overview", sel:"owed", title:"Who owes what", body:"Open balances by trainer and month. Send a statement or log a payment in one tap."},
+  {tab:"trainers", sel:"trainers", title:"Your trainers", body:"Each trainer is matched by the Google account that books their sessions. Set their rent here: per session, flat monthly, or none. Invite them to link their account so they see their statement in their own app."},
+  {tab:"trainers", sel:"found", title:"New people on the calendar", body:"Anyone booking the studio who isn't set up yet shows here. Add them as a trainer, mark them as the same person as someone else, or ignore them."},
+  {tab:"rooms", sel:"heat", title:"Room usage", body:"How full the studio is by day and hour. Darker means busier. Use it to spot open slots to fill or to set peak pricing."},
+  {tab:"revenue", sel:"revenue", title:"Revenue", body:"Rent billed against what's been collected, by month and by trainer. Download statements as a spreadsheet."},
+  {tab:"trends", sel:"trends", title:"Trainer trends", body:"Each trainer's last 4 weeks against the 12 before, plus clients seen, hours and share of rent. See who's growing and who's slowing down."},
+  {tab:"settings", sel:"settings", title:"Settings", body:"Change rent rules, opening hours, statement wording, skipped words and no-rent words (like \"home\" for sessions away from the studio). You can replay this walkthrough here."}
+];
+function tourEnd(){ S.tour = null; document.querySelectorAll(".tour-focus").forEach(el => el.classList.remove("tour-focus")); const c = $("#tourcard"); if (c) c.remove(); if (S.studio && !D("tourDone")) saveStudio({tourDone:true}).catch(()=>{}); }
+function tourGo(i){ if (i < 0) i = 0; if (i >= TOUR.length){ tourEnd(); S.tab = "overview"; render(); return; } S.tour = i; S.tab = TOUR[i].tab; render(); window.scrollTo({top:0}); }
+function renderTour(){
+  document.querySelectorAll(".tour-focus").forEach(el => el.classList.remove("tour-focus"));
+  let card = $("#tourcard");
+  if (S.tour == null || S.screen !== "app" || !S.M){ if (card) card.remove(); return; }
+  const st = TOUR[S.tour];
+  const el = document.querySelector(`[data-tour="${st.sel}"]`);
+  if (el){ el.classList.add("tour-focus"); try { el.scrollIntoView({block:"center", behavior:"smooth"}); } catch(e){ el.scrollIntoView(); } }
+  if (!card){ card = document.createElement("div"); card.id = "tourcard"; card.className = "tourcard"; card.setAttribute("role","dialog"); card.setAttribute("aria-live","polite"); document.body.appendChild(card); }
+  const last = S.tour === TOUR.length - 1;
+  card.innerHTML = `<div class="tour-top"><span class="small muted">${S.tour+1} of ${TOUR.length}</span><button class="btn sm ghost" data-act="tour-skip">Skip</button></div>
+    <h2>${esc(st.title)}</h2><p>${esc(st.body)}</p>
+    <div class="tour-dots">${TOUR.map((_,i)=>`<i class="${i===S.tour?"on":""}"></i>`).join("")}</div>
+    <div class="actions">${S.tour>0?`<button class="btn" data-act="tour-back">Back</button>`:""}<button class="btn primary" data-act="tour-next">${last?"Done":"Next"}</button></div>`;
 }
 
 /* ---------- setup ---------- */
@@ -353,7 +384,7 @@ function signoffCard(M){
   if (!linked.length) return "";
   const rows = linked.map(t => ({t, so: soFor(t.id, k), m: M.stats[t.id].months.find(x => x.month === k) || {n:0, rent:0}}));
   const c = s => rows.filter(r => s ? r.so && r.so.status === s : !r.so).length;
-  return `<section class="card"><div class="card-h"><h2>Sign-off · ${esc(mLabel(k, true))}</h2><span class="small muted">${c("confirmed")} confirmed · ${c("disputed")} disputed · ${c(null)} waiting</span></div>
+  return `<section class="card" data-tour="signoff"><div class="card-h"><h2>Sign-off · ${esc(mLabel(k, true))}</h2><span class="small muted">${c("confirmed")} confirmed · ${c("disputed")} disputed · ${c(null)} waiting</span></div>
     <div class="alist">${rows.map(({t, so, m}) => `<div class="aitem"><div class="top">${avatar(t.name)}<b>${esc(t.name)}</b>${soChip(M, t, k)}</div>
       <div class="meta">You: ${m.n} session${m.n===1?"":"s"} · ${money(m.rent)}${so && so.trainer_n != null ? ` &nbsp;·&nbsp; They count: ${so.trainer_n}` : ""}${so && so.note ? ` &nbsp;·&nbsp; “${esc(so.note)}”` : ""}</div>
       ${so ? `<div class="rowacts"><button class="btn sm" data-act="so-reopen" data-id="${t.id}" data-m="${k}">Reopen</button></div>` : ""}</div>`).join("")}</div>
@@ -369,7 +400,7 @@ function renderOverview(M){
   const owing = S.trainers.filter(t => M.stats[t.id].balance > 0.5).sort((a,b)=>M.stats[b.id].balance-M.stats[a.id].balance);
   const active = S.trainers.filter(t => t.active !== false);
   if (!S.trainers.length) return `<div class="card"><div class="empty"><b>No trainers yet</b><span>${M.unknown.length ? `${M.unknown.length} people have booked sessions on your calendar.` : S.cal.state==="loading" ? "Reading the studio calendar…" : "Once trainers book on the studio calendar, they appear here."}</span>${M.unknown.length?`<button class="btn primary" data-tab="trainers">Review trainers found</button>`:""}</div></div>`;
-  return `<section class="card"><div class="hero"><div><h3>Studio rent · ${esc(mName(k))}</h3>
+  return `<section class="card" data-tour="hero"><div class="hero"><div><h3>Studio rent · ${esc(mName(k))}</h3>
       <div class="big" style="margin-top:8px">${money(R.billed)}${proj > 0 ? ` <small>→ ${money(R.billed + proj)}</small>` : ""}</div>
       <div class="eq"><span><b>${R.n}</b> sessions</span><span>·</span><span><b>${money(R.collected)}</b> collected</span>${proj>0?`<span class="muted">· projected month end</span>`:""}</div></div>
       <div class="chart" data-chart="rentbars"></div></div></section>
@@ -381,7 +412,7 @@ function renderOverview(M){
   </div>
   ${signoffCard(M)}
   <div class="grid2">
-    <section class="card"><div class="card-h"><h2>Rent owed</h2></div>
+    <section class="card" data-tour="owed"><div class="card-h"><h2>Rent owed</h2></div>
       ${owing.length ? `<div class="alist">${owing.map(t => { const st = M.stats[t.id]; const open = st.months.filter(m => m.due && m.state !== "paid"); return `<div class="aitem"><div class="top">${avatar(t.name)}<a href="#" class="n" style="font-weight:600;color:var(--ink);text-decoration:none" data-act="edit" data-id="${t.id}">${esc(t.name)}</a><span class="chip owes">${money(st.balance)}</span></div><div class="meta">${open.map(m => MONTHS[mStart(m.month).getMonth()] + " " + money(m.rent - m.paid)).join(" · ")}</div><div class="rowacts"><button class="btn sm" data-act="msg" data-id="${t.id}">Statement</button><button class="btn sm primary" data-act="payment" data-id="${t.id}">Log payment</button></div></div>`; }).join("")}</div>` : `<div class="empty">Every trainer is paid up.</div>`}
       ${M.unknown.length ? `<div class="note">${M.unknown.length} new ${M.unknown.length===1?"person has":"people have"} booked on the calendar. <button class="btn link" data-tab="trainers">Review</button></div>` : ""}
     </section>
@@ -396,7 +427,7 @@ function renderOverview(M){
 function renderTrainers(M){
   const k = S.month;
   const rows = S.trainers.slice().sort((a,b)=>(a.active===false)-(b.active===false) || M.stats[b.id].balance - M.stats[a.id].balance || a.name.localeCompare(b.name));
-  return `<section class="card"><div class="card-h"><h2>Trainers</h2><span class="small muted">${S.trainers.filter(t=>t.active!==false).length} active</span></div>
+  return `<section class="card" data-tour="trainers"><div class="card-h"><h2>Trainers</h2><span class="small muted">${S.trainers.filter(t=>t.active!==false).length} active</span></div>
     ${rows.length ? `<div class="tablewrap"><table><thead><tr><th>Trainer</th><th>Rent</th><th class="num">Sessions</th><th class="num">${esc(MONTHS[mStart(k).getMonth()])} rent</th><th>Balance</th><th>${esc(MONTHS[mStart(signoffMonth(M.now)).getMonth()])} sign-off</th><th></th></tr></thead><tbody>
     ${rows.map(t => { const st = M.stats[t.id], m = st.months.find(x => x.month === k) || {n:0, rent:0, booked:0}; const linked = S.linked && S.linked.has(t.id);
       return `<tr style="${t.active===false?"opacity:.55":""}"><td><div class="who">${avatar(t.name)}<div style="min-width:0"><a href="#" class="n" data-act="edit" data-id="${t.id}">${esc(t.name)}</a><div class="s">${esc((t.emails||[]).join(", "))}</div></div></div></td>
@@ -407,7 +438,7 @@ function renderTrainers(M){
         <td><div class="rowacts"><button class="btn sm" data-act="msg" data-id="${t.id}">Statement</button><button class="btn sm" data-act="payment" data-id="${t.id}">Payment</button></div></td></tr>`; }).join("")}
     </tbody></table></div>` : `<div class="empty">No trainers yet. Add them from the list below, or add one by hand.</div>`}
   </section>
-  <section class="card"><div class="card-h"><h2>Found on the calendar</h2><span class="small muted">People who booked sessions but aren't set up as trainers</span></div>
+  <section class="card" data-tour="found"><div class="card-h"><h2>Found on the calendar</h2><span class="small muted">People who booked sessions but aren't set up as trainers</span></div>
     ${M.unknown.length ? `<div class="tablewrap"><table><thead><tr><th>Booked by</th><th class="num">Sessions</th><th>Last</th><th>Event names</th><th></th></tr></thead><tbody>
     ${M.unknown.map((u,i) => `<tr><td style="font-weight:600">${esc(u.email)}</td><td class="num">${u.count}</td><td class="small">${fmtD(u.last)}</td><td class="small muted">${esc(u.titles.join(", "))}</td>
       <td><div class="rowacts"><button class="btn sm primary" data-act="u-add" data-i="${i}">Add as trainer</button><button class="btn sm" data-act="u-link" data-i="${i}">Same as…</button><button class="btn sm" data-act="u-ignore" data-i="${i}">Ignore</button></div></td></tr>`).join("")}
@@ -420,7 +451,7 @@ function renderRooms(M){
   const ru = roomUsage(M, S.heatWeeks);
   const days = new Set(D("days")||[]);
   const color = u => u === null ? "var(--bg)" : u <= 0.001 ? "var(--surface2)" : `color-mix(in srgb, var(--accent) ${Math.round(20 + Math.min(1,u)*80)}%, var(--surface2))`;
-  let grid = `<div class="heat" style="grid-template-columns:44px repeat(7,minmax(0,1fr))"><span></span>${DOW.map(d=>`<span class="hd">${d}</span>`).join("")}`;
+  let grid = `<div class="heat" data-tour="heat" style="grid-template-columns:44px repeat(7,minmax(0,1fr))"><span></span>${DOW.map(d=>`<span class="hd">${d}</span>`).join("")}`;
   for (let h = ru.open; h < ru.close; h++){
     grid += `<span class="hl">${hourLabel(h)}</span>`;
     for (let dow = 0; dow < 7; dow++){ const c = ru.cells.find(x => x.dow === dow && x.h === h); const open = days.has((dow+1)%7);
@@ -453,7 +484,7 @@ function renderRevenue(M){
     <div class="stat"><span class="k">Average month</span><span class="v">${money(rows.length ? tot.billed/rows.length : 0)}</span><span class="d">rent billed</span></div>
     <div class="stat"><span class="k">Per session</span><span class="v">${tot.n ? "$" + (tot.billed/tot.n).toFixed(2) : "–"}</span><span class="d">average rent</span></div>
   </div>
-  <section class="card"><div class="card-h"><h2>Rent by month</h2><div class="legend"><span><i class="sw-acc"></i>Billed</span><span><i class="sw-rent"></i>Collected</span></div></div><div class="chart" data-chart="revbars"></div></section>
+  <section class="card" data-tour="revenue"><div class="card-h"><h2>Rent by month</h2><div class="legend"><span><i class="sw-acc"></i>Billed</span><span><i class="sw-rent"></i>Collected</span></div></div><div class="chart" data-chart="revbars"></div></section>
   <section class="card"><div class="card-h"><h2>By trainer · ${esc(mName(k))}</h2></div>
     ${per.length ? `<div class="tablewrap"><table><thead><tr><th>Trainer</th><th class="num">Sessions</th><th class="num">Rent</th><th class="num">Paid</th><th class="num">Share</th></tr></thead><tbody>
     ${per.map(({t,m}) => `<tr><td><div class="who">${avatar(t.name)}<span class="n">${esc(t.name)}</span></div></td><td class="num">${m.n}</td><td class="num" style="font-weight:600">${money(m.rent)}</td><td class="num">${money(m.paid)}</td><td class="num">${totM?Math.round(100*m.rent/totM):0}%</td></tr>`).join("")}
@@ -496,7 +527,7 @@ function renderTrends(M){
     <div class="stat"><span class="k">Clients seen</span><span class="v">${rows.reduce((a,r)=>a+r.clients,0)}</span><span class="d">across trainers, last 30 days</span></div>
     <div class="stat"><span class="k">Largest trainer</span><span class="v">${Math.round(100*topShare)}%</span><span class="d">of rent, last 90 days</span></div>
   </div>
-  <section class="card"><div class="card-h"><h2>Trainer trends</h2><span class="small muted">last 4 weeks vs the 12 before</span></div>
+  <section class="card" data-tour="trends"><div class="card-h"><h2>Trainer trends</h2><span class="small muted">last 4 weeks vs the 12 before</span></div>
     ${rows.length ? `<div class="tablewrap"><table><thead><tr><th>Trainer</th><th>Trend</th><th>12 weeks</th><th class="num">Per week</th><th class="num">Clients · 30d</th><th class="num">Hours · 30d</th><th class="num">Rent share · 90d</th></tr></thead><tbody>
     ${rows.map(r => `<tr><td><div class="who">${avatar(r.t.name)}<span class="n">${esc(r.t.name)}</span></div></td><td><span class="chip ${L[r.status][1]}">${L[r.status][0]}</span>${r.change != null ? `<div class="small muted">${r.base.toFixed(1)} → ${r.recent.toFixed(1)}</div>` : ""}</td><td>${mini(r.weekly)}</td>
       <td class="num" style="font-weight:600">${r.recent.toFixed(1)}</td><td class="num">${r.clients}</td><td class="num">${r.hours.toFixed(0)}</td><td class="num">${totRent ? Math.round(100*r.rent90/totRent) : 0}%</td></tr>`).join("")}
@@ -508,7 +539,8 @@ function renderTrends(M){
 /* ---------- settings ---------- */
 function renderSettings(){
   const r = rentDefault();
-  return `<div class="grid2"><section class="card"><div class="card-h"><h2>Studio</h2><button class="btn sm" data-act="rerun">Change setup</button></div>
+  return `<div class="grid2"><section class="card" data-tour="settings"><div class="card-h"><h2>Studio</h2><button class="btn sm" data-act="rerun">Change setup</button></div>
+    <div class="actions"><button class="btn ghost sm" data-act="tour-start">Replay the walkthrough</button></div>
     <dl class="kv"><dt>Name</dt><dd>${esc(D("name"))}</dd><dt>Calendar</dt><dd>${esc(D("calendarName")||D("calendarId"))}</dd>
       <dt>Capacity</dt><dd>${D("rooms")} trainers at once</dd><dt>Hours</dt><dd>${hourLabel(D("open"))}m–${hourLabel(D("close")%24)}m</dd>
       <dt>Default rent</dt><dd>${esc(ruleText(r))}</dd><dt>Counting from</dt><dd>${esc(D("historyStart"))}</dd></dl></section>
@@ -607,6 +639,10 @@ document.addEventListener("click", async e => {
   const M = S.M;
   switch (act){
     case "close": case "close-scrim": closeModal(); break;
+    case "tour-start": S.tour = null; tourGo(0); break;
+    case "tour-next": tourGo(S.tour + 1); break;
+    case "tour-back": tourGo(S.tour - 1); break;
+    case "tour-skip": tourEnd(); break;
     case "theme": try { localStorage.setItem("tt-theme", el.getAttribute("data-mode")); } catch(x){} applyTheme(el.getAttribute("data-mode")); render(); break;
     case "signin": el.disabled = true; el.textContent = "Opening Google…"; signInWithGoogle(location.pathname); break;
     case "grant-calendar": el.disabled = true; el.textContent = "Opening Google…"; signInWithGoogle(location.pathname); break;
@@ -673,7 +709,7 @@ document.addEventListener("click", async e => {
 });
 document.addEventListener("input", e => { if (e.target.id === "msg-text" && S.modal) S.modal.text = e.target.value; });
 document.addEventListener("change", e => { if (e.target.id === "pm-t"){ S.modal = {type:"payment", id:e.target.value}; renderModal(); } });
-document.addEventListener("keydown", e => { if (e.key === "Escape" && S.modal) closeModal(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape"){ if (S.modal) closeModal(); else if (S.tour != null) tourEnd(); } });
 let rt; window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => S.M && drawCharts(S.M), 150); });
 
 /* ---------- boot ---------- */

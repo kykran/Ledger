@@ -681,7 +681,7 @@ function taxCard(M){
 function noticesCard(){
   const n = {...DEFAULTS.notices, ...(P("notices")||{})};
   const live = !!A.outbox;
-  return `<section class="card" id="notices"><h2>Automatic messages</h2>
+  return `<section class="card" id="notices" data-tour="notices"><h2>Automatic messages</h2>
     <p class="small muted">${live ? "Checked every hour, in your time zone (" + esc(P("timeZone") || Intl.DateTimeFormat().resolvedOptions().timeZone) + ")." : "Available in the hosted app. Here you can see how they'd be set up."}</p>
     <div class="form">
       <label class="check full"><input type="checkbox" id="nt-weekly" ${n.weekly!==false?"checked":""}> Weekly summary, Saturday at 8pm</label>
@@ -712,7 +712,7 @@ async function refreshOutbox(){ if (!A.outbox) return; try { S.outbox = await A.
 function heldCount(){ return (S.outbox||[]).filter(r => r.status === "held").length; }
 function taxSettingsCard(){
   const t = {...DEFAULTS.tax, ...(P("tax")||{})};
-  return `<section class="card" id="tax"><div class="card-h"><h2>Tax set-aside</h2><label class="check"><input type="checkbox" id="tx-on" ${t.enabled?"checked":""}> On</label></div>
+  return `<section class="card" id="tax" data-tour="taxset"><div class="card-h"><h2>Tax set-aside</h2><label class="check"><input type="checkbox" id="tx-on" ${t.enabled?"checked":""}> On</label></div>
     <p class="small muted">Shows how much of your profit to put aside for taxes, in Trends and your summaries. A rough estimate for self-employed trainers, not tax advice.</p>
     <div class="form">
       <div class="field"><label for="tx-fed">Federal income tax %</label><input id="tx-fed" type="number" min="0" step="0.5" value="${esc(t.federal)}"></div>
@@ -958,12 +958,16 @@ const TOUR = [
   {tab:"clients", sel:"found", title:"Clients come from your calendar", body:"Names that repeat on your calendar land here. Add as client, merge a nickname into an existing client with Same as, or hide it with Not a client."},
   {tab:"clients", sel:"clients", title:"Set how each client pays", body:"Tap a name to set their rate and plan: package, monthly bill, membership or pay as you go. For packages, Set package tells the tally where they stand today."},
   {tab:"calendar", sel:"cal", title:"Every session, by day", body:"Each dot is a session. Tap a day to see who, when, and what you netted. Events with words like cancel or free are skipped automatically."},
-  {tab:"billing", sel:"bills", title:"Bills and payments", body:"Monthly-bill and membership clients get a bill each month. Send it as a text or email, then log the payment when it arrives."},
-  {tab:"trends", sel:"trend", title:"Trends and projections", body:"Income by month after rent, plus the next few months at your current pace. Switch to Sessions to see volume instead of dollars."},
-  {tab:"settings", sel:"backup", title:"Your data is yours", body:"Download a backup or spreadsheet any time. Change your calendars, rent or message wording under Setup. You can replay this walkthrough here."}
+  {tab:"billing", sel:"bills", title:"Bills and payments", body:"Monthly-bill and membership clients get a bill each month. Send it as a text or email, then log the payment when it arrives. If your studio uses Trainer Tally, you confirm its rent statement here each month."},
+  {tab:"trends", view:"income", sel:"trend", title:"Trends and projections", body:"Income by month after rent, plus the next few months at your current pace. Switch to Sessions to see volume instead of dollars."},
+  {tab:"trends", view:"clients", sel:"health", title:"Who's growing, who's slipping", body:"Each client's last 4 weeks against the 12 before. \"Gone quiet\" means two weeks with nothing booked, a good time to reach out."},
+  {tab:"trends", view:"pricing", sel:"sim", title:"Try a rate increase", body:"See what raising your rate would add per month and per year, for everyone or just the clients you pick, even if a few leave."},
+  {tab:"settings", sel:"notices", title:"Automatic messages", body:"A summary of your week every Saturday night and a month-end reconciliation 2 days before the month closes. Renewal reminders can be drafted for your OK or sent for you."},
+  {tab:"settings", sel:"taxset", title:"Tax set-aside", body:"Turn this on to see how much of each month's profit to put aside, and what your quarterly estimated payments might be."},
+  {tab:"settings", sel:"backup", title:"Your data is yours", body:"Download a backup or spreadsheet any time. Change your calendars, rent, no-rent words or message wording here. Open any client to make them a private sessions-left page. You can replay this walkthrough here."}
 ];
 function tourEnd(){ S.tour = null; document.querySelectorAll(".tour-focus").forEach(el => el.classList.remove("tour-focus")); const c = $("#tourcard"); if (c) c.remove(); if (!(S.prof && S.prof.tourDone)) saveProfile({tourDone:true}).catch(()=>{}); }
-function tourGo(i){ if (i < 0) i = 0; if (i >= TOUR.length){ tourEnd(); S.tab = "overview"; render(); return; } S.tour = i; S.tab = TOUR[i].tab; render(); window.scrollTo({top:0}); }
+function tourGo(i){ if (i < 0) i = 0; if (i >= TOUR.length){ tourEnd(); S.tab = "overview"; render(); return; } S.tour = i; S.tab = TOUR[i].tab; if (TOUR[i].view) S.trendView = TOUR[i].view; render(); window.scrollTo({top:0}); }
 function renderTour(){
   document.querySelectorAll(".tour-focus").forEach(el => el.classList.remove("tour-focus"));
   let card = $("#tourcard");
