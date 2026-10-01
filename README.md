@@ -111,3 +111,7 @@ npm run dev            # app + /api on http://localhost:3000
   - **Renewal reminders** – to clients whose package hit the renewal flag, 9am–7pm. Mode per trainer: off, "draft for my OK" (default) or automatic. Per-client opt-out.
 - Emails go out through Resend once `RESEND_API_KEY` and `MAIL_FROM` are set. Until then they wait in the app under Settings → Automatic messages.
 - **Client pages**: `/s/<token>` shows a client their sessions left and upcoming dates (no prices). Created and turned off from the client sheet.
+
+## Monthly sign-off (studio ↔ trainer)
+
+`supabase/signoff.sql`. Linked trainers see the studio's statement next to their own count of studio sessions and tap Confirm or Dispute (with a note). The studio sees only the answer, the trainer's count and the note; a confirmed month is locked until the studio reopens it. Sessions titled with a no-rent word ("Sarah home", "Mike - online") count as sessions but owe no rent, on both sides.

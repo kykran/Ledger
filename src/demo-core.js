@@ -8,7 +8,7 @@ export function demoAdapter(){
   let profile = D.profile;
   let clients = D.clients;
   const wait = ms => new Promise(r => setTimeout(r, ms));
-  let outbox = null; const links = {};
+  let outbox = null; const links = {}; const signoffs = [];
   return {
     name: "demo",
     calendar: {
@@ -46,7 +46,8 @@ export function demoAdapter(){
     },
     studio: {
       url: "/demo-studio.html",
-      async memberships(){ return [clone(D.membership)]; },
+      async memberships(){ return [{ ...clone(D.membership), signoffs: clone(signoffs) }]; },
+      async signOff(r){ const i = signoffs.findIndex(x => x.month === r.month); const row = { ...r, updated_at: new Date().toISOString() }; if (i >= 0) signoffs[i] = row; else signoffs.push(row); },
       async join(){ return { studioName: D.membership.studioName }; },
       async leave(){},
       async ownsStudio(){ return true; }
@@ -62,7 +63,10 @@ export function demoStudioBackend(){
     studios: [clone(D.studio)],
     studio_trainers: D.trainers.map(t => { const { id, ...data } = t; return { studio_id: D.studio.id, id, data }; }),
     studio_members: [{ studio_id: D.studio.id, user_id: "demo-alex", trainer_id: "alex" }],
-    studio_invites: []
+    studio_invites: [],
+    statement_confirmations: (() => { const now = new Date(), last = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      const k = now.getDate() >= last - 2 ? D.membership.trainer.statement.months.slice(-1)[0].month : (D.membership.trainer.statement.months.slice(-2)[0] || {}).month;
+      return k ? [{ studio_id: D.studio.id, trainer_id: "alex", month: k, status: "disputed", trainer_n: null, studio_n: null, note: "I think the 14th was a cancel, not a session.", updated_at: now.toISOString() }] : []; })()
   };
   const keyOf = {
     studios: (a, b) => a.id === b.id,

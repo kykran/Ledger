@@ -19,6 +19,7 @@ const DEF = {
   name:"", calendarId:"", calendarName:"", rooms:3, open:6, close:21, days:[0,1,2,3,4,5,6],
   rent:{mode:"perSession", perSession:20, monthly:660}, historyStart:YEAR0,
   ignoreWords:["cancel","cancelled","canceled","closed","hold","maintenance","blocked"], ignoredEmails:[],
+  noRentWords:["home","online","remote","zoom","virtual","outdoor","offsite"],
   statementTemplate:"Hi {first}! Your {studio} rent for {month} is ${amount} ({details}).{balance} Thanks!"
 };
 const RENT = { default:"Studio default", perSession:"Per session", monthly:"Flat monthly", none:"No rent" };
@@ -110,6 +111,8 @@ async function loadStudio(){
     S.trainers = (tr||[]).map(r => ({id:r.id, ...r.data}));
     const { data: mem } = await sb.from("studio_members").select("trainer_id").eq("studio_id", S.studio.id);
     S.linked = new Set((mem||[]).map(m => m.trainer_id));
+    const { data: so } = await sb.from("statement_confirmations").select("*").eq("studio_id", S.studio.id);
+    S.signoffs = so || [];
   }
 }
 
@@ -160,14 +163,17 @@ function ruleText(r){ return r.mode === "perSession" ? `${money(r.perSession)}/s
 function compute(){
   const now = new Date(), curM = mkey(now);
   const ignore = (D("ignoreWords")||[]).map(norm).filter(Boolean);
+  const noRentW = (D("noRentWords")||[]).map(norm).filter(Boolean);
   const ignoredEmails = new Set((D("ignoredEmails")||[]).map(x => x.toLowerCase()));
   const byEmail = new Map(); for (const t of S.trainers) for (const e of (t.emails||[])) byEmail.set(String(e).toLowerCase(), t.id);
   const byT = {}; S.trainers.forEach(t => byT[t.id] = []);
   const unknown = {}; const roomEvents = [];
-  for (const e of S.events){
+  for (let e of S.events){
     const words = norm(e.title).split(" ");
     if (ignore.some(w => words.includes(w))) continue;
-    roomEvents.push(e);
+    const padded = " " + words.join(" ") + " ";
+    e = {...e, free: noRentW.some(w => padded.includes(" " + w + " "))};
+    if (!e.free) roomEvents.push(e);
     const tid = byEmail.get(e.email);
     if (tid){ byT[tid].push({...e, future:e.start >= now}); continue; }
     if (!e.email || ignoredEmails.has(e.email)) continue;
@@ -183,15 +189,15 @@ function compute(){
     const from = firstM > hs ? firstM : hs;
     const months = [];
     for (let k = from; k <= curM; k = mNext(k)){
-      const n = past.filter(s => mkey(s.start) === k).length;
+      const inM = past.filter(s => mkey(s.start) === k), n = inM.filter(s => !s.free).length, free = inM.length - n;
       const booked = future.filter(s => mkey(s.start) === k).length;
       let rent = 0, details = "";
       if (t.active === false && !n){ months.push({month:k, n, booked, rent:0, details:"inactive", due:false, running:false, paid:0}); continue; }
-      if (rule.mode === "perSession"){ rent = n * num(rule.perSession); details = `${n} session${n===1?"":"s"} × ${money(num(rule.perSession))}`; }
+      if (rule.mode === "perSession"){ rent = n * num(rule.perSession); details = `${n} session${n===1?"":"s"} × ${money(num(rule.perSession))}` + (free ? `, ${free} off-site at no charge` : ""); }
       else if (rule.mode === "monthly"){ rent = num(rule.monthly); details = `flat monthly rent, ${n} session${n===1?"":"s"}`; }
       else details = `${n} session${n===1?"":"s"}, no rent`;
       const running = k === curM && rule.mode === "perSession";
-      months.push({month:k, n, booked, rent, details, due: rule.mode === "monthly" ? true : k < curM, running, paid:0});
+      months.push({month:k, n, free, booked, rent, details, due: rule.mode === "monthly" ? true : k < curM, running, paid:0});
     }
     let pool = (t.payments||[]).reduce((a,p)=>a+num(p.amount),0); const paidTotal = pool;
     for (const m of months){ const take = Math.min(pool, m.rent); m.paid = take; pool -= take; m.state = m.rent <= 0 ? "none" : take >= m.rent - 0.5 ? "paid" : take > 0 ? "partial" : m.running ? "running" : "open"; }
@@ -331,6 +337,30 @@ function readWiz(){
   if (w.step === 3){ const m = document.querySelector('input[name="w-rent"]:checked'); w.rent = {mode: m ? m.value : "perSession", perSession:num(val("w-rps"),20), monthly:num(val("w-rmo"),0)}; w.historyStart = val("w-start") || YEAR0; }
 }
 
+/* ---------- monthly sign-off ---------- */
+// The month trainers are signing off now: this month from 2 days before it ends, otherwise last month.
+function signoffMonth(now){ const last = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate(); return now.getDate() >= last - 2 ? mkey(now) : mPrev(mkey(now)); }
+const soFor = (tid, k) => (S.signoffs||[]).find(x => x.trainer_id === tid && x.month === k) || null;
+function soChip(M, t, k){
+  if (!(S.linked && S.linked.has(t.id))) return `<span class="small muted">Not linked</span>`;
+  const so = soFor(t.id, k), m = M.stats[t.id].months.find(x => x.month === k);
+  if (!so) return `<span class="chip info">Waiting</span>`;
+  const changed = m && so.studio_n != null && (m.n !== so.studio_n || Math.round(m.rent) !== Math.round(num(so.studio_rent)));
+  return `<span class="chip ${so.status==="confirmed"?"ok":"owes"}">${so.status==="confirmed"?"Confirmed":"Disputed"}</span>${changed ? ` <span class="chip low" title="The statement changed after they answered">Changed since</span>` : ""}`;
+}
+function signoffCard(M){
+  const k = signoffMonth(M.now), linked = S.trainers.filter(t => t.active !== false && S.linked && S.linked.has(t.id));
+  if (!linked.length) return "";
+  const rows = linked.map(t => ({t, so: soFor(t.id, k), m: M.stats[t.id].months.find(x => x.month === k) || {n:0, rent:0}}));
+  const c = s => rows.filter(r => s ? r.so && r.so.status === s : !r.so).length;
+  return `<section class="card"><div class="card-h"><h2>Sign-off · ${esc(mLabel(k, true))}</h2><span class="small muted">${c("confirmed")} confirmed · ${c("disputed")} disputed · ${c(null)} waiting</span></div>
+    <div class="alist">${rows.map(({t, so, m}) => `<div class="aitem"><div class="top">${avatar(t.name)}<b>${esc(t.name)}</b>${soChip(M, t, k)}</div>
+      <div class="meta">You: ${m.n} session${m.n===1?"":"s"} · ${money(m.rent)}${so && so.trainer_n != null ? ` &nbsp;·&nbsp; They count: ${so.trainer_n}` : ""}${so && so.note ? ` &nbsp;·&nbsp; “${esc(so.note)}”` : ""}</div>
+      ${so ? `<div class="rowacts"><button class="btn sm" data-act="so-reopen" data-id="${t.id}" data-m="${k}">Reopen</button></div>` : ""}</div>`).join("")}</div>
+    <p class="small muted">Linked trainers confirm or dispute each month in their own app. A confirmed month is locked unless you reopen it. You see only their answer, their session count and their note.</p>
+  </section>`;
+}
+
 /* ---------- overview ---------- */
 function renderOverview(M){
   const k = S.month, R = monthRent(M, k), isCur = k === M.curM, proj = isCur ? projectedRent(M) : 0;
@@ -349,6 +379,7 @@ function renderOverview(M){
     <div class="stat"><span class="k">Room usage</span><span class="v">${Math.round(ru.util*100)}%</span><span class="d">of open hours, last 4 weeks</span></div>
     <div class="stat"><span class="k">Sessions / week</span><span class="v">${(S.trainers.reduce((a,t)=>a+M.stats[t.id].pace,0)).toFixed(0)}</span><span class="d">across all trainers</span></div>
   </div>
+  ${signoffCard(M)}
   <div class="grid2">
     <section class="card"><div class="card-h"><h2>Rent owed</h2></div>
       ${owing.length ? `<div class="alist">${owing.map(t => { const st = M.stats[t.id]; const open = st.months.filter(m => m.due && m.state !== "paid"); return `<div class="aitem"><div class="top">${avatar(t.name)}<a href="#" class="n" style="font-weight:600;color:var(--ink);text-decoration:none" data-act="edit" data-id="${t.id}">${esc(t.name)}</a><span class="chip owes">${money(st.balance)}</span></div><div class="meta">${open.map(m => MONTHS[mStart(m.month).getMonth()] + " " + money(m.rent - m.paid)).join(" · ")}</div><div class="rowacts"><button class="btn sm" data-act="msg" data-id="${t.id}">Statement</button><button class="btn sm primary" data-act="payment" data-id="${t.id}">Log payment</button></div></div>`; }).join("")}</div>` : `<div class="empty">Every trainer is paid up.</div>`}
@@ -366,13 +397,13 @@ function renderTrainers(M){
   const k = S.month;
   const rows = S.trainers.slice().sort((a,b)=>(a.active===false)-(b.active===false) || M.stats[b.id].balance - M.stats[a.id].balance || a.name.localeCompare(b.name));
   return `<section class="card"><div class="card-h"><h2>Trainers</h2><span class="small muted">${S.trainers.filter(t=>t.active!==false).length} active</span></div>
-    ${rows.length ? `<div class="tablewrap"><table><thead><tr><th>Trainer</th><th>Rent</th><th class="num">Sessions</th><th class="num">${esc(MONTHS[mStart(k).getMonth()])} rent</th><th>Balance</th><th>Account</th><th></th></tr></thead><tbody>
+    ${rows.length ? `<div class="tablewrap"><table><thead><tr><th>Trainer</th><th>Rent</th><th class="num">Sessions</th><th class="num">${esc(MONTHS[mStart(k).getMonth()])} rent</th><th>Balance</th><th>${esc(MONTHS[mStart(signoffMonth(M.now)).getMonth()])} sign-off</th><th></th></tr></thead><tbody>
     ${rows.map(t => { const st = M.stats[t.id], m = st.months.find(x => x.month === k) || {n:0, rent:0, booked:0}; const linked = S.linked && S.linked.has(t.id);
       return `<tr style="${t.active===false?"opacity:.55":""}"><td><div class="who">${avatar(t.name)}<div style="min-width:0"><a href="#" class="n" data-act="edit" data-id="${t.id}">${esc(t.name)}</a><div class="s">${esc((t.emails||[]).join(", "))}</div></div></div></td>
         <td class="small">${esc(ruleText(st.rule))}${st.rule.inherited?' <span class="muted">(default)</span>':""}</td>
         <td class="num">${m.n}${m.booked?`<span class="muted"> +${m.booked}</span>`:""}</td><td class="num" style="font-weight:600">${money(m.rent)}</td>
         <td><span class="chip ${st.status}">${esc(st.label)}</span></td>
-        <td class="small">${linked ? `<span class="chip ok">Linked</span>` : `<button class="btn sm" data-act="invite" data-id="${t.id}">Invite</button>`}</td>
+        <td class="small">${linked ? soChip(M, t, signoffMonth(M.now)) : `<button class="btn sm" data-act="invite" data-id="${t.id}">Invite</button>`}</td>
         <td><div class="rowacts"><button class="btn sm" data-act="msg" data-id="${t.id}">Statement</button><button class="btn sm" data-act="payment" data-id="${t.id}">Payment</button></div></td></tr>`; }).join("")}
     </tbody></table></div>` : `<div class="empty">No trainers yet. Add them from the list below, or add one by hand.</div>`}
   </section>
@@ -483,7 +514,8 @@ function renderSettings(){
       <dt>Default rent</dt><dd>${esc(ruleText(r))}</dd><dt>Counting from</dt><dd>${esc(D("historyStart"))}</dd></dl></section>
   <section class="card"><h2>Statements and matching</h2><div class="form">
     <div class="field full"><label for="st-tpl">Statement message</label><textarea id="st-tpl">${esc(D("statementTemplate"))}</textarea><span class="hint">{first} {studio} {month} {amount} {details} {balance}</span></div>
-    <div class="field full"><label for="st-ign">Skip events containing these words</label><input id="st-ign" value="${esc((D("ignoreWords")||[]).join(", "))}"></div></div>
+    <div class="field full"><label for="st-ign">Skip events containing these words</label><input id="st-ign" value="${esc((D("ignoreWords")||[]).join(", "))}"></div>
+    <div class="field full"><label for="st-norent">No rent for events containing</label><input id="st-norent" value="${esc((D("noRentWords")||[]).join(", "))}"><span class="hint">Sessions a trainer runs away from the studio, e.g. "Sarah home". They don't count toward rent or room usage.</span></div></div>
     ${(D("ignoredEmails")||[]).length ? `<h3>Ignored bookers</h3><div class="list">${D("ignoredEmails").map((e,i)=>`<div><span>${esc(e)}</span><button class="btn sm" data-act="unignore" data-i="${i}">Restore</button></div>`).join("")}</div>` : ""}
     <div class="actions"><button class="btn primary" data-act="save-settings">Save</button></div></section></div>`;
 }
@@ -583,6 +615,9 @@ document.addEventListener("click", async e => {
     case "cal-list": S.calList = null; S.calListErr = null; render(); break;
     case "mprev": S.month = mPrev(S.month); render(); break;
     case "mnext": if (S.month < M.curM) S.month = mNext(S.month); render(); break;
+    case "so-reopen": { const tid = el.getAttribute("data-id"), k = el.getAttribute("data-m");
+      const { error } = await sb.from("statement_confirmations").delete().eq("studio_id", S.studio.id).eq("trainer_id", tid).eq("month", k);
+      if (error){ toast("Couldn't reopen"); break; } S.signoffs = (S.signoffs||[]).filter(x => !(x.trainer_id === tid && x.month === k)); toast("Reopened. They can confirm again."); render(); break; }
     case "heat-weeks": S.heatWeeks = +el.getAttribute("data-w"); render(); break;
     case "wiz-back": readWiz(); S.wiz.step--; render(); break;
     case "wiz-cancel": S.wiz = null; if (S.rerun){ S.rerun = false; S.studio = {...S.studio, data:{...S.studio.data, setupDone:true}}; } render(); break;
@@ -630,7 +665,7 @@ document.addEventListener("click", async e => {
     case "link-to": { const u = M.unknown[S.modal.i], t = trainer(id); closeModal(); if (u && t) saveTrainer({...t, emails:[...(t.emails||[]), u.email]}).then(()=>toast(`Added to ${t.name}`)).catch(()=>{}); break; }
     case "u-ignore": { const u = M.unknown[+el.getAttribute("data-i")]; if (u) saveStudio({ignoredEmails:[...(D("ignoredEmails")||[]), u.email]}).catch(()=>{}); break; }
     case "unignore": { const i = +el.getAttribute("data-i"); saveStudio({ignoredEmails:(D("ignoredEmails")||[]).filter((_,j)=>j!==i)}).catch(()=>{}); break; }
-    case "save-settings": saveStudio({statementTemplate:val("st-tpl"), ignoreWords:val("st-ign").split(",").map(s=>s.trim().toLowerCase()).filter(Boolean)}).then(()=>toast("Saved")).catch(()=>{}); break;
+    case "save-settings": saveStudio({statementTemplate:val("st-tpl"), ignoreWords:val("st-ign").split(",").map(s=>s.trim().toLowerCase()).filter(Boolean), noRentWords:val("st-norent").split(",").map(s=>s.trim().toLowerCase()).filter(Boolean)}).then(()=>toast("Saved")).catch(()=>{}); break;
     case "export": { const rows = [["trainer","month","sessions","rent","paid","status"]];
       for (const t of S.trainers) for (const m of M.stats[t.id].months) rows.push([t.name, m.month, m.n, m.rent, Math.round(m.paid*100)/100, m.state]);
       downloadFile(`${(D("name")||"studio").replace(/\W+/g,"-").toLowerCase()}-rent-${ymd(new Date())}.csv`, rows.map(r => r.map(v => /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g,'""') + '"' : v).join(",")).join("\n") + "\n"); break; }

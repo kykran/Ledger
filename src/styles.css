@@ -275,3 +275,5 @@ td.num,th.num{text-align:right;white-space:nowrap}
 .row-actions{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
 .mailtext{white-space:pre-wrap;font-family:var(--ui);font-size:13.5px;line-height:1.55;background:var(--surface2);border:1px solid var(--line);border-radius:10px;padding:14px;max-height:50vh;overflow:auto;margin:10px 0}
 .chip.neutral{background:var(--surface2);color:var(--ink2)}
+.aitem.so .meta{padding-left:0} .aitem.so .rowacts{grid-row:1/span 3}
+.warn{color:var(--warn)}

@@ -131,11 +131,16 @@ const adapter = {
           sb.from("studios").select("id,data").eq("id", m.studio_id).maybeSingle(),
           sb.from("studio_trainers").select("id,data").eq("studio_id", m.studio_id).eq("id", m.trainer_id).maybeSingle()
         ]);
-        if (st) out.push({ studioId: st.id, studioName: (st.data && st.data.name) || "Studio", trainer: tr ? { id: tr.id, ...tr.data } : null });
+        const { data: so } = await sb.from("statement_confirmations").select("month,status,note,trainer_n,studio_n,studio_rent,updated_at").eq("studio_id", m.studio_id).eq("trainer_id", m.trainer_id);
+        if (st) out.push({ studioId: st.id, studioName: (st.data && st.data.name) || "Studio", trainer: tr ? { id: tr.id, ...tr.data } : null, signoffs: so || [] });
       }
       return out;
     },
     async join(code){ return api("/api/studio/join", { code }); },
+    async signOff({ studioId, trainerId, month, status, note, studio_n, studio_rent, trainer_n }){
+      const { error } = await sb.from("statement_confirmations").upsert({ studio_id: studioId, trainer_id: trainerId, month, status, note, studio_n, studio_rent, trainer_n, user_id: session.user.id, updated_at: new Date().toISOString() });
+      if (error) throw Object.assign(fail(error), { message: error.code === "42501" ? "That month is already confirmed. Ask the studio to reopen it." : error.message });
+    },
     async leave(studioId){ const { error } = await sb.from("studio_members").delete().eq("studio_id", studioId).eq("user_id", session.user.id); if (error) throw fail(error); },
     async ownsStudio(){ const { data } = await sb.from("studios").select("id").eq("owner_id", session.user.id).limit(1); return !!(data && data.length); }
   },

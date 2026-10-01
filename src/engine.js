@@ -18,6 +18,7 @@ export const DEFAULTS = {
   renewalTemplate: "Hi {first}! Quick heads-up: you have {left} session{s} left in your package. Your next {size}-session package is ${price}. Thanks! - {me}",
   invoiceTemplate: "Hi {first}! Your total for {month} is ${amount} ({details}). Thanks! - {me}",
   notices: {renewals:"ask", weekly:true, monthly:true, email:""},
+  noRentWords: ["home","online","remote","zoom","virtual","outdoor","offsite"],
   tax: {enabled:false, federal:12, state:5, se:true, setAside:null, expensesMonthly:0}
 };
 export const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -84,9 +85,22 @@ function buildMatcher(){
   list.sort((x,y)=>y.a.length-x.a.length);
   return t => { for (const {a,id} of list){ if (t === a) return id; if (t.startsWith(a+" ") && t.slice(a.length+1).split(" ").length <= 2) return id; } return null; };
 }
+/* Words after the client's name in an event title, e.g. "Sarah home" -> ["home"]. */
+function titleExtras(c, s){
+  const t = clean(s.title||"");
+  const names = [c.name, ...(c.aliases||[])].map(clean).filter(Boolean).sort((a,b) => b.length - a.length);
+  for (const n of names) if (t === n || t.startsWith(n + " ")) return t.slice(n.length).trim();
+  return t;
+}
+/* True when the title marks a session away from the studio ("Sarah home", "Mike - online"). */
+export function noRentTitle(c, s){
+  const extra = " " + titleExtras(c, s) + " ";
+  return (P("noRentWords")||[]).map(norm).filter(Boolean).some(w => extra.includes(" " + w + " "));
+}
 export function rentApplies(c, s){
   const r = rentCfg();
   if (c.noRent) return false;
+  if (noRentTitle(c, s)) return false;
   const nr = (c.noRentNames||[]).map(clean).filter(Boolean);
   if (nr.length){ const t = clean(s.title||""); if (nr.some(a => t === a || t.startsWith(a + " "))) return false; }
   return r.appliesTo === "all" || !!s.studio;
@@ -513,4 +527,13 @@ export function renewalEmail(M, c){
   const text = messageText(M, c, "renew"); CTX = M.ctx;
   const me = P("trainerName") || "your trainer";
   return {subject: `Your training package with ${me}`, text, html: box(`<p style="font-size:15px;line-height:1.55;margin:0">${esc(text)}</p>`).replace("Sent by Trainer Tally. Change these emails in Settings → Automatic messages.", `Sent on behalf of ${esc(me)}. Reply to this email to reach them.`)};
+}
+
+/* The trainer's own count of studio sessions in a month, for checking a studio's statement. */
+export function studioCount(M, k){
+  CTX = M.ctx;
+  let n = 0, free = 0;
+  for (const c of M.ctx.clients){ const st = M.stats[c.id]; if (!st) continue;
+    for (const s of st.past) if (s.studio && mkey(s.date) === k){ if (rentApplies(c, s)) n++; else free++; } }
+  return {n, free};
 }
