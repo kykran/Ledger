@@ -23,15 +23,7 @@
 const DAY = 86400000;
 const YEAR0 = new Date().getFullYear() + "-01-01";
 const SCHEMA = 1;
-const DEFAULTS = {
-  trainerName: "", myEmail: "", calendars: [], historyStart: YEAR0,
-  ignoreWords: ["cancel","cancelled","canceled","free","comp","rescheduled","tentative","hold"],
-  ignoredTitles: [], threshold: 3,
-  rent: {mode:"none", perSession:20, monthly:660, percent:30, appliesTo:"studio"},
-  defaults: {billing:"package", rate:100, packageSize:10},
-  renewalTemplate: "Hi {first}! Quick heads-up: you have {left} session{s} left in your package. Your next {size}-session package is ${price}. Thanks! - {me}",
-  invoiceTemplate: "Hi {first}! Your total for {month} is ${amount} ({details}). Thanks! - {me}"
-};
+const DEFAULTS = globalThis.TallyEngine.DEFAULTS;
 const BILLING = {
   package: {label:"Package", long:"Prepaid package", hint:"Client buys a block of sessions up front (e.g. 10 for $1,000). Sessions count down; you get a renewal flag when they run low."},
   tab: {label:"Monthly bill", long:"Monthly bill", hint:"Put sessions on the calendar and bill at the end of the month: sessions × rate."},
@@ -64,7 +56,7 @@ const S = {
   prof:null, profLoaded:false, clients:[], clientsLoaded:false, account:null,
   events:[], cal:{state:"idle", done:0, total:0, error:null, at:null}, calList:null, calListErr:null, calLoading:false, detectedEmail:"",
   tab:"overview", month:null, modal:null, readOnly:false, screen:"loading", wiz:null, rerunning:false,
-  confirmReset:false, day:null, trendMode:"net", restore:null, billingStatus:null
+  confirmReset:false, day:null, trendMode:"net", trendView:"income", restore:null, billingStatus:null, outbox:null, sim:{increase:5, mode:"amount", lose:0, ids:null}, links:{}
 };
 
 /* ---------- helpers ---------- */
@@ -191,6 +183,19 @@ async function loadCalendar(refresh){
   const cals = (P("calendars")||[]).filter(c => c.use);
   if (!A.calendar || !cals.length){ S.cal = {state:"idle", done:0, total:0}; S.events = []; renderStatus(); render(); return; }
   const seq = ++loadSeq;
+  if (A.events){
+    S.cal = {state:"loading", done:0, total:1, error:null, at:S.cal.at, synced:true}; renderStatus();
+    try {
+      const onUpdate = rows => { if (seq !== loadSeq) return; S.events = E.normalizeEvents(rows, S.prof); S.cal = {...S.cal, state:"ready", at:new Date(), error:null}; renderStatus(); render(); };
+      const rows = await A.events.load({refresh: !!refresh, full: refresh === "full", onUpdate});
+      if (seq !== loadSeq) return;
+      if (rows){ S.events = E.normalizeEvents(rows, S.prof); S.cal = {state:"ready", done:1, total:1, error:null, at:new Date(), synced:true}; renderStatus(); render(); return; }
+    } catch(err){
+      if (seq !== loadSeq) return;
+      if (isScopeErr(err) || ["needs_reauth","server_not_connected","subscription_required"].includes(err.code)){ S.cal = {state:"error", done:0, total:1, error:err}; renderStatus(); render(); return; }
+    }
+    // Synced events unavailable: read the calendar directly below.
+  }
   let start = parseDay(P("historyStart"));
   for (const c of S.clients){ const d = c.billingStart ? parseDay(c.billingStart) : null; if (d && d < start) start = d; for (const p of (c.packages||[])) if (p.start){ const e = new Date(p.start); if (e < start) start = new Date(e.getFullYear(), e.getMonth(), 1); } }
   const end = addDays(new Date(), 63);
@@ -203,214 +208,20 @@ async function loadCalendar(refresh){
   await Promise.all([worker(),worker(),worker(),worker()]);
   if (seq !== loadSeq) return;
   if (failed){ S.cal.state = "error"; S.cal.error = failed; renderStatus(); render(); return; }
-  const me = (P("myEmail")||"").toLowerCase(), seen = new Set(), evs = [];
-  const extra = (P("extraCreators")||[]).map(x => String(x).toLowerCase().trim()).filter(Boolean);
-  for (const [e, cal] of results){
-    if (!e || e.status === "cancelled" || !e.start || !e.start.dateTime) continue;
-    const key = cal.id + ":" + e.id; if (seen.has(key)) continue; seen.add(key);
-    const creator = ((e.creator||{}).email||"").toLowerCase(), org = ((e.organizer||{}).email||"").toLowerCase();
-    if (cal.mineOnly && me && creator !== me && org !== me && !extra.includes(creator)) continue;
-    evs.push({id:e.id, title:(e.summary||"").trim(), date:new Date(e.start.dateTime), cal:cal.id, calName:cal.name, studio:!!cal.studio});
-  }
-  evs.sort((a,b)=>a.date-b.date);
-  S.events = evs; S.cal = {state:"ready", done:jobs.length, total:jobs.length, error:null, at:new Date()};
+  S.events = E.normalizeEvents(results, S.prof); S.cal = {state:"ready", done:jobs.length, total:jobs.length, error:null, at:new Date()};
   renderStatus(); render();
 }
 
-/* ---------- engine ---------- */
-function buildMatcher(){
-  const list = [];
-  for (const c of S.clients) for (const n of [c.name, ...(c.aliases||[])]){ const a = clean(n); if (a) list.push({a, id:c.id}); }
-  list.sort((x,y)=>y.a.length-x.a.length);
-  return t => { for (const {a,id} of list){ if (t === a) return id; if (t.startsWith(a+" ") && t.slice(a.length+1).split(" ").length <= 2) return id; } return null; };
-}
-function rentApplies(c, s){
-  const r = rentCfg();
-  if (c.noRent) return false;
-  const nr = (c.noRentNames||[]).map(clean).filter(Boolean);
-  if (nr.length){ const t = clean(s.title||""); if (nr.some(a => t === a || t.startsWith(a + " "))) return false; }
-  return r.appliesTo === "all" || !!s.studio;
-}
-function sessionRent(s, value, c){
-  const r = rentCfg();
-  if (!rentApplies(c, s)) return 0;
-  if (r.mode === "perSession") return num(r.perSession);
-  if (r.mode === "percent") return value * num(r.percent)/100;
-  return 0;
-}
-function compute(){
-  const now = new Date(), curM = mkey(now);
-  const match = buildMatcher();
-  const ignoreW = (P("ignoreWords")||[]).map(norm).filter(Boolean);
-  const ignoredT = new Set((P("ignoredTitles")||[]).map(clean));
-  const byClient = {}; S.clients.forEach(c => byClient[c.id] = []);
-  const unmatched = {};
-  for (const e of S.events){
-    const t = clean(e.title); if (!t) continue;
-    const words = norm(e.title).split(" ");
-    const skip = ignoreW.some(w => words.includes(w));
-    const id = match(t);
-    if (!id){
-      if (skip || ignoredT.has(t)) continue;
-      const u = unmatched[t] || (unmatched[t] = {title:e.title, key:t, count:0, past:0, last:null, next:null});
-      u.count++; if (e.date < now){ u.past++; u.last = e.date; } else if (!u.next) u.next = e.date;
-      continue;
-    }
-    byClient[id].push({date:e.date, cal:e.cal, calName:e.calName, studio:e.studio, title:e.title, clientId:id, billable:!skip, future:e.date >= now, value:0, rent:0});
-  }
-  const stats = {};
-  for (const c of S.clients) stats[c.id] = clientStats(c, byClient[c.id]||[], now, curM);
-  const recentCut = now - 120*DAY;
-  const um = Object.values(unmatched).filter(u => u.count >= 2 && ((u.last && u.last >= recentCut) || u.next)).sort((a,b)=>b.count-a.count).slice(0,40);
-  return {now, curM, stats, unmatched:um, byClient};
-}
-function clientStats(c, list, now, curM){
-  const bill = c.billing || "package";
-  const all = list.filter(s => s.billable);
-  const past = all.filter(s => !s.future), future = all.filter(s => s.future);
-  const st = {c, bill, past, future, skipped:list.filter(s=>!s.billable), status:"ok", label:"On track", monthly:{}, balance:0, invoices:[]};
-  const d56 = now - 56*DAY;
-  const recent = past.filter(s => s.date >= d56);
-  const first = past.length ? past[0].date : null;
-  const weeks = first ? Math.min(8, Math.max(1, (now - Math.max(+first, d56)) / (7*DAY))) : 8;
-  st.pace = c.active === false ? 0 : recent.length ? recent.length/weeks : future.filter(s => s.date < now + 28*DAY).length/4;
-  st.rentShare = recent.length ? recent.filter(s => rentApplies(c, s)).length/recent.length : (c.noRent ? 0 : 1);
-  st.last = past.length ? past[past.length-1].date : null;
-  st.next = future[0] ? future[0].date : null;
-  st.rate = num(c.rate, num(defs().rate, 100));
-
-  if (bill === "package") packageStats(c, st, now);
-  else if (bill === "payg"){ all.forEach(s => s.value = st.rate); st.perSession = st.rate; st.label = "Pays per session"; st.status = "info"; }
-  else monthStats(c, st, now, curM);
-
-  for (const s of all) s.rent = sessionRent(s, s.value, c);
-  const bucket = k => st.monthly[k] || (st.monthly[k] = {n:0, earned:0, rent:0, collected:0});
-  for (const s of past){ const m = bucket(mkey(s.date)); m.n++; m.earned += s.value; m.rent += s.rent; if (bill === "payg") m.collected += s.value; }
-  if (bill === "membership") for (const inv of st.invoices) bucket(inv.month).earned = inv.amount;
-  for (const p of (c.payments||[])){ const k = String(p.date||"").slice(0,7); if (k) bucket(k).collected += num(p.amount); }
-  return st;
-}
-function packageStats(c, st, now){
-  const pk = c.packages || [];
-  const dSize = num(c.packageSize, num(defs().packageSize, 10)) || 10;
-  const dPrice = num(c.packagePrice, st.rate * dSize);
-  st.nextSize = dSize; st.nextPrice = dPrice;
-  if (!pk.length){
-    [...st.past, ...st.future].forEach(s => s.value = dPrice/dSize);
-    st.status = "setup"; st.label = "Set package"; st.perSession = dPrice/dSize; return;
-  }
-  const base = new Date(pk[0].start);
-  const caps = pk.map((p,i) => Math.max(0, num(p.size) - (i === 0 ? num(p.used0) : 0)));
-  const used = caps.map(() => 0);
-  let i = 0; const overS = [];
-  for (const s of st.past){
-    if (s.date < base){ s.value = num(pk[0].price)/Math.max(1,num(pk[0].size)); continue; }
-    while (i < caps.length && used[i] >= caps[i]) i++;
-    if (i < caps.length){ used[i]++; s.value = num(pk[i].price)/Math.max(1,num(pk[i].size)); s.pkg = i; }
-    else { s.value = dPrice/dSize; s.over = true; overS.push(s); }
-  }
-  const cap = caps.reduce((a,b)=>a+b,0), usedT = used.reduce((a,b)=>a+b,0) + overS.length;
-  st.remaining = cap - usedT;
-  let cur = used.findIndex((u,j) => u < caps[j]); if (cur < 0) cur = pk.length - 1;
-  const cp = pk[cur];
-  st.current = {...cp, index:cur, size:num(cp.size), usedIn: used[cur] + (cur === 0 ? num(cp.used0) : 0)};
-  st.perSession = num(cp.price)/Math.max(1,num(cp.size));
-  st.future.forEach(s => s.value = st.perSession);
-  st.unpaid = pk.map((p,j)=>({p,j})).filter(({p,j}) => !p.paidDate && (used[j] > 0 || j === cur || (j === 0 && num(p.used0) > 0)));
-  st.unpaidAmt = st.unpaid.reduce((a,{p}) => a + num(p.price), 0);
-  st.over = overS.length;
-  const th = num(P("threshold"), 3);
-  if (st.remaining < 0){ st.status = "out"; st.label = `${-st.remaining} past package`; }
-  else if (st.remaining === 0){ st.status = "out"; st.label = "Out of sessions"; }
-  else if (st.remaining <= th){ st.status = "low"; st.label = `${st.remaining} left`; }
-  else { st.status = "ok"; st.label = `${st.remaining} left`; }
-  if (st.unpaid.length && st.status !== "out"){ st.status = "owes"; st.label = "Package unpaid"; }
-  st.balance = st.unpaidAmt;
-  let left = st.remaining;
-  if (left <= 0) st.runout = overS.length ? overS[0].date : (st.past.length ? st.past[st.past.length-1].date : now);
-  else {
-    for (const s of st.future){ left--; if (left <= 0){ st.runout = s.date; break; } }
-    if (!st.runout && st.pace > 0){ const from = st.future.length ? st.future[st.future.length-1].date : now; st.runout = new Date(+from + left/st.pace*7*DAY); st.runoutEst = true; }
-  }
-}
-function monthStats(c, st, now, curM){
-  const bill = st.bill;
-  const bs = c.billingStart ? parseDay(c.billingStart) : parseDay(P("historyStart"));
-  const fee = num(c.fee), inc = num(c.included), over = num(c.overageRate, st.rate);
-  const byM = {};
-  for (const s of [...st.past, ...st.future]){ const k = mkey(s.date); (byM[k] = byM[k] || []).push(s); }
-  for (const k in byM){
-    const list = byM[k];
-    if (bill === "tab") list.forEach(s => s.value = st.rate);
-    else { const n = Math.max(1, list.length); const amt = fee + (inc > 0 ? Math.max(0, n - inc)*over : 0); list.forEach(s => s.value = amt/n); }
-  }
-  st.perSession = bill === "tab" ? st.rate : (st.pace ? fee/Math.max(1, st.pace*4.33) : fee);
-  const invoices = [];
-  for (let k = mkey(bs); k <= curM; k = mNext(k)){
-    const list = (byM[k]||[]).filter(s => !s.future); const n = list.length;
-    const sched = (byM[k]||[]).filter(s => s.future).length;
-    let amount, details;
-    if (bill === "tab"){ amount = n * st.rate; details = `${n} session${n===1?"":"s"} at ${money(st.rate)}`; }
-    else { const extra = inc > 0 ? Math.max(0, n - inc) : 0; amount = fee + extra*over; details = `${mLabel(k,true)} membership` + (extra ? ` plus ${extra} extra session${extra===1?"":"s"} at ${money(over)}` : ""); }
-    const running = k === curM && bill === "tab";
-    invoices.push({month:k, n, sched, amount, details, due: bill === "membership" ? true : k < curM, running, paid:0});
-  }
-  let pool = (c.payments||[]).filter(p => !p.date || parseDay(p.date) >= addDays(bs,-40)).reduce((a,p)=>a+num(p.amount),0);
-  st.paidTotal = pool;
-  for (const inv of invoices){ const take = Math.min(pool, inv.amount); inv.paid = take; pool -= take; inv.state = inv.amount <= 0 ? "none" : take >= inv.amount - 0.5 ? "paid" : take > 0 ? "partial" : inv.running ? "running" : "open"; }
-  st.credit = pool;
-  st.invoices = invoices;
-  const dueAmt = invoices.filter(i => i.due).reduce((a,i)=>a+i.amount,0);
-  st.balance = Math.max(0, dueAmt - st.paidTotal);
-  const cur = invoices.find(i => i.month === curM);
-  st.running = cur && cur.running ? cur.amount : 0;
-  if (st.balance > 0.5){ st.status = "owes"; st.label = "Owes " + money(st.balance); }
-  else if (bill === "tab"){ st.status = "info"; st.label = cur && cur.amount ? `${money(cur.amount)} so far` : "Up to date"; }
-  else { st.status = "ok"; st.label = "Paid up"; }
-}
-function monthTotals(M, k){
-  let n=0, earned=0, rent=0, collected=0;
-  for (const c of S.clients){ const m = M.stats[c.id].monthly[k]; if (m){ n += m.n; earned += m.earned; rent += m.rent; collected += m.collected; } }
-  const r = rentCfg();
-  const hs = mkey(parseDay(P("historyStart")));
-  if (r.mode === "monthly" && k >= hs && k <= M.curM) rent += num(r.monthly);
-  return {n, earned, rent, net:earned-rent, collected};
-}
-function projectMonth(M, k){
-  const now = M.now, ms = mStart(k), me = mStart(mNext(k));
-  if (me <= now) return {n:0, earned:0, rent:0, net:0};
-  const horizon = addDays(now, 63);
-  let n=0, earned=0, rent=0;
-  const r = rentCfg();
-  for (const c of S.clients){
-    if (c.active === false) continue;
-    const st = M.stats[c.id];
-    let k2 = 0;
-    for (let w = sow(now); w < me; w = addDays(w,7)){
-      const we = addDays(w,7);
-      const a = new Date(Math.max(+w, +ms, +now)), b = new Date(Math.min(+we, +me));
-      if (b <= a) continue;
-      const frac = (b - a) / (7*DAY);
-      const sched = st.future.filter(s => s.date >= a && s.date < b).length;
-      k2 += w >= horizon ? st.pace*frac : Math.max(sched, st.pace*frac);
-    }
-    n += k2;
-    if (st.bill === "membership"){ if (k > M.curM) earned += num(c.fee); }
-    else earned += k2 * (st.perSession || 0);
-    const v = st.bill === "membership" ? (k2 ? num(c.fee)/Math.max(1,k2) : 0) : (st.perSession||0);
-    if (!c.noRent){
-      if (r.mode === "perSession") rent += k2 * st.rentShare * num(r.perSession);
-      else if (r.mode === "percent") rent += (st.bill === "membership" && k > M.curM ? num(c.fee) * st.rentShare : k2 * v * st.rentShare) * num(r.percent)/100;
-    }
-  }
-  if (r.mode === "monthly" && k > M.curM) rent += num(r.monthly);
-  return {n, earned, rent, net:earned-rent};
-}
-function sessionsIn(M, a, b){
-  const out = [];
-  for (const c of S.clients){ const st = M.stats[c.id]; for (const s of [...st.past, ...st.future]) if (s.date >= a && s.date < b) out.push({...s, c}); }
-  return out.sort((x,y)=>x.date-y.date);
-}
+/* ---------- engine (shared with the server: src/engine.js) ---------- */
+const E = globalThis.TallyEngine;
+const engineData = () => ({profile:S.prof, clients:S.clients, events:S.events, now:new Date()});
+const compute = () => E.compute(engineData());
+const monthTotals = (M, k) => E.monthTotals(M, k);
+const projectMonth = (M, k) => E.projectMonth(M, k);
+const sessionsIn = (M, a, b) => E.sessionsIn(M, a, b);
+const attention = M => E.attention(M);
+const fillTpl = (t, v) => E.fillTpl(t, v);
+const messageText = (c, kind, monthK) => E.messageText(S.M, c, kind, monthK);
 
 /* ---------- chrome ---------- */
 const inAppNow = () => S.screen === "data" && S.profLoaded && S.clientsLoaded && !!(S.prof && S.prof.setupDone);
@@ -445,6 +256,8 @@ function renderStatus(){
   if (S.cal.state === "loading"){ const pct = S.cal.total ? Math.round(100*S.cal.done/S.cal.total) : 0; h += `<div class="banner"><span class="small">Reading your calendar…</span><div class="prog"><b style="width:${pct}%"></b></div><span class="small">${pct}%</span></div>`; }
   else if (S.cal.state === "error" && isScopeErr(S.cal.error) && A.grantCalendar) h += calendarPermissionCard();
   else if (S.cal.state === "error") h += `<div class="banner err"><span>${esc(calErrorText(S.cal.error))}</span><button class="btn sm" data-act="refresh">Retry</button></div>`;
+  const held = heldCount();
+  if (held && S.tab !== "settings") h += `<div class="banner"><span>${held} renewal email${held===1?" is":"s are"} drafted and waiting for your OK.</span><button class="btn sm" data-act="goto-settings" data-anchor="notices">Review</button></div>`;
   $("#status").innerHTML = inAppNow() ? h : "";
 }
 function render(){
@@ -580,20 +393,6 @@ function applyRentVisibility(){
 }
 
 /* ---------- overview ---------- */
-function attention(M){
-  const out = [];
-  for (const c of S.clients){
-    if (c.active === false) continue;
-    const st = M.stats[c.id];
-    if (st.bill === "package"){
-      if (st.status === "setup") out.push({c, st, kind:"setup", rank:5});
-      else if (st.status === "out") out.push({c, st, kind:"renew", rank:1});
-      else if (st.status === "owes") out.push({c, st, kind:"unpaid", rank:2});
-      else if (st.status === "low") out.push({c, st, kind:"renew", rank:3});
-    } else if (st.status === "owes") out.push({c, st, kind:"invoice", rank:2});
-  }
-  return out.sort((a,b) => a.rank - b.rank || a.c.name.localeCompare(b.c.name));
-}
 const chipFor = st => `<span class="chip ${st.status}">${esc(st.label)}</span>`;
 function renderOverview(M){
   const k = S.month, T = monthTotals(M, k), isCur = k === M.curM, pr = isCur ? projectMonth(M, k) : {n:0, earned:0, net:0, rent:0};
@@ -759,6 +558,12 @@ function renderBilling(M){
 
 /* ---------- trends ---------- */
 function renderTrends(M){
+  const seg = `<div class="seg trendseg" role="group" aria-label="Trends view">${[["income","Income"],["clients","Clients"],["pricing","Pricing"]].map(([v,l])=>`<button data-act="trend-view" data-view="${v}" aria-pressed="${S.trendView===v}">${l}</button>`).join("")}</div>`;
+  if (S.trendView === "clients") return seg + renderClientTrends(M);
+  if (S.trendView === "pricing") return seg + renderPricing(M);
+  return seg + renderIncomeTrends(M) + taxCard(M);
+}
+function renderIncomeTrends(M){
   const hs = mkey(parseDay(P("historyStart")));
   const months = []; for (let k = hs; k <= M.curM; k = mNext(k)) months.push(k);
   const rows = months.map(k => ({k, ...monthTotals(M,k)}));
@@ -799,6 +604,139 @@ function renewalForecast(M){
   const list = S.clients.filter(c => c.active !== false && M.stats[c.id].bill === "package" && M.stats[c.id].runout).map(c => ({c, st:M.stats[c.id]})).filter(x => x.st.runout < addDays(M.now, 45)).sort((a,b)=>a.st.runout-b.st.runout);
   if (!list.length) return "";
   return `<h3>Renewals coming up</h3><div class="list">${list.map(({c,st}) => `<div><span class="who">${avatar(c)}<span>${esc(c.name)}</span></span><span class="small">${st.remaining<=0?"now":(st.runoutEst?"~":"")+fmtD(st.runout)} · ${money(st.nextPrice)}</span></div>`).join("")}</div>`;
+}
+
+/* ---------- client trends ---------- */
+const HEALTH = {quiet:["Gone quiet","owes"], slipping:["Slipping","low"], new:["New","info"], growing:["Growing","ok"], steady:["Steady","neutral"]};
+function miniBars(weekly){ const mx = Math.max(1, ...weekly); return `<span class="mini" aria-hidden="true">${weekly.map(n => `<i style="height:${Math.max(6, Math.round(100*n/mx))}%"${n?"":' class="z"'}></i>`).join("")}</span>`; }
+function renderClientTrends(M){
+  const H = E.clientHealth(M), R = E.retention(M);
+  const count = k => H.filter(h => h.status === k).length;
+  const last = R.months[R.months.length-1] || {active:0}, prev = R.months[R.months.length-2];
+  const lost90 = R.months.slice(-4, -1).reduce((a,m)=>a+(m.lost||0),0), new90 = R.months.slice(-3).reduce((a,m)=>a+m.new,0);
+  const cxl = H.reduce((a,h)=>a+h.cancels,0), done = H.reduce((a,h)=>a+Math.round(h.cancelRate && h.cancels ? h.cancels/h.cancelRate - h.cancels : 0),0);
+  return `<div class="stats">
+      <div class="stat"><span class="k">Active this month</span><span class="v">${last.active}</span><span class="d">${prev ? (last.active-prev.active>=0?"+":"")+(last.active-prev.active)+" vs last month" : "clients with a session"}</span></div>
+      <div class="stat"><span class="k">New · last 3 months</span><span class="v">${new90}</span><span class="d">${lost90} stopped coming</span></div>
+      <div class="stat"><span class="k">Need a check-in</span><span class="v">${count("quiet")+count("slipping")}</span><span class="d">${count("quiet")} quiet · ${count("slipping")} slipping</span></div>
+      <div class="stat"><span class="k">Avg value per client</span><span class="v">${money(R.avgValue)}</span><span class="d">earned since you started counting</span></div>
+    </div>
+    <section class="card" data-tour="health"><div class="card-h"><h2>Client health</h2><span class="small muted">last 4 weeks vs the 12 before · ${cxl+done ? Math.round(100*cxl/(cxl+done)) : 0}% skipped/cancelled (90 days)</span></div>
+      ${H.length ? `<div class="tablewrap"><table><thead><tr><th>Client</th><th>Status</th><th>12 weeks</th><th class="num">Last visit</th><th class="num">Per week</th><th class="num">Earned</th></tr></thead><tbody>
+      ${H.map(h => `<tr><td><div class="who">${avatar(h.c)}<span class="n">${esc(h.c.name)}</span></div></td><td><span class="chip ${HEALTH[h.status][1]}">${HEALTH[h.status][0]}</span><div class="small muted">${esc(h.note)}</div></td><td>${miniBars(h.weekly)}</td>
+        <td class="num">${h.daysSince == null ? "–" : h.daysSince === 0 ? "today" : h.daysSince + "d ago"}${h.bookedSoon ? '<div class="small muted">booked</div>' : ""}</td><td class="num">${h.recent.toFixed(1)}</td><td class="num" style="font-weight:600">${money(h.earned)}</td></tr>`).join("")}
+      </tbody></table></div>` : `<div class="empty">Add clients to see trends.</div>`}
+    </section>
+    <section class="card"><h2>Clients by month</h2>
+      <div class="tablewrap"><table><thead><tr><th>Month</th><th class="num">Active</th><th class="num">New</th><th class="num">Stopped</th></tr></thead><tbody>
+      ${[...R.months].reverse().slice(0,12).map(m => `<tr><td>${esc(mLabel(m.month))}</td><td class="num" style="font-weight:600">${m.active}</td><td class="num">${m.new||"–"}</td><td class="num">${m.lost==null?'<span class="small muted">in progress</span>':(m.lost||"–")}</td></tr>`).join("")}
+      </tbody></table></div>
+      <p class="small muted">"Stopped" means they trained the month before but not that month.</p>
+    </section>`;
+}
+function renderPricing(M){
+  const sim = S.sim, act = S.clients.filter(c => c.active !== false && M.stats[c.id].pace);
+  const ids = sim.ids || act.map(c => c.id);
+  const R = E.simulateRate(M, {increase:num(sim.increase), mode:sim.mode, clientIds:ids, lose:num(sim.lose)});
+  return `<section class="card" data-tour="sim"><div class="card-h"><h2>What if I raised my rate?</h2></div>
+    <div class="form">
+      <div class="field"><label for="sim-inc">Raise by</label><input id="sim-inc" type="number" step="1" value="${esc(sim.increase)}"></div>
+      <div class="field"><label for="sim-mode">As</label><select id="sim-mode"><option value="amount" ${sim.mode==="amount"?"selected":""}>$ per session</option><option value="percent" ${sim.mode==="percent"?"selected":""}>% of current price</option></select></div>
+      <div class="field"><label for="sim-lose">If this many clients leave</label><input id="sim-lose" type="number" min="0" step="1" value="${esc(sim.lose)}"></div>
+    </div>
+    <div class="stats">
+      <div class="stat"><span class="k">Per month</span><span class="v">${R.monthly>=0?"+":""}${money(R.monthly)}</span><span class="d">${R.lossCost ? money(R.gross)+" gained, "+money(R.lossCost)+" lost" : "net after rent, at current pace"}</span></div>
+      <div class="stat"><span class="k">Per year</span><span class="v">${R.annual>=0?"+":""}${money(R.annual)}</span><span class="d">${R.clients} client${R.clients===1?"":"s"} included</span></div>
+      <div class="stat"><span class="k">Room to lose</span><span class="v">${R.breakEven.toFixed(1)}</span><span class="d">client${R.breakEven>=0.95&&R.breakEven<1.05?"":"s"} could leave and you'd still earn the same</span></div>
+    </div>
+    <h3>Who it applies to</h3>
+    <div class="tablewrap"><table><thead><tr><th></th><th>Client</th><th class="num">Sessions / mo</th><th class="num">Now / mo</th><th class="num">New price</th><th class="num">Change / mo</th></tr></thead><tbody>
+    ${act.map(c => { const r = R.rows.find(x => x.c.id === c.id), st = M.stats[c.id], on = ids.includes(c.id);
+      return `<tr><td><input type="checkbox" data-sim-id="${esc(c.id)}" ${on?"checked":""} aria-label="Include ${esc(c.name)}"></td><td><div class="who">${avatar(c)}<span class="n">${esc(c.name)}</span></div><div class="small muted">${esc(BILLING[st.bill].label)}</div></td>
+        <td class="num">${(st.pace*52/12).toFixed(1)}</td><td class="num">${r ? money(r.now) : "–"}</td><td class="num">${r ? money2(r.newRate) + (st.bill==="membership"?"/mo":"") : "–"}</td><td class="num" style="font-weight:600">${r ? "+"+money(r.add) : "–"}</td></tr>`; }).join("")}
+    </tbody></table></div>
+    <p class="small muted">Uses each client's pace over the last 8 weeks. Packages: the price per session goes up when they next renew. Clients who leave are valued at your average client.</p>
+  </section>`;
+}
+function taxCard(M){
+  const T = E.taxEstimate(M);
+  if (!T.enabled) return `<section class="card"><div class="card-h"><h2>Taxes</h2><button class="btn sm" data-act="goto-settings" data-anchor="tax">Turn on</button></div><p class="small muted">Self-employed? Turn on the tax set-aside in Settings to see how much of each month to put away and what your quarterly payments might be.</p></section>`;
+  return `<section class="card" data-tour="tax"><div class="card-h"><h2>Tax set-aside</h2><span class="small muted">${Math.round(T.rate*100)}% of profit · estimate, not tax advice</span></div>
+    <div class="stats">
+      <div class="stat"><span class="k">Set aside this month</span><span class="v">${money(T.thisMonth.setAside)}</span><span class="d">of ${money(T.thisMonth.net)} profit so far</span></div>
+      <div class="stat"><span class="k">${M.curM.slice(0,4)} so far</span><span class="v">${money(T.ytdTax)}</span><span class="d">on ${money(T.ytdProfit)} profit</span></div>
+      ${T.next ? `<div class="stat"><span class="k">${T.next.label} payment</span><span class="v">${money(T.next.tax)}</span><span class="d">due ${fmtD(T.next.due)}</span></div>` : ""}
+    </div>
+    <div class="tablewrap"><table><thead><tr><th>Quarter</th><th class="num">Profit</th><th class="num">Estimated tax</th><th>Due</th></tr></thead><tbody>
+    ${T.quarters.map(q => `<tr><td>${q.label}</td><td class="num">${money(q.profit)}</td><td class="num" style="font-weight:600">${money(q.tax)}</td><td>${fmtD(q.due)} ${q.state==="past"?'<span class="chip neutral">past</span>':q.state==="due"?'<span class="chip low">due next</span>':q.state==="current"?'<span class="chip info">this quarter</span>':""}</td></tr>`).join("")}
+    </tbody></table></div>
+    <p class="small muted">Profit = what you earned minus studio rent${num(T.cfg.expensesMonthly) ? " and " + money(T.cfg.expensesMonthly) + "/month of expenses" : ""}. Self-employment tax is 15.3% of 92.35% of profit, plus the federal and state rates you set. Check with a tax professional.</p>
+  </section>`;
+}
+
+/* ---------- automatic messages ---------- */
+function noticesCard(){
+  const n = {...DEFAULTS.notices, ...(P("notices")||{})};
+  const live = !!A.outbox;
+  return `<section class="card" id="notices"><h2>Automatic messages</h2>
+    <p class="small muted">${live ? "Checked every hour, in your time zone (" + esc(P("timeZone") || Intl.DateTimeFormat().resolvedOptions().timeZone) + ")." : "Available in the hosted app. Here you can see how they'd be set up."}</p>
+    <div class="form">
+      <label class="check full"><input type="checkbox" id="nt-weekly" ${n.weekly!==false?"checked":""}> Weekly summary, Saturday at 8pm</label>
+      <label class="check full"><input type="checkbox" id="nt-monthly" ${n.monthly!==false?"checked":""}> Monthly reconciliation, 2 days before the month ends</label>
+      <div class="field full"><label for="nt-email">Send summaries to</label><input id="nt-email" type="email" value="${esc(n.email)}" placeholder="${esc(P("myEmail") || (S.account && S.account.email) || "you@example.com")}"></div>
+      <div class="field full"><label for="nt-renew">Renewal reminders to clients</label><select id="nt-renew">
+        <option value="off" ${n.renewals==="off"?"selected":""}>Off</option>
+        <option value="ask" ${n.renewals==="ask"?"selected":""}>Draft them, I'll approve each one</option>
+        <option value="auto" ${n.renewals==="auto"?"selected":""}>Send automatically</option></select>
+        <span class="hint">When a package hits your renewal flag. Uses your renewal message and goes to the client's email, with replies coming to you.</span></div>
+    </div>
+    <div class="actions"><button class="btn primary" data-act="save-notices" ${S.readOnly?"disabled":""}>Save</button>
+      ${live ? `<button class="btn" data-act="notice-test" data-kind="weekly">Preview weekly</button><button class="btn" data-act="notice-test" data-kind="monthly">Preview monthly</button>` : ""}</div>
+    ${live ? outboxList() : ""}
+  </section>`;
+}
+const OB = {queued:["Waiting","info"], held:["Needs your OK","low"], sent:["Sent","ok"], skipped:["Skipped","neutral"], failed:["Failed","owes"]};
+function outboxList(){
+  const L = S.outbox;
+  if (!L) return `<h3>Recent</h3><p class="small muted">Loading…</p>`;
+  const mailOff = L.some(r => r.status === "queued" && /set up/.test(r.error||""));
+  return `<h3>Recent</h3>
+    ${mailOff ? `<p class="small muted">Email sending isn't switched on yet, so messages wait here. You can read each one.</p>` : ""}
+    ${L.length ? `<div class="list">${L.slice(0,12).map(r => `<div><span><b>${esc(r.subject)}</b><span class="small muted"> · ${esc(new Date(r.created_at).toLocaleDateString(undefined,{month:"short",day:"numeric"}))} · to ${esc(r.to_email||"–")}</span></span>
+      <span class="row-actions"><span class="chip ${OB[r.status][1]}">${OB[r.status][0]}</span><button class="btn sm" data-act="ob-view" data-oid="${esc(r.id)}">View</button>${r.status==="held"||r.status==="failed" ? `<button class="btn sm primary" data-act="ob-send" data-oid="${esc(r.id)}">Send</button><button class="btn sm ghost" data-act="ob-skip" data-oid="${esc(r.id)}">Skip</button>` : ""}</span></div>`).join("")}</div>` : `<p class="small muted">Nothing yet.</p>`}`;
+}
+async function refreshOutbox(){ if (!A.outbox) return; try { S.outbox = await A.outbox.list(); } catch(e){ S.outbox = []; } if (S.tab === "settings" && !S.modal) render(); }
+function heldCount(){ return (S.outbox||[]).filter(r => r.status === "held").length; }
+function taxSettingsCard(){
+  const t = {...DEFAULTS.tax, ...(P("tax")||{})};
+  return `<section class="card" id="tax"><div class="card-h"><h2>Tax set-aside</h2><label class="check"><input type="checkbox" id="tx-on" ${t.enabled?"checked":""}> On</label></div>
+    <p class="small muted">Shows how much of your profit to put aside for taxes, in Trends and your summaries. A rough estimate for self-employed trainers, not tax advice.</p>
+    <div class="form">
+      <div class="field"><label for="tx-fed">Federal income tax %</label><input id="tx-fed" type="number" min="0" step="0.5" value="${esc(t.federal)}"></div>
+      <div class="field"><label for="tx-state">State income tax %</label><input id="tx-state" type="number" min="0" step="0.5" value="${esc(t.state)}"></div>
+      <label class="check full"><input type="checkbox" id="tx-se" ${t.se!==false?"checked":""}> Include self-employment tax (about 14.1%)</label>
+      <div class="field"><label for="tx-set">Or just set aside this %</label><input id="tx-set" type="number" min="0" step="1" value="${esc(t.setAside ?? "")}" placeholder="optional"></div>
+      <div class="field"><label for="tx-exp">Monthly business expenses ($)</label><input id="tx-exp" type="number" min="0" step="1" value="${esc(t.expensesMonthly||"")}" placeholder="gym, insurance, software"></div>
+    </div>
+    <div class="actions"><button class="btn primary" data-act="save-tax" ${S.readOnly?"disabled":""}>Save</button></div>
+  </section>`;
+}
+function saveTimeZone(){
+  let tz = ""; try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch(e){}
+  if (tz && P("timeZone") !== tz && !S.readOnly) saveProfile({timeZone: tz}).catch(()=>{});
+  refreshOutbox();
+}
+
+/* ---------- client page links ---------- */
+function clientLinkBlock(c){
+  const L = S.links[c.id];
+  if (L === undefined){ S.links[c.id] = null; A.links.get(c.id).then(x => { S.links[c.id] = x || false; if (S.modal && S.modal.id === c.id) renderModal(); }).catch(() => { S.links[c.id] = false; }); }
+  const url = L && L.url;
+  return `<h3>Client page</h3>
+    <p class="small muted">A private link ${esc(firstName(c.name))} can open to see sessions left and what's booked. No prices, no other clients. Turn it off any time.</p>
+    ${url ? `<div class="form"><div class="field full"><input id="cl-link" readonly value="${esc(url)}"></div></div>
+      <div class="actions"><button class="btn" data-act="link-copy">Copy link</button><a class="btn ghost" href="${esc(url)}" target="_blank" rel="noopener">Open</a><button class="btn ghost danger" data-act="link-off" data-cid="${esc(c.id)}">Turn off</button></div>`
+    : L === null ? `<p class="small muted">Checking…</p>` : `<div class="actions"><button class="btn" data-act="link-make" data-cid="${esc(c.id)}" ${S.readOnly?"disabled":""}>Create link</button></div>`}`;
 }
 
 /* ---------- studios (hosted) ---------- */
@@ -850,6 +788,7 @@ function renderSettings(){
     ${(P("ignoredTitles")||[]).length ? `<h3>Names marked "not a client"</h3><div class="list">${(P("ignoredTitles")||[]).map((t,i)=>`<div><span>${esc(t)}</span><button class="btn sm" data-act="unignore" data-i="${i}">Restore</button></div>`).join("")}</div>` : ""}
     <div class="actions"><button class="btn primary" data-act="save-settings" ${S.readOnly?"disabled":""}>Save</button></div>
   </section></div>
+  <div class="grid2">${noticesCard()}${taxSettingsCard()}</div>
   ${studiosSettingsCard()}
   <div class="grid2">
   <section class="card" data-tour="backup"><h2>Backup and export</h2>
@@ -1008,19 +947,6 @@ function renderTour(){
 /* ---------- modals ---------- */
 function openModal(m){ S.modal = m; renderModal(); }
 function closeModal(){ S.modal = null; $("#modal").innerHTML = ""; }
-function fillTpl(t, vars){ return String(t||"").replace(/\{(\w+)\}/g, (m,k) => vars[k] !== undefined ? vars[k] : m); }
-function messageText(c, kind, monthK){
-  const st = S.M.stats[c.id], me = P("trainerName") || "";
-  if (kind === "renew"){ const left = Math.max(0, st.remaining||0); return fillTpl(P("renewalTemplate"), {first:firstName(c.name), left, s:left===1?"":"s", size:st.nextSize, price:Math.round(st.nextPrice).toLocaleString(), me}).replace(/ - $/,""); }
-  if (kind === "unpaid") return `Hi ${firstName(c.name)}! Quick reminder that payment for your ${st.current ? st.current.size + "-session " : ""}package (${money(st.unpaidAmt)}) is still open. Thanks!${me?" - "+me:""}`;
-  const invs = st.invoices || [];
-  const inv = monthK ? invs.find(i => i.month === monthK) : ([...invs].reverse().find(i => i.due && i.state !== "paid") || invs[invs.length-1]);
-  if (!inv) return "";
-  let t = fillTpl(P("invoiceTemplate"), {first:firstName(c.name), month:mLabel(inv.month,true), amount:Math.round(inv.amount).toLocaleString(), details:inv.details, me});
-  const otherOpen = st.balance - Math.max(0, inv.amount - inv.paid);
-  if (otherOpen > 0.5) t += ` Total balance including earlier months: ${money(st.balance)}.`;
-  return t.replace(/ - $/,"");
-}
 function renderModal(){
   const m = S.modal; if (!m) return;
   let title = "", body = "";
@@ -1045,8 +971,10 @@ function renderModal(){
       <div class="field"><label for="ed-phone">Phone</label><input id="ed-phone" type="tel" value="${esc(c.phone||"")}"></div>
       <label class="check full"><input type="checkbox" id="ed-norent" ${c.noRent?"checked":""}> No studio rent for this client</label>
       <div class="field full"><label for="ed-nrn">No rent when the event is named</label><input id="ed-nrn" value="${esc((c.noRentNames||[]).join(", "))}" placeholder="e.g. a partner billed to this client"><span class="hint">Optional. Comma separated calendar names.</span></div>
+      <label class="check full" data-bill-show="package"><input type="checkbox" id="ed-noauto" ${c.noAutoNotice?"checked":""}> Don't send automatic renewal emails</label>
       <label class="check full"><input type="checkbox" id="ed-active" ${c.active!==false?"checked":""}> Active</label>
     </div>
+    ${m.id && A.links ? clientLinkBlock(c) : ""}
     ${m.id && b === "package" ? packageHistory(c) : ""}
     ${m.id ? paymentHistory(c) : ""}
     <div class="actions"><button class="btn primary" data-act="save-client" ${S.readOnly?"disabled":""}>Save</button>
@@ -1110,6 +1038,12 @@ function renderModal(){
     const u = S.M.unmatched[m.i];
     title = "Match “" + (u ? u.title : "") + "”";
     body = `<p class="small muted">Which client is this calendar name?</p><div class="list">${[...S.clients].sort((a,b)=>a.name.localeCompare(b.name)).map(c=>`<div><span class="who">${avatar(c)}<span>${esc(c.name)}</span></span><button class="btn sm" data-act="link-to" data-id="${c.id}">Choose</button></div>`).join("") || `<div>No clients yet.</div>`}</div>`;
+  } else if (m.type === "outbox"){
+    const r = m.row;
+    title = r.subject;
+    body = `<p class="small muted">To ${esc(r.to_email||"–")} · ${esc(new Date(r.created_at).toLocaleString(undefined,{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}))} · <span class="chip ${OB[r.status][1]}">${OB[r.status][0]}</span>${r.error ? " · " + esc(r.error) : ""}</p>
+      <pre class="mailtext">${esc(r.body_text)}</pre>
+      ${r.status==="held"||r.status==="failed" ? `<div class="actions"><button class="btn primary" data-act="ob-send" data-oid="${esc(r.id)}">Send</button><button class="btn ghost" data-act="ob-skip" data-oid="${esc(r.id)}">Skip</button></div>` : ""}`;
   } else if (m.type === "restore"){
     title = "Restore a backup";
     const r = S.restore;
@@ -1171,6 +1105,19 @@ async function onClick(e){
     case "mnext": if (S.month < M.curM) S.month = mNext(S.month); render(); break;
     case "day": S.day = el.getAttribute("data-day"); render(); break;
     case "trend-mode": S.trendMode = el.getAttribute("data-mode"); render(); break;
+    case "trend-view": S.trendView = el.getAttribute("data-view"); render(); break;
+    case "goto-settings": { S.tab = "settings"; render(); const a = document.getElementById(el.getAttribute("data-anchor")); if (a) a.scrollIntoView({block:"start"}); break; }
+    case "save-notices": saveProfile({notices:{renewals:val("nt-renew"), weekly:chk("nt-weekly"), monthly:chk("nt-monthly"), email:val("nt-email").trim()}}).then(()=>toast("Saved")).catch(()=>{}); break;
+    case "save-tax": { const sa = val("tx-set"); saveProfile({tax:{enabled:chk("tx-on"), federal:num(val("tx-fed")), state:num(val("tx-state")), se:chk("tx-se"), setAside: sa === "" ? null : num(sa), expensesMonthly:num(val("tx-exp"))}}).then(()=>toast("Saved")).catch(()=>{}); break; }
+    case "notice-test": { el.disabled = true; const k = el.getAttribute("data-kind");
+      try { const r = await A.outbox.test(k); toast(r.status === "sent" ? "Preview sent to your email" : "Preview saved below (email isn't switched on yet)"); } catch(err){ toast(err.message || "Couldn't build the preview"); }
+      await refreshOutbox(); break; }
+    case "ob-view": { const r = (S.outbox||[]).find(x => x.id === el.getAttribute("data-oid")); if (r) openModal({type:"outbox", row:r}); break; }
+    case "ob-send": { el.disabled = true; try { const r = await A.outbox.send(el.getAttribute("data-oid")); toast(r.status === "sent" ? "Sent" : r.status === "queued" ? "Approved. It'll go out once email is switched on." : "Couldn't send"); } catch(err){ toast(err.message || "Couldn't send"); } if (S.modal && S.modal.type === "outbox") closeModal(); await refreshOutbox(); break; }
+    case "ob-skip": { try { await A.outbox.skip(el.getAttribute("data-oid")); } catch(err){} if (S.modal && S.modal.type === "outbox") closeModal(); await refreshOutbox(); break; }
+    case "link-make": { const cid = el.getAttribute("data-cid"); el.disabled = true; try { S.links[cid] = await A.links.create(cid); } catch(err){ toast(err.message || "Couldn't create the link"); } renderModal(); break; }
+    case "link-off": { const cid = el.getAttribute("data-cid"); try { await A.links.revoke(cid); S.links[cid] = false; toast("Link turned off"); } catch(err){ toast("Couldn't turn it off"); } renderModal(); break; }
+    case "link-copy": { const t = document.getElementById("cl-link"); try { await navigator.clipboard.writeText(t.value); toast("Link copied"); } catch(x){ t.select(); } break; }
     case "wiz-back": readWizStep(); S.wiz.step--; render(); break;
     case "wiz-cancel": S.wiz = null; S.rerunning = false; S.prof = {...S.prof, setupDone:true}; render(); break;
     case "rerun": S.wiz = wizDefaults(); S.calList = null; S.rerunning = true; S.prof = {...S.prof, setupDone:false}; render(); break;
@@ -1180,7 +1127,7 @@ async function onClick(e){
       const patch = {setupDone:true, trainerName:w.name, calendars:w.cals.filter(c=>c.use).map(c=>({id:c.id, name:c.name, use:true, studio:!!c.studio, mineOnly:!!c.mineOnly})), rent:w.rent, defaults:w.defaults, threshold:w.threshold, historyStart:w.historyStart, myEmail:S.detectedEmail || P("myEmail") || ""};
       S.wiz = null; S.rerunning = false; S.tab = S.clients.length ? "overview" : "clients";
       try { await saveProfile(patch); } catch(err){ S.prof = {...S.prof, ...patch}; }
-      loadCalendar(false); break;
+      loadCalendar("full"); break;
     }
     case "new-client": openModal({type:"edit"}); break;
     case "edit": openModal({type:"edit", id}); break;
@@ -1195,7 +1142,7 @@ async function onClick(e){
         rate: num(val("ed-rate"), num(defs().rate, 100)), packageSize: Math.max(1, Math.round(num(val("ed-size"), 10))),
         packagePrice: val("ed-price") === "" ? null : num(val("ed-price")), fee: num(val("ed-fee")), included: Math.max(0, Math.round(num(val("ed-inc")))),
         overageRate: val("ed-over") === "" ? null : num(val("ed-over")), billingStart: val("ed-bs") || null,
-        email: val("ed-email").trim(), phone: val("ed-phone").trim(), noRent: chk("ed-norent"), noRentNames: val("ed-nrn").split(",").map(s=>s.trim()).filter(Boolean), active: chk("ed-active"),
+        email: val("ed-email").trim(), phone: val("ed-phone").trim(), noRent: chk("ed-norent"), noRentNames: val("ed-nrn").split(",").map(s=>s.trim()).filter(Boolean), noAutoNotice: chk("ed-noauto"), active: chk("ed-active"),
         packages: old.packages || [], payments: old.payments || []};
       const isNew = !m.id;
       closeModal(); saveClient(c).then(()=>toast(isNew ? "Client added" : "Saved")).catch(()=>{});
@@ -1248,7 +1195,7 @@ async function onClick(e){
     case "link-to": { const u = M.unmatched[S.modal.i], c = client(id); closeModal(); if (u && c) saveClient({...c, aliases:[...(c.aliases||[]), u.title]}).then(()=>toast(`Matched to ${c.name}`)).catch(()=>{}); break; }
     case "sugg-ignore": { const u = M.unmatched[+el.getAttribute("data-i")]; if (u) saveProfile({ignoredTitles:[...(P("ignoredTitles")||[]), u.title]}).catch(()=>{}); break; }
     case "unignore": { const i = +el.getAttribute("data-i"); saveProfile({ignoredTitles:(P("ignoredTitles")||[]).filter((_,j)=>j!==i)}).catch(()=>{}); break; }
-    case "save-settings": { const ex = val("st-extra").split(",").map(s=>s.trim().toLowerCase()).filter(Boolean); const exChanged = ex.join() !== (P("extraCreators")||[]).join(); saveProfile({extraCreators:ex, renewalTemplate:val("st-renew"), invoiceTemplate:val("st-inv"), ignoreWords:val("st-ign").split(",").map(s=>s.trim().toLowerCase()).filter(Boolean), threshold:Math.max(0, Math.round(num(val("st-th"),3)))}).then(()=>{ toast("Settings saved"); if (exChanged) loadCalendar(false); }).catch(()=>{}); break; }
+    case "save-settings": { const ex = val("st-extra").split(",").map(s=>s.trim().toLowerCase()).filter(Boolean); const exChanged = ex.join() !== (P("extraCreators")||[]).join(); saveProfile({extraCreators:ex, renewalTemplate:val("st-renew"), invoiceTemplate:val("st-inv"), ignoreWords:val("st-ign").split(",").map(s=>s.trim().toLowerCase()).filter(Boolean), threshold:Math.max(0, Math.round(num(val("st-th"),3)))}).then(()=>{ toast("Settings saved"); if (exChanged) loadCalendar("full"); }).catch(()=>{}); break; }
     case "export-json": offerFile(`trainer-tally-backup-${ymd(new Date())}.json`, JSON.stringify(backupObject(), null, 2)); break;
     case "export-sessions": exportSessions(); break;
     case "export-payments": exportPayments(); break;
@@ -1272,6 +1219,11 @@ async function onClick(e){
 }
 function onChange(e){
   const t = e.target;
+  if (t.id === "sim-inc" || t.id === "sim-mode" || t.id === "sim-lose" || (t.hasAttribute && t.hasAttribute("data-sim-id"))){
+    const ids = [...document.querySelectorAll("[data-sim-id]")].filter(x => x.checked).map(x => x.getAttribute("data-sim-id"));
+    S.sim = {increase: num(val("sim-inc")), mode: val("sim-mode"), lose: Math.max(0, Math.round(num(val("sim-lose")))), ids};
+    render(); return;
+  }
   if (t.id === "ed-bill" || t.id === "sp-mode") applyBillVisibility();
   if (t.name === "w-rent") applyRentVisibility();
   if (t.hasAttribute && t.hasAttribute("data-wcal")){
@@ -1310,7 +1262,7 @@ async function start(adapter){
   if (A.studio){ refreshStudios(); let pending = null; try { pending = localStorage.getItem("tt-join"); } catch(e){} if (pending) joinStudio(pending); }
   if (A.billing) A.billing.status().then(s => { S.billingStatus = s; if (S.tab === "settings") render(); }).catch(()=>{});
   let started = false;
-  const maybeStart = () => { if (!started && S.profLoaded && S.clientsLoaded && S.prof && S.prof.setupDone){ started = true; loadCalendar(false); } };
+  const maybeStart = () => { if (!started && S.profLoaded && S.clientsLoaded && S.prof && S.prof.setupDone){ started = true; loadCalendar(false); saveTimeZone(); } };
   A.watchProfile(p => {
     if (S.rerunning) return;
     S.prof = p; S.profLoaded = true;

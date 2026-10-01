@@ -8,6 +8,7 @@ export function demoAdapter(){
   let profile = D.profile;
   let clients = D.clients;
   const wait = ms => new Promise(r => setTimeout(r, ms));
+  let outbox = null; const links = {};
   return {
     name: "demo",
     calendar: {
@@ -30,6 +31,18 @@ export function demoAdapter(){
       const url = URL.createObjectURL(new Blob([data], { type }));
       const a = document.createElement("a"); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 5000);
+    },
+    outbox: {
+      async list(){ if (!outbox) outbox = demoOutbox(D, profile, clients); return clone(outbox); },
+      async send(id){ const r = outbox.find(x => x.id === id); if (r){ r.status = "sent"; r.sent_at = new Date().toISOString(); } return { status: "sent" }; },
+      async skip(id){ const r = outbox.find(x => x.id === id); if (r) r.status = "skipped"; },
+      async test(kind){ const m = demoModel(D, profile, clients); const E = globalThis.TallyEngine; const b = (kind === "monthly" ? E.monthlySummary : E.weeklySummary)(m, {});
+        outbox.unshift({ id: "t" + Date.now(), kind: "test", to_email: ME, subject: "[Preview] " + b.subject, body_text: b.text, status: "sent", created_at: new Date().toISOString() }); return { status: "sent" }; }
+    },
+    links: {
+      async get(id){ return links[id] || null; },
+      async create(id){ links[id] = { token: "demo", url: "/client.html?demo=" + encodeURIComponent(id) }; return links[id]; },
+      async revoke(id){ delete links[id]; }
     },
     studio: {
       url: "/demo-studio.html",
@@ -100,4 +113,23 @@ export function demoStudioBackend(){
       setTimeout(() => URL.revokeObjectURL(url), 5000);
     }
   };
+}
+
+/* Demo helpers: run the shared engine on the sample data. */
+export function demoModel(D, profile, clients){
+  const E = globalThis.TallyEngine;
+  const cal = Object.fromEntries(((profile && profile.calendars) || D.profile.calendars).map(c => [c.id, c]));
+  const events = E.normalizeEvents(D.events.map(e => [e, cal[e.cal]]).filter(r => r[1]), profile || D.profile);
+  return E.compute({ profile: profile || D.profile, clients: clients || D.clients, events, now: new Date() });
+}
+function demoOutbox(D, profile, clients){
+  const E = globalThis.TallyEngine, M = demoModel(D, profile, clients), out = [];
+  const lastSat = E.addDays(E.sow(new Date()), -2); lastSat.setHours(20, 0, 0, 0);
+  const w = E.weeklySummary(M, {});
+  out.push({ id: "w1", kind: "weekly", to_email: ME, subject: w.subject, body_text: w.text, status: "sent", created_at: lastSat.toISOString(), sent_at: lastSat.toISOString() });
+  for (const a of E.attention(M)) if (a.kind === "renew" && a.c.email){
+    const r = E.renewalEmail(M, a.c);
+    out.unshift({ id: "r-" + a.c.id, kind: "renewal", client_id: a.c.id, to_email: a.c.email, subject: r.subject, body_text: r.text, status: "held", created_at: new Date().toISOString() });
+  }
+  return out;
 }

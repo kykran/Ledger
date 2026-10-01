@@ -26,7 +26,8 @@ const ICON = {
   overview:'<path d="M4 13h6V4H4zM14 20h6v-9h-6zM4 20h6v-4H4zM14 4v4h6V4z"/>',
   trainers:'<circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19c.6-3 2.9-4.6 5.5-4.6s4.9 1.6 5.5 4.6M16 5.6a3 3 0 0 1 0 5.8M17.5 14.6c1.6.6 2.7 2 3 4.4"/>',
   rooms:'<rect x="3.5" y="4" width="17" height="16" rx="2"/><path d="M3.5 10h17M10 10v10"/>',
-  revenue:'<path d="M4 19.5h16M6.5 16l4-5 3 3 5-6.5"/>',
+  revenue:'<rect x="3" y="6.5" width="18" height="11" rx="2"/><path d="M7 12h.01M17 12h.01"/><circle cx="12" cy="12" r="2.3"/>',
+  trends:'<path d="M4 19.5h16M6.5 16l4-5 3 3 5-6.5"/>',
   settings:'<circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/>',
   refresh:'<path d="M20 11a8 8 0 0 0-14.3-4.3L4 8.5M4 4v4.5h4.5M4 13a8 8 0 0 0 14.3 4.3L20 15.5M20 20v-4.5h-4.5"/>',
   plus:'<path d="M12 5v14M5 12h14"/>', cash:'<rect x="3" y="6.5" width="18" height="11" rx="2"/><circle cx="12" cy="12" r="2.5"/>',
@@ -251,7 +252,7 @@ function roomUsage(M, weeks){
 }
 
 /* ---------- chrome ---------- */
-const TABS = [["overview","Overview"],["trainers","Trainers"],["rooms","Room usage"],["revenue","Revenue"],["settings","Settings"]];
+const TABS = [["overview","Overview"],["trainers","Trainers"],["rooms","Room usage"],["revenue","Revenue"],["trends","Trends"],["settings","Settings"]];
 const MONTH_TABS = new Set(["overview","trainers","revenue"]);
 function renderChrome(){
   const inApp = S.screen === "app" && S.studio && S.studio.data && S.studio.data.setupDone;
@@ -284,7 +285,7 @@ function render(){
   if (!S.studio || !(S.studio.data && S.studio.data.setupDone)){ S.M = null; renderChrome(); main.innerHTML = renderSetup(); return; }
   const M = compute(); S.M = M; if (!S.month) S.month = M.curM;
   renderChrome(); renderStatus();
-  main.innerHTML = S.tab === "overview" ? renderOverview(M) : S.tab === "trainers" ? renderTrainers(M) : S.tab === "rooms" ? renderRooms(M) : S.tab === "revenue" ? renderRevenue(M) : renderSettings();
+  main.innerHTML = S.tab === "overview" ? renderOverview(M) : S.tab === "trainers" ? renderTrainers(M) : S.tab === "rooms" ? renderRooms(M) : S.tab === "revenue" ? renderRevenue(M) : S.tab === "trends" ? renderTrends(M) : renderSettings();
   drawCharts(M);
   if (S.modal) renderModal();
   syncStatements(M);
@@ -427,6 +428,49 @@ function renderRevenue(M){
     ${per.map(({t,m}) => `<tr><td><div class="who">${avatar(t.name)}<span class="n">${esc(t.name)}</span></div></td><td class="num">${m.n}</td><td class="num" style="font-weight:600">${money(m.rent)}</td><td class="num">${money(m.paid)}</td><td class="num">${totM?Math.round(100*m.rent/totM):0}%</td></tr>`).join("")}
     </tbody></table></div>` : `<div class="empty">No rent this month.</div>`}
     <div class="actions"><button class="btn" data-act="export">Download statements (.csv)</button></div>
+  </section>`;
+}
+
+/* ---------- trends ---------- */
+// Per-trainer pace over time: last 4 weeks vs the 12 before, distinct clients, hours booked, share of rent.
+function trainerTrend(M, t){
+  const st = M.stats[t.id], now = M.now, w0 = sow(now);
+  const inR = (a, b) => st.past.filter(s => s.start >= a && s.start < b);
+  const weekly = Array.from({length:12}, (_, i) => { const a = addDays(w0, (i - 11) * 7); return inR(a, addDays(a, 7)).length; });
+  const recent = inR(addDays(now, -28), now).length / 4;
+  const first = st.past[0] ? st.past[0].start : null;
+  const baseStart = new Date(Math.max(+addDays(now, -112), first ? +first : +now));
+  const baseWeeks = Math.max(0, (addDays(now, -28) - baseStart) / (7*DAY));
+  const base = baseWeeks >= 2 ? inR(baseStart, addDays(now, -28)).length / baseWeeks : null;
+  const last30 = inR(addDays(now, -30), now);
+  const clients = new Set(last30.map(s => norm(s.title)).filter(Boolean)).size;
+  const hours = last30.reduce((a, s) => a + Math.max(0, ((s.end || s.start) - s.start) / 3600000), 0);
+  const rent90 = st.months.filter(m => m.month >= mkey(addDays(now, -90))).reduce((a, m) => a + m.rent, 0);
+  let status = "steady";
+  if (!st.past.length || (first && first >= addDays(now, -42))) status = "new";
+  else if (st.last && now - st.last > 14*DAY) status = "quiet";
+  else if (base && recent < base * 0.75) status = "slipping";
+  else if (base && recent > base * 1.25) status = "growing";
+  return {t, st, weekly, recent, base, change: base ? (recent - base) / base : null, clients, hours, rent90, status};
+}
+function renderTrends(M){
+  const rows = S.trainers.filter(t => t.active !== false).map(t => trainerTrend(M, t)).sort((a,b) => b.recent - a.recent);
+  const totRent = rows.reduce((a,r)=>a+r.rent90,0), totNow = rows.reduce((a,r)=>a+r.recent,0), totBase = rows.reduce((a,r)=>a+(r.base ?? r.recent),0);
+  const L = {quiet:["Gone quiet","owes"], slipping:["Slowing","low"], new:["New","info"], growing:["Growing","ok"], steady:["Steady","info"]};
+  const mini = w => { const mx = Math.max(1, ...w); return `<span class="mini" aria-hidden="true">${w.map(n => `<i style="height:${Math.max(6, Math.round(100*n/mx))}%"${n?"":' class="z"'}></i>`).join("")}</span>`; };
+  const topShare = rows.length && totRent ? Math.max(...rows.map(r => r.rent90)) / totRent : 0;
+  return `<div class="stats">
+    <div class="stat"><span class="k">Sessions / week</span><span class="v">${totNow.toFixed(0)}</span><span class="d">last 4 weeks${totBase ? ` · ${totNow >= totBase ? "+" : ""}${Math.round(100*(totNow-totBase)/totBase)}% vs before` : ""}</span></div>
+    <div class="stat"><span class="k">Growing</span><span class="v">${rows.filter(r=>r.status==="growing").length}</span><span class="d">${rows.filter(r=>r.status==="slipping"||r.status==="quiet").length} slowing or quiet</span></div>
+    <div class="stat"><span class="k">Clients seen</span><span class="v">${rows.reduce((a,r)=>a+r.clients,0)}</span><span class="d">across trainers, last 30 days</span></div>
+    <div class="stat"><span class="k">Largest trainer</span><span class="v">${Math.round(100*topShare)}%</span><span class="d">of rent, last 90 days</span></div>
+  </div>
+  <section class="card"><div class="card-h"><h2>Trainer trends</h2><span class="small muted">last 4 weeks vs the 12 before</span></div>
+    ${rows.length ? `<div class="tablewrap"><table><thead><tr><th>Trainer</th><th>Trend</th><th>12 weeks</th><th class="num">Per week</th><th class="num">Clients · 30d</th><th class="num">Hours · 30d</th><th class="num">Rent share · 90d</th></tr></thead><tbody>
+    ${rows.map(r => `<tr><td><div class="who">${avatar(r.t.name)}<span class="n">${esc(r.t.name)}</span></div></td><td><span class="chip ${L[r.status][1]}">${L[r.status][0]}</span>${r.change != null ? `<div class="small muted">${r.base.toFixed(1)} → ${r.recent.toFixed(1)}</div>` : ""}</td><td>${mini(r.weekly)}</td>
+      <td class="num" style="font-weight:600">${r.recent.toFixed(1)}</td><td class="num">${r.clients}</td><td class="num">${r.hours.toFixed(0)}</td><td class="num">${totRent ? Math.round(100*r.rent90/totRent) : 0}%</td></tr>`).join("")}
+    </tbody></table></div>` : `<div class="empty">Add trainers to see trends.</div>`}
+    <p class="small muted">Clients are counted by distinct event titles, so they're approximate. A trainer is "gone quiet" after two weeks with no sessions.</p>
   </section>`;
 }
 

@@ -1,33 +1,9 @@
 // POST /api/calendar  {tool, input}
 // Reads the trainer's Google Calendar with their stored refresh token and answers in the
 // same shapes the claude.ai Google Calendar connector uses, so the shared app needs no changes.
-import { admin, send, readJson, userFrom, hasAccess } from "./_lib.js";
+import { send, readJson, userFrom, hasAccess } from "./_lib.js";
+import { G, accessToken, google } from "./_google.js";
 
-const G = "https://www.googleapis.com/calendar/v3";
-const tokens = new Map(); // warm-instance cache: userId -> {access, exp}
-
-async function accessToken(userId){
-  const hit = tokens.get(userId);
-  if (hit && hit.exp > Date.now() + 60000) return hit.access;
-  const { data } = await admin.from("google_tokens").select("refresh_token").eq("user_id", userId).maybeSingle();
-  if (!data) throw Object.assign(new Error("Google Calendar isn't connected"), { code: "server_not_connected", status: 401 });
-  const r = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET, refresh_token: data.refresh_token, grant_type: "refresh_token" })
-  });
-  const j = await r.json();
-  if (!r.ok) throw Object.assign(new Error("Google access expired"), { code: j.error === "invalid_grant" ? "needs_reauth" : "server_unavailable", status: j.error === "invalid_grant" ? 401 : 502 });
-  if (j.scope && !/calendar(\.readonly)?(\s|$)/.test(j.scope)) throw Object.assign(new Error("Calendar permission wasn't granted"), { code: "calendar_scope", status: 403 });
-  tokens.set(userId, { access: j.access_token, exp: Date.now() + (j.expires_in || 3600) * 1000 });
-  return j.access_token;
-}
-
-async function google(url, access){
-  const r = await fetch(url, { headers: { authorization: "Bearer " + access } });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw Object.assign(new Error((j.error && j.error.message) || "Google Calendar error"), { code: /insufficient authentication scopes|ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(JSON.stringify(j)) ? "calendar_scope" : r.status === 401 ? "needs_reauth" : r.status >= 500 || r.status === 429 ? "server_unavailable" : "tool_error", status: r.status === 401 ? 401 : 502 });
-  return j;
-}
 
 export default async function handler(req, res){
   if (req.method !== "POST") return send(res, 405, { code: "bad_request", message: "POST only" });

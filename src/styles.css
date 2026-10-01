@@ -266,3 +266,12 @@ td.num,th.num{text-align:right;white-space:nowrap}
 .demo-strip a{color:inherit;font-weight:600;text-underline-offset:3px}
 .demo-strip a.cta{background:var(--bg);color:var(--ink);border-radius:8px;padding:4px 10px;text-decoration:none}
 @media (max-width:700px){.demo-strip span{display:none}}
+
+/* trends + automation */
+.trendseg{margin-bottom:14px}
+.mini{display:inline-flex;align-items:flex-end;gap:2px;height:22px;vertical-align:middle}
+.mini i{display:block;width:5px;background:var(--accent);border-radius:2px;opacity:.85}
+.mini i.z{background:var(--line);opacity:1}
+.row-actions{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.mailtext{white-space:pre-wrap;font-family:var(--ui);font-size:13.5px;line-height:1.55;background:var(--surface2);border:1px solid var(--line);border-radius:10px;padding:14px;max-height:50vh;overflow:auto;margin:10px 0}
+.chip.neutral{background:var(--surface2);color:var(--ink2)}

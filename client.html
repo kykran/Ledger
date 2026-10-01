@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="robots" content="noindex">
+  <title>Your sessions</title>
+  <meta name="theme-color" content="#f5f0e6" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#101113" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap">
+  <style>
+    :root{--bg:#f5f0e6;--surface:#fffcf6;--surface2:#eee7da;--ink:#1d1a14;--ink2:#4f493d;--muted:#877f6f;--line:#e2d9c8;--accent:#1f4c9c;--good:#2f7a4f;--warn:#b0641b}
+    @media (prefers-color-scheme: dark){:root{--bg:#101113;--surface:#18191c;--surface2:#212327;--ink:#edebe5;--ink2:#b5b2a9;--muted:#827f78;--line:#2b2d32;--accent:#8eaeff;--good:#6fcf97;--warn:#f2b26b}}
+    *{box-sizing:border-box} html,body{background:var(--bg);margin:0}
+    body{color:var(--ink);font:15px/1.5 Onest,system-ui,sans-serif;font-variant-numeric:tabular-nums;padding:28px 16px 48px}
+    main{max-width:440px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+    .card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:18px}
+    h1{font-size:22px;margin:0} .sub{color:var(--muted);font-size:13px;margin:2px 0 0}
+    h2{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin:0 0 10px;font-weight:600}
+    .big{font-size:56px;font-weight:700;line-height:1;letter-spacing:-.02em} .of{color:var(--muted);font-size:15px;margin-left:6px}
+    .bar{height:8px;background:var(--surface2);border-radius:99px;overflow:hidden;margin:14px 0 8px} .bar i{display:block;height:100%;background:var(--accent);border-radius:99px}
+    .note{color:var(--ink2);font-size:14px;margin:0} .warn{color:var(--warn)}
+    ul{list-style:none;margin:0;padding:0} li{display:flex;justify-content:space-between;padding:9px 0;border-top:1px solid var(--line)} li:first-child{border-top:0}
+    li span:last-child{color:var(--muted)} .empty{color:var(--muted);font-size:14px}
+    footer{color:var(--muted);font-size:12px;text-align:center;margin-top:6px}
+    .skel{height:120px;border-radius:16px;background:var(--surface2);animation:p 1.2s ease-in-out infinite alternate} @keyframes p{to{opacity:.5}}
+  </style>
+</head>
+<body>
+  <main id="m"><div class="skel"></div><div class="skel"></div></main>
+  <script type="module" src="/src/client-page.js"></script>
+</body>
+</html>

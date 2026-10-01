@@ -101,3 +101,13 @@ npx vercel link        # once
 npx vercel env pull .env.local
 npm run dev            # app + /api on http://localhost:3000
 ```
+
+## Background sync and automatic emails
+
+- `supabase/automation.sql` adds synced events (`calendar_events`), the email outbox, client links, and an hourly job.
+- Every hour, Supabase calls `/api/cron/hourly`. For each trainer it re-syncs the calendar (35 days back to 70 ahead; full history the first time) and queues anything due, in the trainer's time zone:
+  - **Weekly summary** – Saturday from 8pm.
+  - **Monthly reconciliation** – 2 days before the month ends, from 8am.
+  - **Renewal reminders** – to clients whose package hit the renewal flag, 9am–7pm. Mode per trainer: off, "draft for my OK" (default) or automatic. Per-client opt-out.
+- Emails go out through Resend once `RESEND_API_KEY` and `MAIL_FROM` are set. Until then they wait in the app under Settings → Automatic messages.
+- **Client pages**: `/s/<token>` shows a client their sessions left and upcoming dates (no prices). Created and turned off from the client sheet.
