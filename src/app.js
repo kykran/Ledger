@@ -266,6 +266,7 @@ function render(){
   if (S.screen === "signin"){ S.M = null; renderChrome(); main.innerHTML = renderSignIn(); return; }
   if (S.screen === "nostore"){ S.M = null; renderChrome(); main.innerHTML = `<div class="card"><div class="empty"><b>Sign in to keep your ledger</b><span>Open this page while signed in. Your clients and settings are saved privately to your account, so nobody else who opens it can see them.</span></div></div>`; return; }
   if (!S.profLoaded || !S.clientsLoaded){ renderChrome(); return; }
+  if (S.loadError){ S.M = null; renderChrome(); main.innerHTML = `<div class="card"><div class="empty"><b>Couldn't load your data</b><span>Your clients and settings are safe. This is usually an expired sign-in or a dropped connection.</span><button class="btn primary" data-act="reload">Try again</button></div></div>`; return; }
   if (!S.prof || !S.prof.setupDone){ S.M = null; renderChrome(); renderStatus(); main.innerHTML = renderSetup(); applyRentVisibility(); return; }
   const M = compute(); S.M = M;
   if (!S.month) S.month = M.curM;
@@ -1105,6 +1106,7 @@ async function onClick(e){
     case "mnext": if (S.month < M.curM) S.month = mNext(S.month); render(); break;
     case "day": S.day = el.getAttribute("data-day"); render(); break;
     case "trend-mode": S.trendMode = el.getAttribute("data-mode"); render(); break;
+    case "reload": location.reload(); break;
     case "trend-view": S.trendView = el.getAttribute("data-view"); render(); break;
     case "goto-settings": { S.tab = "settings"; render(); const a = document.getElementById(el.getAttribute("data-anchor")); if (a) a.scrollIntoView({block:"start"}); break; }
     case "save-notices": saveProfile({notices:{renewals:val("nt-renew"), weekly:chk("nt-weekly"), monthly:chk("nt-monthly"), email:val("nt-email").trim()}}).then(()=>toast("Saved")).catch(()=>{}); break;
@@ -1267,12 +1269,12 @@ async function start(adapter){
     if (S.rerunning) return;
     S.prof = p; S.profLoaded = true;
     render(); maybeStart();
-  }, () => { S.profLoaded = true; render(); });
+  }, err => { S.loadError = err || new Error("load failed"); S.profLoaded = true; render(); });
   A.watchClients(list => {
     S.clients = list; S.clientsLoaded = true;
     if (S.modal && S.modal.id && ["edit","setup-pkg","add-pkg","msg"].includes(S.modal.type) && !client(S.modal.id)) closeModal();
     render(); maybeStart();
-  }, () => { S.clientsLoaded = true; render(); });
+  }, err => { S.loadError = err || new Error("load failed"); S.clientsLoaded = true; render(); });
 }
 window.TrainerTally = {start, version:"2.0"};
 })();

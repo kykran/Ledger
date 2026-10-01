@@ -8,6 +8,20 @@ import "./app.js";
 import { sb, api, currentSession, signInWithGoogle, storeGoogleToken, calendarCall, downloadFile, takeAuthError } from "./supabase.js";
 
 let session = null;
+// A request can be turned away if the sign-in token expired while the tab was closed.
+// Refresh the token and try again before telling the app anything failed.
+const authErr = e => e && (e.code === "PGRST301" || e.code === "PGRST303" || /jwt|expired|401/i.test(String(e.message || "") + (e.status || "")));
+async function query(run){
+  let last;
+  for (let i = 0; i < 3; i++){
+    const r = await run();
+    if (!r.error) return r;
+    last = r.error;
+    if (authErr(r.error) || i === 0){ try { const { data } = await sb.auth.refreshSession(); if (data && data.session) session = data.session; } catch(e){} }
+    await new Promise(res => setTimeout(res, 400 * (i + 1)));
+  }
+  return { data: null, error: last };
+}
 async function currentProfile(){ const { data } = await sb.from("profiles").select("data").eq("user_id", session.user.id).maybeSingle(); return data && data.data; }
 async function readRows(uid, cals){
   const byId = Object.fromEntries(cals.map(c => [c.id, c])), rows = [];
@@ -28,6 +42,7 @@ const adapter = {
     const authError = takeAuthError();
     session = await currentSession();
     if (!session) return { status: "signin", error: authError };
+    if (session.expires_at && session.expires_at * 1000 < Date.now() + 60000){ try { const { data } = await sb.auth.refreshSession(); if (data && data.session) session = data.session; } catch(e){} }
     await storeGoogleToken(session);
     sb.auth.onAuthStateChange((evt) => { if (evt === "SIGNED_OUT") location.reload(); });
     const u = session.user;
@@ -39,14 +54,14 @@ const adapter = {
 
   watchProfile(cb, onErr){
     const uid = session.user.id;
-    const load = async () => { const { data, error } = await sb.from("profiles").select("data").eq("user_id", uid).maybeSingle(); if (error) return onErr && onErr(fail(error)); cb(data ? data.data : null); };
+    const load = async () => { const { data, error } = await query(() => sb.from("profiles").select("data").eq("user_id", uid).maybeSingle()); if (error) return onErr && onErr(fail(error)); cb(data ? data.data : null); };
     load();
     const ch = sb.channel("profile-" + uid).on("postgres_changes", { event:"*", schema:"public", table:"profiles", filter:"user_id=eq." + uid }, load).subscribe();
     return () => sb.removeChannel(ch);
   },
   watchClients(cb, onErr){
     const uid = session.user.id;
-    const load = async () => { const { data, error } = await sb.from("clients").select("id,data").eq("user_id", uid); if (error) return onErr && onErr(fail(error)); cb((data || []).map(r => ({ id: r.id, ...r.data }))); };
+    const load = async () => { const { data, error } = await query(() => sb.from("clients").select("id,data").eq("user_id", uid)); if (error) return onErr && onErr(fail(error)); cb((data || []).map(r => ({ id: r.id, ...r.data }))); };
     load();
     let t; const soon = () => { clearTimeout(t); t = setTimeout(load, 400); };
     const ch = sb.channel("clients-" + uid).on("postgres_changes", { event:"*", schema:"public", table:"clients", filter:"user_id=eq." + uid }, soon).subscribe();
