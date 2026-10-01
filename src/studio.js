@@ -381,7 +381,8 @@ function soChip(M, t, k){
 }
 function signoffCard(M){
   const k = signoffMonth(M.now), linked = S.trainers.filter(t => t.active !== false && S.linked && S.linked.has(t.id));
-  if (!linked.length) return "";
+  if (!linked.length) return S.trainers.length ? `<section class="card" data-tour="signoff"><div class="card-h"><h2>Link your trainers</h2><button class="btn sm primary" data-tab="trainers">Get invite codes</button></div>
+    <p class="small muted">Each trainer gets their own one-time code. Once they join, they see their rent statement in their Trainer Tally and confirm it each month. Go to Trainers and tap <b>Get invite code</b> next to a name.</p></section>` : "";
   const rows = linked.map(t => ({t, so: soFor(t.id, k), m: M.stats[t.id].months.find(x => x.month === k) || {n:0, rent:0}}));
   const c = s => rows.filter(r => s ? r.so && r.so.status === s : !r.so).length;
   return `<section class="card" data-tour="signoff"><div class="card-h"><h2>Sign-off · ${esc(mLabel(k, true))}</h2><span class="small muted">${c("confirmed")} confirmed · ${c("disputed")} disputed · ${c(null)} waiting</span></div>
@@ -428,13 +429,13 @@ function renderTrainers(M){
   const k = S.month;
   const rows = S.trainers.slice().sort((a,b)=>(a.active===false)-(b.active===false) || M.stats[b.id].balance - M.stats[a.id].balance || a.name.localeCompare(b.name));
   return `<section class="card" data-tour="trainers"><div class="card-h"><h2>Trainers</h2><span class="small muted">${S.trainers.filter(t=>t.active!==false).length} active</span></div>
-    ${rows.length ? `<div class="tablewrap"><table><thead><tr><th>Trainer</th><th>Rent</th><th class="num">Sessions</th><th class="num">${esc(MONTHS[mStart(k).getMonth()])} rent</th><th>Balance</th><th>${esc(MONTHS[mStart(signoffMonth(M.now)).getMonth()])} sign-off</th><th></th></tr></thead><tbody>
+    ${rows.length ? `<div class="tablewrap"><table><thead><tr><th>Trainer</th><th>Rent</th><th class="num">Sessions</th><th class="num">${esc(MONTHS[mStart(k).getMonth()])} rent</th><th>Balance</th><th>Account · ${esc(MONTHS[mStart(signoffMonth(M.now)).getMonth()])} sign-off</th><th></th></tr></thead><tbody>
     ${rows.map(t => { const st = M.stats[t.id], m = st.months.find(x => x.month === k) || {n:0, rent:0, booked:0}; const linked = S.linked && S.linked.has(t.id);
       return `<tr style="${t.active===false?"opacity:.55":""}"><td><div class="who">${avatar(t.name)}<div style="min-width:0"><a href="#" class="n" data-act="edit" data-id="${t.id}">${esc(t.name)}</a><div class="s">${esc((t.emails||[]).join(", "))}</div></div></div></td>
         <td class="small">${esc(ruleText(st.rule))}${st.rule.inherited?' <span class="muted">(default)</span>':""}</td>
         <td class="num">${m.n}${m.booked?`<span class="muted"> +${m.booked}</span>`:""}</td><td class="num" style="font-weight:600">${money(m.rent)}</td>
         <td><span class="chip ${st.status}">${esc(st.label)}</span></td>
-        <td class="small">${linked ? soChip(M, t, signoffMonth(M.now)) : `<button class="btn sm" data-act="invite" data-id="${t.id}">Invite</button>`}</td>
+        <td class="small">${linked ? soChip(M, t, signoffMonth(M.now)) : `<button class="btn sm primary" data-act="invite" data-id="${t.id}">Get invite code</button>`}</td>
         <td><div class="rowacts"><button class="btn sm" data-act="msg" data-id="${t.id}">Statement</button><button class="btn sm" data-act="payment" data-id="${t.id}">Payment</button></div></td></tr>`; }).join("")}
     </tbody></table></div>` : `<div class="empty">No trainers yet. Add them from the list below, or add one by hand.</div>`}
   </section>
@@ -599,7 +600,7 @@ function renderModal(){
       <label class="check full"><input type="checkbox" id="ed-active" ${t.active!==false?"checked":""}> Active</label></div>
     ${m.id && (t.payments||[]).length ? `<h3>Payments</h3><div class="list">${[...t.payments].sort((a,b)=>String(b.date).localeCompare(String(a.date))).map(p=>`<div><span>${fmtD(parseDay(p.date))} · ${esc(p.method||"")}${p.note?" · "+esc(p.note):""}</span><span style="font-weight:600">${money(num(p.amount))} <button class="btn sm" data-act="rm-pay" data-pid="${esc(p.id)}">Remove</button></span></div>`).join("")}</div>` : ""}
     ${m.id && S.linked && S.linked.has(m.id) ? `<p class="small muted">Linked to ${esc(t.linkedEmail||"their Trainer Tally account")}. They see their statement in their own app.</p>` : ""}
-    <div class="actions"><button class="btn primary" data-act="save-trainer">Save</button>${m.id ? (m.confirmDel ? `<button class="btn danger" data-act="del-yes">Remove ${esc(t.name)}</button><button class="btn" data-act="del-no">Keep</button>` : `<button class="btn danger" data-act="del">Remove</button>`) : ""}</div>`;
+    <div class="actions"><button class="btn primary" data-act="save-trainer">Save</button>${m.id && !(S.linked && S.linked.has(m.id)) ? `<button class="btn" data-act="invite" data-id="${esc(m.id)}">Get invite code</button>` : ""}${m.id ? (m.confirmDel ? `<button class="btn danger" data-act="del-yes">Remove ${esc(t.name)}</button><button class="btn" data-act="del-no">Keep</button>` : `<button class="btn danger" data-act="del">Remove</button>`) : ""}</div>`;
   } else if (m.type === "payment"){
     const t = trainer(m.id || (S.trainers[0]||{}).id); title = "Log rent payment";
     if (!t) body = `<div class="empty">Add a trainer first.</div>`;
