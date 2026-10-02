@@ -126,17 +126,26 @@ export default async function handler(req, res){
       task = `Progress ${one ? "this session" : "this week"} into the next version for this client.\nDirection: ${dir}.${b.notes ? "\nTrainer's notes: " + String(b.notes).slice(0, 600) : ""}\nKeep what is working, change what serves the direction, and base loads on the recent logs.\n\nCURRENT ${one ? "SESSION" : "WEEK"} (${w.label || "Week " + (wi + 1)}):\n${one ? fmtSession(one) : (w.sessions || []).map(fmtSession).join("\n")}\n\nREST OF THE PROGRAM FOR CONTEXT:\n${(p.weeks || []).filter((_, i) => i !== wi).slice(0, 4).map(fmtWeek).join("\n\n")}`;
     }
 
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: MODEL, max_tokens: action === "create" ? 16000 : 8000, system: SYSTEM, tools: [TOOLS[action]], tool_choice: { type: "auto" },
-        messages: [{ role: "user", content: `${ctx}\n\nTASK:\n${task}\n\nCall ${TOOLS[action].name} with your answer.` }] })
-    });
-    const j = await r.json().catch(() => ({}));
+    const call = async (toolChoice) => {
+      const r = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+        body: JSON.stringify({ model: MODEL, max_tokens: action === "create" ? 16000 : 8000, system: SYSTEM, tools: [TOOLS[action]], tool_choice: toolChoice,
+          messages: [{ role: "user", content: `${ctx}\n\nTASK:\n${task}\n\nCall ${TOOLS[action].name} with your answer.` }] })
+      });
+      return { r, j: await r.json().catch(() => ({})) };
+    };
+    // Require the structured answer. Models that always think can't be forced to a tool, so fall back to "auto" for those.
+    let { r, j } = await call({ type: "tool", name: TOOLS[action].name });
+    if (!r.ok && /tool_choice|thinking/i.test((j.error && j.error.message) || "")) ({ r, j } = await call({ type: "auto" }));
     if (!r.ok) return send(res, 502, { code: "ai_error", message: (j.error && j.error.message) || "The AI service didn't answer. Try again." });
-    const out = (j.content || []).find(x => x.type === "tool_use");
-    if (!out) return send(res, 502, { code: "ai_error", message: "The AI didn't return a usable draft. Try again." });
-    return send(res, 200, { action, result: out.input, model: MODEL });
+    let result = ((j.content || []).find(x => x.type === "tool_use") || {}).input;
+    if (!result){ // last resort: a JSON object written as text
+      const text = (j.content || []).filter(x => x.type === "text").map(x => x.text).join("\n"), m = text.match(/\{[\s\S]*\}/);
+      try { result = m ? JSON.parse(m[0]) : null; } catch (e){ result = null; }
+    }
+    if (!result) return send(res, 502, { code: "ai_error", message: j.stop_reason === "max_tokens" ? "The draft was too long to finish. Try fewer weeks or sessions." : "The AI didn't return a usable draft. Try again." });
+    return send(res, 200, { action, result, model: MODEL });
   } catch (e){
     return send(res, 500, { message: "Something went wrong. Try again in a minute." });
   }
