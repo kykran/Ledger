@@ -2,5 +2,6 @@
 import "./styles.css";
 import "./engine-global.js";
 import "./app.js";
+import "./programs.js";
 import { demoAdapter } from "./demo-core.js";
 window.TrainerTally.start(demoAdapter());

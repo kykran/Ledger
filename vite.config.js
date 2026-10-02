@@ -12,5 +12,5 @@ const shell = () => ({
 
 export default defineConfig({
   plugins: [shell()],
-  build: { rollupOptions: { input: { main: resolve(here, "index.html"), studio: resolve(here, "studio.html"), demo: resolve(here, "demo.html"), demoStudio: resolve(here, "demo-studio.html"), client: resolve(here, "client.html") } } }
+  build: { rollupOptions: { input: { main: resolve(here, "index.html"), studio: resolve(here, "studio.html"), demo: resolve(here, "demo.html"), demoStudio: resolve(here, "demo-studio.html"), client: resolve(here, "client.html"), program: resolve(here, "program.html") } } }
 });

@@ -37,6 +37,7 @@ const TRAIL = new Set(["pt","session","sesh","training","appt"]);
 const ICON = {
   overview:'<path d="M4 13h6V4H4zM14 20h6v-9h-6zM4 20h6v-4H4zM14 4v4h6V4z"/>',
   calendar:'<rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
+  programs:'<path d="M3.5 9.5v5M6.5 7v10M17.5 7v10M20.5 9.5v5M6.5 12h11"/>',
   clients:'<circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19c.6-3 2.9-4.6 5.5-4.6s4.9 1.6 5.5 4.6M16 5.6a3 3 0 0 1 0 5.8M17.5 14.6c1.6.6 2.7 2 3 4.4"/>',
   billing:'<path d="M6 3.5h12v17l-2.5-1.6L13 20.5l-2.5-1.6L8 20.5l-2-1.3z"/><path d="M9 8.5h6M9 12h6M9 15.5h3.5"/>',
   trends:'<path d="M4 19.5h16M6.5 16l4-5 3 3 5-6.5"/>',
@@ -229,6 +230,8 @@ const payLine = c => { const p = payerOf(c), d = dependentsOf(c); return p ? ` Â
 /* ---------- chrome ---------- */
 const inAppNow = () => S.screen === "data" && S.profLoaded && S.clientsLoaded && !!(S.prof && S.prof.setupDone);
 const TABS = [["overview","Home","Overview"],["calendar","Calendar","Calendar"],["clients","Clients","Clients"],["billing","Billing","Billing"],["trends","Trends","Trends"],["settings","Settings","Settings"]];
+const PROGS = () => (A && A.programs && window.TallyPrograms) ? window.TallyPrograms : null;
+const tabs = () => PROGS() ? [...TABS.slice(0,3), ["programs","Programs","Programs"], ...TABS.slice(3)] : TABS;
 const MONTH_TABS = new Set(["overview","calendar","billing","trends"]);
 function renderChrome(){
   const app = $("#app");
@@ -237,12 +240,13 @@ function renderChrome(){
   const M = S.M;
   const attn = inApp && M ? attention(M).length : 0, sugg = inApp && M ? M.unmatched.length : 0;
   const badge = k => k === "overview" && attn ? attn : k === "clients" && sugg ? sugg : 0;
-  $("#nav").innerHTML = TABS.map(([k,l]) => `<button data-tab="${k}" ${S.tab===k?'aria-current="page"':""}>${ic(k)}<span>${l}</span>${badge(k)?`<span class="badge">${badge(k)}</span>`:""}</button>`).join("");
-  $("#tabbar").innerHTML = TABS.map(([k,l]) => `<button data-tab="${k}" ${S.tab===k?'aria-current="page"':""} aria-label="${l}">${ic(k)}<span>${l}</span>${badge(k)?'<i class="dot"></i>':""}</button>`).join("");
+  $("#nav").innerHTML = tabs().map(([k,l]) => `<button data-tab="${k}" ${S.tab===k?'aria-current="page"':""}>${ic(k)}<span>${l}</span>${badge(k)?`<span class="badge">${badge(k)}</span>`:""}</button>`).join("");
+  $("#tabbar").style.gridTemplateColumns = `repeat(${tabs().length},1fr)`;
+  $("#tabbar").innerHTML = tabs().map(([k,l]) => `<button data-tab="${k}" ${S.tab===k?'aria-current="page"':""} aria-label="${l}">${ic(k)}<span>${l}</span>${badge(k)?'<i class="dot"></i>':""}</button>`).join("");
   const pref = getThemePref();
   const themeBtn = `<div class="seg" role="group" aria-label="Appearance">${[["system","auto","Auto"],["light","sun","Light"],["dark","moon","Dark"]].map(([m,i,l])=>`<button data-act="theme" data-mode="${m}" aria-pressed="${pref===m}" title="${l}">${ic(i,' style="width:14px;height:14px"')}</button>`).join("")}</div>`;
   $("#sidefoot").innerHTML = `${themeBtn}${S.account && S.account.email ? `<span>${esc(S.account.email)}</span>` : ""}${A && A.signOut && S.account ? `<button class="btn sm ghost" data-act="signout" style="align-self:flex-start;padding-left:0">Sign out</button>` : ""}`;
-  const t = TABS.find(x => x[0] === S.tab);
+  const t = tabs().find(x => x[0] === S.tab) || TABS[0];
   $("#pagetitle").textContent = inApp ? t[2] : "Trainer Tally";
   $("#pagesub").textContent = inApp ? (S.cal.at ? `Calendar read ${fmtT(S.cal.at)}` + (P("trainerName") ? ` Â· ${P("trainerName")}` : "") : (P("trainerName") || "")) : "Sessions, packages and billing from your calendar";
   const ms = $("#monthsw");
@@ -282,6 +286,7 @@ function render(){
   else if (S.tab === "clients") h = renderClients(M);
   else if (S.tab === "billing") h = renderBilling(M);
   else if (S.tab === "trends") h = renderTrends(M);
+  else if (S.tab === "programs" && PROGS()) h = PROGS().render();
   else h = renderSettings();
   main.innerHTML = h;
   drawCharts(M);
@@ -1202,6 +1207,7 @@ async function onClick(e){
   const el = e.target.closest("[data-act]"); if (!el) return;
   const act = el.getAttribute("data-act"), id = el.getAttribute("data-id");
   if (act === "close-scrim" && e.target !== el) return;
+  if (act.startsWith("pg-") && PROGS()){ if (el.tagName === "A") e.preventDefault(); PROGS().onClick(el, e); return; }
   if (el.tagName === "A" && el.getAttribute("href") === "#") e.preventDefault();
   const M = S.M;
   switch (act){
@@ -1343,6 +1349,7 @@ async function onClick(e){
 }
 function onChange(e){
   const t = e.target;
+  if (PROGS() && t.getAttribute && t.getAttribute("data-pg") && PROGS().onChange(t)) return;
   if (t.id === "sim-inc" || t.id === "sim-mode" || t.id === "sim-lose" || (t.hasAttribute && t.hasAttribute("data-sim-id"))){
     const ids = [...document.querySelectorAll("[data-sim-id]")].filter(x => x.checked).map(x => x.getAttribute("data-sim-id"));
     S.sim = {increase: num(val("sim-inc")), mode: val("sim-mode"), lose: Math.max(0, Math.round(num(val("sim-lose")))), ids};
@@ -1363,11 +1370,12 @@ function onChange(e){
     rd.readAsText(f);
   }
 }
-function onInput(e){ if (e.target.id === "msg-text" && S.modal) S.modal.text = e.target.value; }
+function onInput(e){ if (PROGS() && e.target.getAttribute && e.target.getAttribute("data-pg") && PROGS().onInput(e.target)) return; if (e.target.id === "msg-text" && S.modal) S.modal.text = e.target.value; }
 
 /* ---------- boot ---------- */
 async function start(adapter){
   A = adapter;
+  if (A.programs && window.TallyPrograms) window.TallyPrograms.attach({ S, A, avatar, toast, render, closeModal, saveClient, saveProfile });
   document.addEventListener("click", onClick);
   document.addEventListener("change", onChange);
   document.addEventListener("input", onInput);

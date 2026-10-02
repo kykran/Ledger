@@ -26,6 +26,10 @@
     {
       "source": "/s/:token",
       "destination": "/client.html"
+    },
+    {
+      "source": "/p/:token",
+      "destination": "/program.html"
     }
   ],
   "functions": {

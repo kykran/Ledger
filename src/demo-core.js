@@ -1,6 +1,7 @@
 /* Demo adapter core: the Trainer Tally adapter contract, served from in-memory sample data.
  * Changes last until the page is reloaded. No sign-in, no network. */
 import { buildDemo, listEvents, ME } from "./demo-data.js";
+import { demoProgramsAdapter } from "./programs-demo.js";
 
 export function demoAdapter(){
   const D = buildDemo();
@@ -39,6 +40,7 @@ export function demoAdapter(){
       async test(kind){ const m = demoModel(D, profile, clients); const E = globalThis.TallyEngine; const b = (kind === "monthly" ? E.monthlySummary : E.weeklySummary)(m, {});
         outbox.unshift({ id: "t" + Date.now(), kind: "test", to_email: ME, subject: "[Preview] " + b.subject, body_text: b.text, status: "sent", created_at: new Date().toISOString() }); return { status: "sent" }; }
     },
+    programs: demoProgramsAdapter(),
     links: {
       async get(id){ return links[id] || null; },
       async create(id){ links[id] = { token: "demo", url: "/client.html?demo=" + encodeURIComponent(id) }; return links[id]; },

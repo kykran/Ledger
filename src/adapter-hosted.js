@@ -5,6 +5,7 @@
 import "./styles.css";
 import "./engine-global.js";
 import "./app.js";
+import "./programs.js";
 import { sb, api, currentSession, signInWithGoogle, storeGoogleToken, calendarCall, downloadFile, takeAuthError } from "./supabase.js";
 
 let session = null;
@@ -100,6 +101,50 @@ const adapter = {
     send(id){ return api("/api/outbox", { action: "send", id }); },
     async skip(id){ const { error } = await sb.from("outbox").update({ status: "skipped" }).eq("id", id); if (error) throw fail(error); },
     test(kind){ return api("/api/outbox", { action: "test", kind }); }
+  },
+
+  // Programs: exercise library, client programs, set logs, measurements, private program links.
+  programs: {
+    async ready(){
+      const { error } = await sb.from("exercises").select("id").limit(1);
+      if (!error) return { ok: true };
+      return { ok: false, code: /does not exist|schema cache|42P01|PGRST205/i.test((error.message || "") + (error.code || "")) ? "not_setup" : "unavailable" };
+    },
+    async listExercises(){ const { data, error } = await query(() => sb.from("exercises").select("id,data").eq("user_id", session.user.id)); if (error) throw fail(error); return (data || []).map(r => ({ id: r.id, ...r.data })); },
+    async saveExercises(list){ const now = new Date().toISOString(); const { error } = await sb.from("exercises").upsert(list.map(({ id, ...d }) => ({ user_id: session.user.id, id, data: d, updated_at: now }))); if (error) throw fail(error); },
+    async deleteExercise(id){ const { error } = await sb.from("exercises").delete().eq("user_id", session.user.id).eq("id", id); if (error) throw fail(error); },
+    async uploadVideo(file){
+      const ext = (file.name.match(/\.[a-z0-9]+$/i) || [".mp4"])[0].toLowerCase();
+      const path = session.user.id + "/" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7) + ext;
+      const { error } = await sb.storage.from("exercise-videos").upload(path, file, { contentType: file.type || "video/mp4", upsert: false });
+      if (error) throw fail(error);
+      return { path };
+    },
+    async videoUrl(path){ const { data, error } = await sb.storage.from("exercise-videos").createSignedUrl(path, 3600); if (error) throw fail(error); return data.signedUrl; },
+    async deleteVideo(path){ await sb.storage.from("exercise-videos").remove([path]); },
+    async listPrograms(){ const { data, error } = await query(() => sb.from("programs").select("id,client_id,data,updated_at").eq("user_id", session.user.id)); if (error) throw fail(error); return (data || []).map(r => ({ ...r.data, id: r.id, clientId: r.client_id, updatedAt: r.updated_at })); },
+    async saveProgram(p){ const { id, updatedAt, ...d } = p; const { error } = await sb.from("programs").upsert({ user_id: session.user.id, id, client_id: d.clientId, data: d, updated_at: new Date().toISOString() }); if (error) throw fail(error); },
+    async deleteProgram(id){ const uid = session.user.id; const { error } = await sb.from("programs").delete().eq("user_id", uid).eq("id", id); if (error) throw fail(error); await sb.from("program_logs").delete().eq("user_id", uid).eq("program_id", id); },
+    async logs(clientId){ const { data, error } = await query(() => sb.from("program_logs").select("*").eq("user_id", session.user.id).eq("client_id", clientId).order("logged_on")); if (error) throw fail(error); return data || []; },
+    async saveLogs(rows){ if (!rows.length) return; const uid = session.user.id, now = new Date().toISOString(); const { error } = await sb.from("program_logs").upsert(rows.map(r => ({ ...r, user_id: uid, source: "trainer", updated_at: now }))); if (error) throw fail(error); },
+    async measurements(clientId){ const { data, error } = await query(() => sb.from("measurements").select("*").eq("user_id", session.user.id).eq("client_id", clientId).order("taken_on")); if (error) throw fail(error); return data || []; },
+    async saveMeasurement(m){ const row = { ...m, user_id: session.user.id }; if (!row.id) delete row.id; const { error } = await sb.from("measurements").upsert(row); if (error) throw fail(error); },
+    async deleteMeasurement(id){ const { error } = await sb.from("measurements").delete().eq("user_id", session.user.id).eq("id", id); if (error) throw fail(error); },
+    link: {
+      url: t => location.origin + "/p/" + t,
+      async get(clientId){
+        const { data } = await sb.from("program_links").select("token").eq("user_id", session.user.id).eq("client_id", clientId).is("revoked_at", null).order("created_at", { ascending: false }).limit(1);
+        return data && data[0] ? { token: data[0].token, url: adapter.programs.link.url(data[0].token) } : null;
+      },
+      async create(clientId){
+        const b = crypto.getRandomValues(new Uint8Array(18));
+        const token = btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+        const { error } = await sb.from("program_links").insert({ token, user_id: session.user.id, client_id: clientId });
+        if (error) throw fail(error);
+        return { token, url: adapter.programs.link.url(token) };
+      },
+      async revoke(clientId){ const { error } = await sb.from("program_links").update({ revoked_at: new Date().toISOString() }).eq("user_id", session.user.id).eq("client_id", clientId).is("revoked_at", null); if (error) throw fail(error); }
+    }
   },
 
   // Private read-only "sessions left" pages for clients.
