@@ -3,7 +3,7 @@
  * app.js calls attach(ctx) once and then render()/onClick()/onChange()/onInput() while the Programs tab is open.
  * Data goes through ctx.A.programs (see adapter-hosted.js / programs-demo.js). */
 import { pid, newRow, newSession, newWeek, newProgram, copySession, copyWeek, repeatSession, repeatWeek, setCount,
-  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, programTodos } from "./programs-core.js";
+  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, programTodos } from "./programs-core.js";
 import { STARTER_EXERCISES } from "./exercise-seed.js";
 
 let C = null; // context from app.js
@@ -103,23 +103,43 @@ function render(){
     ? `<div class="card"><div class="empty"><b>Programs needs a one-time setup</b><span>The database tables for programs haven't been created yet. Once they are, this tab fills in with your exercise library and client programs.</span><button class="btn" data-act="pg-retry">Check again</button></div></div>`
     : `<div class="card"><div class="empty"><b>Couldn't load programs</b><span>${esc(PG.ready.message || "Check your connection and try again.")}</span><button class="btn" data-act="pg-retry">Try again</button></div></div>`;
   const seg = `<div class="seg" role="group" aria-label="Programs view">${[["clients", "Clients"], ["library", "Exercise library"]].map(([v, l]) => `<button data-act="pg-view" data-v="${v}" aria-pressed="${PG.view === v}">${l}</button>`).join("")}</div>`;
-  const style = `<style>${LINECHART_CSS}${VIDEO_CSS}${CSS}</style>`;
+  const style = `<style>${LINECHART_CSS}${VIDEO_CSS}${GROUP_CSS}${CSS}</style>`;
   const own = C.standalone ? "" : `<a class="btn sm ghost" href="/programs${C.A.name === "demo" ? "?demo" : ""}" target="_blank" rel="noopener" style="margin-left:auto">Open on its own ↗</a>`;
   if (PG.view === "library") return style + `<div class="pg-top">${seg}${own}</div>` + renderLibrary();
   if (PG.clientId && client(PG.clientId)) return style + renderClient();
   return style + `<div class="pg-top">${seg}${own}</div>` + renderClientList();
 }
 
+/* When each client trains next, from the calendar (the trainer's own clients only). */
+function nextOf(c){ const M = C.getModel && C.getModel(); const st = M && M.stats && M.stats[c.id]; return st && st.next ? st.next : null; }
+function whenLabel(d){
+  const t = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).replace(":00", "");
+  const day = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime(), n = (day(d) - day(new Date())) / 86400000;
+  return n === 0 ? "Today " + t : n === 1 ? "Tomorrow " + t : d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }) + ", " + t;
+}
+function weekIndexFor(p, d){ if (!p || !p.startDate) return 0; const [y, m, dd] = p.startDate.split("-").map(Number); return Math.max(0, Math.min((p.weeks || []).length - 1, Math.floor((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - new Date(y, m - 1, dd)) / (7 * 86400000)))); }
 function renderClientList(){
-  const list = C.S.clients.filter(c => c.active !== false).sort((a, b) => a.name.localeCompare(b.name));
   const progOf = id => (PG.progs || []).filter(p => p.clientId === id && p.status !== "archived");
-  return renderTodos() + `<section class="card"><div class="card-h"><h2>Client programs</h2><span class="small muted">${(PG.progs || []).filter(p => p.status !== "archived").length} active programs</span></div>
-    ${list.length ? `<div class="tablewrap"><table><thead><tr><th>Client</th><th>Program</th><th class="num">Weeks</th><th>Updated</th><th></th></tr></thead><tbody>
-    ${list.map(c => { const ps = progOf(c.id), p = ps[0];
-      return `<tr><td><div class="who">${C.avatar(c)}<a href="#" class="n" data-act="pg-open" data-id="${esc(c.id)}">${esc(c.name)}</a></div></td>
+  const list = C.S.clients.filter(c => c.active !== false).map(c => ({ c, next: nextOf(c) }))
+    .sort((a, b) => (a.next && b.next ? a.next - b.next : a.next ? -1 : b.next ? 1 : 0) || a.c.name.localeCompare(b.c.name));
+  const loading = C.modelLoading && C.modelLoading();
+  const up = list.find(x => x.next);
+  let hero = "";
+  if (up){
+    const p = progOf(up.c.id)[0], wi = p ? weekIndexFor(p, up.next) : 0, w = p && p.weeks[wi];
+    const ready = w && (w.sessions || []).some(s => !s.homework && (s.rows || []).some(r => r.name));
+    hero = `<section class="card pg-next"><div class="card-h"><div class="who">${C.avatar(up.c)}<div><h3>Next up · ${esc(whenLabel(up.next))}</h3><b style="font-size:18px">${esc(up.c.name)}</b>
+        <div class="small muted">${p ? `${esc(p.name)} · ${esc(w ? w.label : "")}${ready ? "" : " · nothing written for this week yet"}` : "No program yet"}</div></div></div>
+      <button class="btn primary" data-act="pg-open" data-id="${esc(up.c.id)}" data-week="${wi}">${p ? "Open program" : "Start program"}</button></div></section>`;
+  }
+  return hero + renderTodos() + `<section class="card"><div class="card-h"><h2>Client programs</h2><span class="small muted">${loading ? "Reading your calendar…" : "next session first"}</span></div>
+    ${list.length ? `<div class="tablewrap"><table><thead><tr><th>Client</th><th>Next session</th><th>Program</th><th class="num">Weeks</th><th></th></tr></thead><tbody>
+    ${list.map(({ c, next }) => { const ps = progOf(c.id), p = ps[0];
+      return `<tr><td><div class="who">${C.avatar(c)}<a href="#" class="n" data-act="pg-open" data-id="${esc(c.id)}"${next && p ? ` data-week="${weekIndexFor(p, next)}"` : ""}>${esc(c.name)}</a></div></td>
+        <td class="small">${next ? esc(whenLabel(next)) : `<span class="muted">–</span>`}</td>
         <td>${p ? esc(p.name) + (ps.length > 1 ? ` <span class="small muted">+${ps.length - 1}</span>` : "") : `<span class="muted small">None yet</span>`}</td>
-        <td class="num">${p ? (p.weeks || []).length : "–"}</td><td class="small">${p && p.updatedAt ? fmtDay(p.updatedAt) : "–"}</td>
-        <td><div class="rowacts"><button class="btn sm ${p ? "" : "primary"}" data-act="pg-open" data-id="${esc(c.id)}">${p ? "Open" : "Start program"}</button></div></td></tr>`; }).join("")}
+        <td class="num">${p ? (p.weeks || []).length : "–"}</td>
+        <td><div class="rowacts"><button class="btn sm ${p ? "" : "primary"}" data-act="pg-open" data-id="${esc(c.id)}"${next && p ? ` data-week="${weekIndexFor(p, next)}"` : ""}>${p ? "Open" : "Start program"}</button></div></td></tr>`; }).join("")}
     </tbody></table></div>` : `<div class="empty">Add clients first, then build their programs here.</div>`}</section>` + renderShared();
 }
 function renderShared(){
@@ -184,7 +204,7 @@ function renderSession(p, wi, si, s){
   const rows = (s.rows || []).map((r, ri) => {
     const ex = r.exId && lib[r.exId]; const hasVid = ex && (ex.videoUrl || ex.videoPath);
     const f = (k, ph, w) => `<input class="pg-in" data-pg="row" data-s="${si}" data-r="${ri}" data-f="${k}" value="${esc(r[k])}" placeholder="${ph}" ${w ? `style="width:${w}"` : ""} aria-label="${ph}">`;
-    return `<tr><td>${f("group", "A1", "48px")}</td>
+    return `<tr class="pg-g ${grpClass(r.group)}"><td>${f("group", "A1", "48px")}</td>
       <td><div class="pg-exname"><input class="pg-in" list="pg-exlist" data-pg="row" data-s="${si}" data-r="${ri}" data-f="name" value="${esc(r.name)}" placeholder="Exercise" aria-label="Exercise">${hasVid ? `<button class="btn sm ghost" data-act="pg-vid" data-id="${esc(ex.id)}" title="Watch video" aria-label="Watch video">▶</button>` : ex ? "" : r.name ? `<span class="pg-new" title="Not in your library yet">new</span>` : ""}</div></td>
       <td>${f("sets", "Sets", "56px")}</td><td>${f("reps", "Reps", "72px")}</td><td>${f("weight", "Weight", "72px")}</td><td>${f("note", "Note")}</td>
       <td><button class="btn sm ghost" data-act="pg-delrow" data-s="${si}" data-r="${ri}" aria-label="Remove row">✕</button></td></tr>`;
@@ -300,7 +320,7 @@ function logSheet(){
   const have = {}; for (const l of PG.logs[PG.clientId] || []) if (l.session_id === s.id) have[l.row_id + "|" + l.set_no] = l;
   const date = Object.values(have)[0] ? String(Object.values(have)[0].logged_on).slice(0, 10) : today();
   const rows = (s.rows || []).filter(r => r.name).map(r => { const n = setCount(r);
-    return `<div class="lg-ex"><div class="lg-h"><b>${r.group ? `<span class="tag">${esc(r.group)}</span> ` : ""}${esc(r.name)}</b><span class="small muted">${esc([r.sets && r.reps ? r.sets + " × " + r.reps : r.reps, r.weight ? "@ " + r.weight : ""].filter(Boolean).join(" "))}</span></div>
+    return `<div class="lg-ex"><div class="lg-h"><b>${r.group ? `<span class="gchip ${grpClass(r.group)}">${esc(r.group)}</span> ` : ""}${esc(r.name)}</b><span class="small muted">${esc([r.sets && r.reps ? r.sets + " × " + r.reps : r.reps, r.weight ? "@ " + r.weight : ""].filter(Boolean).join(" "))}</span></div>
       ${Array.from({ length: n }, (_, k) => { const l = have[r.id + "|" + (k + 1)] || {}; const key = r.id + "|" + (k + 1);
         return `<div class="lg-set"><span class="small muted">Set ${k + 1}</span><input class="pg-in" data-lg="${esc(key)}" data-f="reps" type="number" inputmode="numeric" placeholder="Reps" value="${esc(l.reps ?? "")}"><input class="pg-in" data-lg="${esc(key)}" data-f="weight" type="number" step="0.5" inputmode="decimal" placeholder="Weight" value="${esc(l.weight ?? "")}"><label class="check"><input type="checkbox" data-lg="${esc(key)}" data-f="done" ${l.done ? "checked" : ""}> Done</label></div>`; }).join("")}</div>`; }).join("");
   sheet("Log · " + s.name, `<div class="field"><label for="lg-date">Date</label><input id="lg-date" type="date" value="${date}"></div>${rows || `<div class="empty">Add exercises to this session first.</div>`}
@@ -329,7 +349,7 @@ function aiSheet(){
   let body = "";
   const flags = f => (f || []).length ? `<div class="ai-flags"><h3>⚠ Check before using</h3>${f.map(x => `<div><b>${esc(x.exercise)}</b>: ${esc(x.concern)}${x.alternative ? ` <span class="muted">Try: ${esc(x.alternative)}</span>` : ""}</div>`).join("")}</div>` : "";
   const lib = libByName();
-  const rowsTbl = rows => `<table class="ai-rows"><tbody>${rows.map(r => `<tr><td class="small muted">${esc(r.group || "")}</td><td>${esc(r.name)}${!lib[String(r.name).trim().toLowerCase()] ? ` <span class="pg-new">new</span>` : ""}${r.note ? `<div class="small muted">${esc(r.note)}</div>` : ""}</td><td class="num">${esc(r.sets)} × ${esc(r.reps)}</td><td class="small">${esc(r.weight || "")}</td></tr>`).join("")}</tbody></table>`;
+  const rowsTbl = rows => `<table class="ai-rows"><tbody>${rows.map(r => `<tr class="${grpClass(r.group)}"><td class="small">${r.group ? `<span class="gchip ${grpClass(r.group)}">${esc(r.group)}</span>` : ""}</td><td>${esc(r.name)}${!lib[String(r.name).trim().toLowerCase()] ? ` <span class="pg-new">new</span>` : ""}${r.note ? `<div class="small muted">${esc(r.note)}</div>` : ""}</td><td class="num">${esc(r.sets)} × ${esc(r.reps)}</td><td class="small">${esc(r.weight || "")}</td></tr>`).join("")}</tbody></table>`;
   const sess = s => `<div class="ai-sess"><div class="lg-h"><b>${esc(s.name)}</b>${s.homework ? `<span class="tag">homework</span>` : ""}</div>${s.notes ? `<div class="small muted">${esc(s.notes)}</div>` : ""}${rowsTbl(s.rows || [])}</div>`;
   if (X.step === "form"){
     const notesLine = c && !c.shared ? (c.programNotes ? `<p class="small">Reading ${esc(first)}'s notes: <i>${esc(c.programNotes.slice(0, 160))}${c.programNotes.length > 160 ? "…" : ""}</i></p>` : `<p class="small muted">No programming notes for ${esc(first)} yet. Add injuries or limitations above the program so the assistant can flag them.</p>`) : "";
@@ -427,7 +447,9 @@ async function onClick(el, e){
       if (prog && t.week >= prog.weeks.length){ while (prog.weeks.length <= t.week) prog.weeks.push(newWeek("Week " + (prog.weeks.length + 1))); saveSoon(prog); C.toast(`Added ${prog.weeks[t.week].label}. Paste a week or session into it.`); }
       PG.week = t.week; redraw(); window.scrollTo({ top: 0 }); break; }
     case "pg-view": PG.view = el.getAttribute("data-v"); redraw(); break;
-    case "pg-open": PG.clientId = el.getAttribute("data-id"); PG.progId = null; PG.week = 0; PG.sub = "program"; PG.repeat = null; loadClient(PG.clientId); redraw(); window.scrollTo({ top: 0 }); break;
+    case "pg-open": { PG.clientId = el.getAttribute("data-id"); PG.progId = null; PG.sub = "program"; PG.repeat = null; const wk = el.getAttribute("data-week");
+      const c0 = client(PG.clientId), p0 = c0 && progsOf(c0).find(x => x.status !== "archived"); if (p0) PG.progId = p0.id; PG.week = wk != null ? +wk : 0;
+      loadClient(PG.clientId); redraw(); window.scrollTo({ top: 0 }); break; }
     case "pg-back": PG.clientId = null; redraw(); break;
     case "pg-sub": PG.sub = el.getAttribute("data-v"); redraw(); break;
     case "pg-new": case "pg-newprog": {
@@ -541,6 +563,7 @@ function onChange(t){
   if (k === "who"){ const c = client(PG.clientId); C.saveClient({ ...c, sex: valIn("pg-sex"), birthYear: num(valIn("pg-by")) }).catch(() => {}); return true; }
   const p = P(); if (!p) return true;
   if (k === "sess" && t.type === "checkbox"){ mutate(p => p.weeks[PG.week].sessions[si].homework = t.checked); return true; }
+  if (k === "row" && t.getAttribute("data-f") === "group"){ redraw(); return true; }
   if (k === "row" && t.getAttribute("data-f") === "name"){ mutate(p => fillFromLibrary(p.weeks[PG.week].sessions[si].rows[ri])); return true; }
   return true;
 }
@@ -552,6 +575,8 @@ function updateBfPreview(){
 }
 
 const CSS = `
+.pg-next{border-color:color-mix(in srgb,var(--accent) 45%,var(--line));background:color-mix(in srgb,var(--accent) 6%,var(--surface))}
+.pg-next h3{color:var(--accent)}
 .pg-notes summary{cursor:pointer;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
 .pg-notes textarea{min-height:70px;resize:vertical}
 .ai-dirs{display:flex;gap:6px;flex-wrap:wrap}
@@ -570,7 +595,10 @@ const CSS = `
 .pg-weeks button{border:1px solid var(--line);background:var(--surface);border-radius:20px;padding:4px 12px;font-size:12.5px;font-weight:600;color:var(--ink2)}
 .pg-weeks button[aria-selected="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .pg-sess.hw{border-color:color-mix(in srgb,var(--accent) 45%,var(--line));box-shadow:inset 3px 0 0 var(--accent)}
-.pg-rows td{padding:4px 4px;border-bottom:0}.pg-rows th{padding:4px}
+.pg-rows td{padding:4px 4px;border-bottom:0}
+.pg-g td:first-child{box-shadow:inset 4px 0 0 var(--g,transparent);border-radius:6px 0 0 6px;padding-left:9px}
+.pg-g td:first-child .pg-in{border-color:color-mix(in srgb,var(--g,var(--line)) 60%,var(--line));background:color-mix(in srgb,var(--g,transparent) 12%,var(--bg));font-weight:700}
+.ai-rows tr td:first-child{box-shadow:inset 3px 0 0 var(--g,transparent)}.pg-rows th{padding:4px}
 .pg-rows td:nth-child(2){min-width:190px}.pg-rows td:nth-child(6){min-width:120px}
 .pg-exname{display:flex;gap:4px;align-items:center}
 .pg-new{font-size:10.5px;color:var(--muted);border:1px dashed var(--line);border-radius:5px;padding:0 4px}

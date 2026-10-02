@@ -171,3 +171,13 @@ export function programTodos({ clients, programs, sessionsOf, now = new Date(), 
   }
   return out.filter(t => !skip.has(t.key)).sort((a, b) => (a.from || 0) - (b.from || 0));
 }
+
+/* Block colors: A-F get a fixed color (validated for color-blind separation in light and dark); later letters stay neutral.
+ * The group letter is always shown too, so color is never the only cue. */
+export const grpClass = g => { const L = String(g || "").trim().charAt(0).toUpperCase(); return "ABCDEF".includes(L) && L ? "g-" + L : (L ? "g-x" : ""); };
+const GL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"], GD = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300"];
+const gv = arr => "ABCDEF".split("").map((L, i) => `.g-${L}{--g:${arr[i]}}`).join("");
+export const GROUP_CSS = `${gv(GL)}.g-x{--g:var(--muted)}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) ${"ABCDEF".split("").map((L, i) => `.g-${L}{--g:${GD[i]}}`).join(":root:not([data-theme=\"light\"]) ")}}
+:root[data-theme="dark"] ${"ABCDEF".split("").map((L, i) => `.g-${L}{--g:${GD[i]}}`).join(":root[data-theme=\"dark\"] ")}
+.gchip{display:inline-block;min-width:26px;text-align:center;font-weight:700;font-size:11.5px;border-radius:6px;padding:1px 6px;color:var(--ink);background:color-mix(in srgb,var(--g,var(--muted)) 22%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--g,var(--muted)) 55%,transparent)}`;
