@@ -204,24 +204,73 @@ function renderSession(p, wi, si, s){
   const rows = (s.rows || []).map((r, ri) => {
     const ex = r.exId && lib[r.exId]; const hasVid = ex && (ex.videoUrl || ex.videoPath);
     const f = (k, ph, w) => `<input class="pg-in" data-pg="row" data-s="${si}" data-r="${ri}" data-f="${k}" value="${esc(r[k])}" placeholder="${ph}" ${w ? `style="width:${w}"` : ""} aria-label="${ph}">`;
+    const recOn = PG.rec && PG.rec.sid === s.id;
+    const done = setsDone(s, r), planned = setCount(r);
+    const sum = !recOn && done.n ? `<span class="pg-done" title="Sets recorded">✓ ${done.n}/${Math.max(planned, done.total)}${done.top != null ? ` · ${done.top}` : ""}</span>` : "";
     return `<tr class="pg-g ${grpClass(r.group)}"><td>${f("group", "A1", "48px")}</td>
       <td><div class="pg-exname"><input class="pg-in" list="pg-exlist" data-pg="row" data-s="${si}" data-r="${ri}" data-f="name" value="${esc(r.name)}" placeholder="Exercise" aria-label="Exercise">${hasVid ? `<button class="btn sm ghost" data-act="pg-vid" data-id="${esc(ex.id)}" title="Watch video" aria-label="Watch video">▶</button>` : ex ? "" : r.name ? `<span class="pg-new" title="Not in your library yet">new</span>` : ""}</div></td>
       <td>${f("sets", "Sets", "56px")}</td><td>${f("reps", "Reps", "72px")}</td><td>${f("weight", "Weight", "72px")}</td><td>${f("note", "Note")}</td>
-      <td><button class="btn sm ghost" data-act="pg-delrow" data-s="${si}" data-r="${ri}" aria-label="Remove row">✕</button></td></tr>`;
+      <td>${sum}<button class="btn sm ghost" data-act="pg-delrow" data-s="${si}" data-r="${ri}" aria-label="Remove row">✕</button></td></tr>${recOn && r.name ? recordRows(p, s, si, r, ri) : ""}`;
   }).join("");
   const cKey = "delsess" + si;
   return `<section class="card pg-sess ${s.homework ? "hw" : ""}">
     <div class="card-h"><div class="pg-row" style="flex:1"><input class="pg-in pg-sname" data-pg="sess" data-s="${si}" data-f="name" value="${esc(s.name)}" aria-label="Session name">
       <label class="check small"><input type="checkbox" data-pg="sess" data-s="${si}" data-f="homework" ${s.homework ? "checked" : ""}> Homework <span class="muted">(client can log)</span></label></div>
-      <div class="pg-acts"><button class="btn sm" data-act="pg-log" data-s="${si}">Log</button>${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress" data-s="${si}">✦ Progress</button>` : ""}<button class="btn sm" data-act="pg-copysess" data-s="${si}">Copy</button>
+      <div class="pg-acts">${PG.rec && PG.rec.sid === s.id ? "" : `<button class="btn sm primary" data-act="pg-rec" data-s="${si}">Record sets</button>`}${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress" data-s="${si}">✦ Progress</button>` : ""}<button class="btn sm" data-act="pg-copysess" data-s="${si}">Copy</button>
         ${rep ? "" : `<button class="btn sm" data-act="pg-repeat" data-s="${si}">Repeat…</button>`}
         <button class="btn sm ghost" data-act="pg-up" data-s="${si}" aria-label="Move up" ${si ? "" : "disabled"}>↑</button>
         ${PG.confirm === cKey ? `<button class="btn sm danger" data-act="pg-delsess" data-s="${si}">Delete?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="${cKey}">Delete</button>`}</div></div>
     ${rep ? `<div class="pg-acts" style="justify-content:flex-start">${repeatForm()}</div>` : ""}
+    ${PG.rec && PG.rec.sid === s.id ? recordBar(s) : ""}
     <div class="tablewrap"><table class="pg-rows"><thead><tr><th>Group</th><th>Exercise</th><th>Sets</th><th>Reps</th><th>Weight</th><th>Note</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
     <div class="pg-row"><button class="btn sm" data-act="pg-addrow" data-s="${si}">+ Exercise</button>
       <input class="pg-in" data-pg="sess" data-s="${si}" data-f="notes" value="${esc(s.notes || "")}" placeholder="Session note for the client (optional)" style="flex:1"></div>
   </section>`;
+}
+
+/* ---------- recording sets inline ---------- */
+const logKey = (sid, rid, n) => sid + "|" + rid + "|" + n;
+function logMap(){ const m = {}; for (const l of PG.logs[PG.clientId] || []) m[logKey(l.session_id, l.row_id, l.set_no)] = l; return m; }
+function setsDone(s, r){
+  let n = 0, total = 0, top = null;
+  for (const l of PG.logs[PG.clientId] || []) if (l.session_id === s.id && l.row_id === r.id){ total = Math.max(total, l.set_no); if (l.done){ n++; if (l.weight != null && (top == null || +l.weight > top)) top = +l.weight; } }
+  return { n, total, top };
+}
+/* Most recent earlier day this client did an exercise with the same name: "8×70, 8×70, 6×75". */
+function lastTime(name, excludeSid){
+  const key = String(name || "").trim().toLowerCase(); if (!key) return "";
+  const by = {};
+  for (const l of PG.logs[PG.clientId] || []){ if (l.session_id === excludeSid || String(l.ex_name || "").trim().toLowerCase() !== key || (!l.done && l.reps == null && l.weight == null)) continue; const d = String(l.logged_on).slice(0, 10); (by[d] = by[d] || []).push(l); }
+  const day = Object.keys(by).sort().pop(); if (!day) return "";
+  return fmtDay(day) + ": " + by[day].sort((a, b) => a.set_no - b.set_no).map(l => `${l.reps ?? "?"}${l.weight != null ? "×" + l.weight : ""}`).join(", ");
+}
+function recordBar(s){
+  let done = 0, total = 0;
+  for (const r of s.rows || []){ if (!r.name) continue; const d = setsDone(s, r); done += d.n; total += Math.max(setCount(r), d.total, (PG.rec.extra[r.id] || 0)); }
+  return `<div class="pg-recbar"><b>Recording</b><label class="small">Date <input type="date" class="pg-in" data-pg="recdate" value="${esc(PG.rec.date)}" style="width:auto"></label>
+    <span class="small muted" id="pg-recstat">${done}/${total} sets · saves as you go</span><button class="btn sm primary" data-act="pg-rec-done" style="margin-left:auto">Done</button></div>`;
+}
+function recordRows(p, s, si, r, ri){
+  const m = logMap(), d = setsDone(s, r), n = Math.max(setCount(r), d.total, PG.rec.extra[r.id] || 0);
+  const last = lastTime(r.name, s.id);
+  const sets = Array.from({ length: n }, (_, k) => { const no = k + 1, l = m[logKey(s.id, r.id, no)] || {};
+    return `<div class="pg-set ${l.done ? "on" : ""}"><span class="small muted">Set ${no}</span>
+      <input class="pg-in" type="number" inputmode="numeric" data-pg="set" data-s="${si}" data-r="${ri}" data-n="${no}" data-f="reps" value="${esc(l.reps ?? "")}" placeholder="${esc(parseInt(r.reps, 10) || "reps")}" aria-label="Set ${no} reps">
+      <span class="muted">×</span>
+      <input class="pg-in" type="number" inputmode="decimal" step="0.5" data-pg="set" data-s="${si}" data-r="${ri}" data-n="${no}" data-f="weight" value="${esc(l.weight ?? "")}" placeholder="${esc(parseFloat(r.weight) || "wt")}" aria-label="Set ${no} weight">
+      <button class="pg-chk" data-act="pg-set-done" data-s="${si}" data-r="${ri}" data-n="${no}" aria-pressed="${!!l.done}" aria-label="Set ${no} done">✓</button></div>`; }).join("");
+  return `<tr class="pg-recrow ${grpClass(r.group)}"><td></td><td colspan="6"><div class="pg-sets">${sets}<button class="btn sm ghost" data-act="pg-set-add" data-s="${si}" data-r="${ri}">+ Set</button></div>${last ? `<div class="small muted">Last time ${esc(last)}</div>` : ""}</td></tr>`;
+}
+const setTimers = {};
+/* Update one set locally and save it a moment later (typing doesn't fire a save per keystroke). */
+function putSet(si, ri, no, patch, now){
+  const p = P(), s = p.weeks[PG.week].sessions[si], r = s.rows[ri], list = PG.logs[PG.clientId] || (PG.logs[PG.clientId] = []);
+  let l = list.find(x => x.session_id === s.id && x.row_id === r.id && x.set_no === no);
+  if (!l){ l = { program_id: p.id, session_id: s.id, row_id: r.id, set_no: no, client_id: p.clientId, ex_name: r.name, reps: null, weight: null, done: false, logged_on: PG.rec.date, source: "trainer" }; list.push(l); }
+  Object.assign(l, patch, { ex_name: r.name, logged_on: PG.rec.date });
+  const k = logKey(s.id, r.id, no); clearTimeout(setTimers[k]);
+  const save = () => { const { source, updated_at, user_id, ...row } = l; C.A.programs.saveLogs([row], p.shared ? p.ownerId : undefined).then(() => { const el = document.getElementById("pg-recstat"); if (el) el.textContent = el.textContent.replace(/ · .*$/, " · saved"); }).catch(() => C.toast("Couldn't save that set. Check your connection.")); };
+  if (now) save(); else setTimers[k] = setTimeout(save, 600);
 }
 
 /* ---------- progress: measurements, body fat, lifts, log history ---------- */
@@ -477,6 +526,19 @@ async function onClick(el, e){
       p.weeks = next.weeks; saveSoon(p); redraw(); C.toast(`Copied into the next ${n} week${n === 1 ? "" : "s"}`); break; }
     case "pg-addrow": mutate(p => p.weeks[wi].sessions[si].rows.push(newRow())); break;
     case "pg-delrow": mutate(p => p.weeks[wi].sessions[si].rows.splice(ri, 1)); break;
+    case "pg-rec": { const s = p.weeks[wi].sessions[si]; const have = (PG.logs[PG.clientId] || []).find(l => l.session_id === s.id);
+      PG.rec = { sid: s.id, date: have ? String(have.logged_on).slice(0, 10) : today(), extra: {} }; redraw(); break; }
+    case "pg-rec-done": PG.rec = null; redraw(); break;
+    case "pg-set-add": { const r = p.weeks[wi].sessions[si].rows[ri], s = p.weeks[wi].sessions[si], d = setsDone(s, r); PG.rec.extra[r.id] = Math.max(setCount(r), d.total, PG.rec.extra[r.id] || 0) + 1; redraw(); break; }
+    case "pg-set-done": {
+      const no = +el.getAttribute("data-n"), s = p.weeks[wi].sessions[si], r = s.rows[ri], cur = logMap()[logKey(s.id, r.id, no)] || {};
+      const on = !cur.done, patch = { done: on };
+      if (on){ // tapping ✓ on an empty set records it as prescribed (or same as the set before)
+        const prev = logMap()[logKey(s.id, r.id, no - 1)] || {};
+        if (cur.reps == null) patch.reps = prev.reps ?? (parseInt(r.reps, 10) || null);
+        if (cur.weight == null) patch.weight = prev.weight ?? (isFinite(parseFloat(r.weight)) ? parseFloat(r.weight) : null);
+      }
+      putSet(si, ri, no, patch, true); redraw(); break; }
     case "pg-log": PG.logFor = { w: wi, s: si }; logSheet(); break;
     case "pg-logsave": {
       const s = p.weeks[PG.logFor.w].sessions[PG.logFor.s], date = valIn("lg-date") || today(), byKey = {};
@@ -547,6 +609,7 @@ function onInput(t){
   const f = t.getAttribute("data-f"), si = +t.getAttribute("data-s"), ri = +t.getAttribute("data-r");
   if (k === "libq"){ PG.libQ = t.value; const pos = t.selectionStart; redraw(); const n = document.getElementById("pg-libq"); if (n){ n.focus(); try { n.setSelectionRange(pos, pos); } catch (x){} } return true; }
   if (k === "calc" || k === "who"){ updateBfPreview(); return true; }
+  if (k === "set"){ const v = t.value === "" ? null : Number(t.value); putSet(+t.getAttribute("data-s"), +t.getAttribute("data-r"), +t.getAttribute("data-n"), { [t.getAttribute("data-f")]: v }); return true; }
   const p = P(); if (!p) return true;
   if (k === "prog"){ p[f] = t.value; saveSoon(p); return true; }
   if (k === "week"){ p.weeks[PG.week][f] = t.value; saveSoon(p); return true; }
@@ -557,6 +620,10 @@ function onInput(t){
 function onChange(t){
   const k = t.getAttribute("data-pg"); if (!k) return false;
   const si = +t.getAttribute("data-s"), ri = +t.getAttribute("data-r");
+  if (k === "recdate"){ // moving the date moves every set already recorded for this session
+    PG.rec.date = t.value || today(); const p = P(), si = p.weeks[PG.week].sessions.findIndex(x => x.id === PG.rec.sid);
+    if (si >= 0){ const s = p.weeks[PG.week].sessions[si]; for (const l of (PG.logs[PG.clientId] || []).filter(x => x.session_id === s.id)){ const ri = s.rows.findIndex(r => r.id === l.row_id); if (ri >= 0) putSet(si, ri, l.set_no, {}); } }
+    return true; }
   if (k === "progsel"){ PG.progId = t.value; PG.week = 0; redraw(); return true; }
   if (k === "cnotes"){ const c = client(PG.clientId); if (c && !c.shared && (c.programNotes || "") !== t.value){ C.saveClient({ ...c, programNotes: t.value.trim() }).then(() => C.toast("Notes saved")).catch(() => {}); } return true; }
   if (k === "lift"){ PG.lift = t.value; redraw(); return true; }
@@ -575,6 +642,16 @@ function updateBfPreview(){
 }
 
 const CSS = `
+.pg-recbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:color-mix(in srgb,var(--accent) 10%,var(--surface));border:1px solid color-mix(in srgb,var(--accent) 40%,var(--line));border-radius:10px;padding:8px 12px}
+.pg-recrow td{padding-top:0!important}
+.pg-recrow td:first-child{box-shadow:inset 4px 0 0 var(--g,transparent)}
+.pg-sets{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:2px 0 6px}
+.pg-set{display:flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:10px;padding:4px 6px;background:var(--bg)}
+.pg-set.on{border-color:color-mix(in srgb,var(--pos) 55%,var(--line));background:color-mix(in srgb,var(--pos) 9%,var(--bg))}
+.pg-set .pg-in{width:62px;padding:5px 7px}
+.pg-chk{width:32px;height:32px;border-radius:8px;border:1.5px solid var(--line);background:var(--surface);color:var(--muted);font-weight:700;cursor:pointer}
+.pg-chk[aria-pressed="true"]{background:var(--pos);border-color:var(--pos);color:var(--bg)}
+.pg-done{font-size:11.5px;font-weight:600;color:var(--pos);white-space:nowrap;margin-right:4px}
 .pg-next{border-color:color-mix(in srgb,var(--accent) 45%,var(--line));background:color-mix(in srgb,var(--accent) 6%,var(--surface))}
 .pg-next h3{color:var(--accent)}
 .pg-notes summary{cursor:pointer;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
