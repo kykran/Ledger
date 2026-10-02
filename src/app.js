@@ -37,6 +37,7 @@ const TRAIL = new Set(["pt","session","sesh","training","appt"]);
 const ICON = {
   overview:'<path d="M4 13h6V4H4zM14 20h6v-9h-6zM4 20h6v-4H4zM14 4v4h6V4z"/>',
   calendar:'<rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
+  reconcile:'<path d="M4 6h10M4 12h16M4 18h10M17 4l3 2-3 2M17 16l3 2-3 2"/>',
   programs:'<path d="M3.5 9.5v5M6.5 7v10M17.5 7v10M20.5 9.5v5M6.5 12h11"/>',
   clients:'<circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19c.6-3 2.9-4.6 5.5-4.6s4.9 1.6 5.5 4.6M16 5.6a3 3 0 0 1 0 5.8M17.5 14.6c1.6.6 2.7 2 3 4.4"/>',
   billing:'<path d="M6 3.5h12v17l-2.5-1.6L13 20.5l-2.5-1.6L8 20.5l-2-1.3z"/><path d="M9 8.5h6M9 12h6M9 15.5h3.5"/>',
@@ -231,7 +232,7 @@ const payLine = c => { const p = payerOf(c), d = dependentsOf(c); return p ? ` �
 const inAppNow = () => S.screen === "data" && S.profLoaded && S.clientsLoaded && !!(S.prof && S.prof.setupDone);
 const TABS = [["overview","Home","Overview"],["calendar","Calendar","Calendar"],["clients","Clients","Clients"],["billing","Billing","Billing"],["trends","Trends","Trends"],["settings","Settings","Settings"]];
 const PROGS = () => (A && A.programs && window.TallyPrograms) ? window.TallyPrograms : null;
-const tabs = () => PROGS() ? [...TABS.slice(0,3), ["programs","Programs","Programs"], ...TABS.slice(3)] : TABS;
+const tabs = () => { const t = [...TABS.slice(0,4), ["reconcile","Reconcile","Reconcile"], ...TABS.slice(4)]; return PROGS() ? [...t.slice(0,3), ["programs","Programs","Programs"], ...t.slice(3)] : t; };
 const MONTH_TABS = new Set(["overview","calendar","billing","trends"]);
 function renderChrome(){
   const app = $("#app");
@@ -287,6 +288,7 @@ function render(){
   else if (S.tab === "billing") h = renderBilling(M);
   else if (S.tab === "trends") h = renderTrends(M);
   else if (S.tab === "programs" && PROGS()) h = PROGS().render();
+  else if (S.tab === "reconcile") h = renderReconcile(M);
   else h = renderSettings();
   main.innerHTML = h;
   drawCharts(M);
@@ -914,6 +916,74 @@ function renderSettings(){
   </section></div>`;
 }
 
+/* ---------- reconcile ---------- */
+function recPeriod(){
+  const R = S.rec || (S.rec = {mode:"month", at:new Date(), open:{}});
+  if (R.mode === "week"){ const a = sow(R.at); return {a, b:addDays(a,7), label:`${fmtD(a)} – ${fmtD(addDays(a,6))}`}; }
+  const a = new Date(R.at.getFullYear(), R.at.getMonth(), 1); return {a, b:new Date(a.getFullYear(), a.getMonth()+1, 1), label:a.toLocaleDateString(undefined,{month:"long", year:"numeric"})};
+}
+function recData(M){
+  const {a, b} = recPeriod(), now = M.now;
+  const cals = (P("calendars")||[]).filter(c => c.use);
+  const calName = id => (cals.find(c => c.id === id)||{}).name || id;
+  const rows = [];
+  for (const c of S.clients){
+    const st = M.stats[c.id];
+    const inP = s => s.date >= a && s.date < b;
+    const done = st.past.filter(inP), booked = st.future.filter(inP), skipped = (st.skipped||[]).filter(inP);
+    if (!done.length && !booked.length && !skipped.length) continue;
+    const byCal = {}; for (const s of done) byCal[s.cal] = (byCal[s.cal]||0) + 1;
+    const bookedByCal = {}; for (const s of booked) bookedByCal[s.cal] = (bookedByCal[s.cal]||0) + 1;
+    const earned = done.reduce((x,s)=>x+s.value,0), rent = done.reduce((x,s)=>x+s.rent,0);
+    rows.push({c, st, done, booked, skipped, byCal, bookedByCal, earned, rent, net:earned-rent});
+  }
+  rows.sort((x,y) => y.done.length - x.done.length || x.c.name.localeCompare(y.c.name));
+  const tot = {done:0, booked:0, skipped:0, earned:0, rent:0, net:0, byCal:{}, bookedByCal:{}, rentByCal:{}};
+  for (const r of rows){ tot.done += r.done.length; tot.booked += r.booked.length; tot.skipped += r.skipped.length; tot.earned += r.earned; tot.rent += r.rent; tot.net += r.net;
+    for (const s of r.done){ tot.byCal[s.cal] = (tot.byCal[s.cal]||0)+1; tot.rentByCal[s.cal] = (tot.rentByCal[s.cal]||0) + s.rent; }
+    for (const k in r.bookedByCal) tot.bookedByCal[k] = (tot.bookedByCal[k]||0) + r.bookedByCal[k]; }
+  const calIds = [...new Set([...cals.map(c => c.id), ...Object.keys(tot.byCal), ...Object.keys(tot.bookedByCal)])].filter(id => tot.byCal[id] || tot.bookedByCal[id] || cals.some(c => c.id === id));
+  return {rows, tot, calIds, calName, cals, now};
+}
+function renderReconcile(M){
+  const R = S.rec || (S.rec = {mode:"month", at:new Date(), open:{}});
+  const {label, a, b} = recPeriod(), D = recData(M), isNow = M.now >= a && M.now < b, future = a > M.now;
+  const short = n => String(n).replace(/@.*$/, "").slice(0, 22);
+  const calCell = (r, id) => { const n = r.byCal[id]||0, bk = r.bookedByCal[id]||0; return `${n||"–"}${bk?`<span class="muted"> +${bk}</span>`:""}`; };
+  const studio = id => (D.cals.find(c => c.id === id)||{}).studio;
+  const tiles = D.calIds.map(id => `<div class="stat"><span class="k">${esc(short(D.calName(id)))}${studio(id)?' <span class="tag">studio</span>':""}</span><span class="v">${D.tot.byCal[id]||0}${D.tot.bookedByCal[id]?`<span class="muted" style="font-size:14px;font-weight:600"> +${D.tot.bookedByCal[id]}</span>`:""}</span><span class="d">${D.tot.rentByCal[id] ? money(D.tot.rentByCal[id]) + " rent" : "no rent"}</span></div>`).join("");
+  const body = D.rows.map(r => { const open = R.open[r.c.id];
+    const detail = open ? `<tr class="wkdetail"><td colspan="${D.calIds.length + 5}"><div class="list">${[...r.done.map(s=>[s,"done"]), ...r.booked.map(s=>[s,"booked"]), ...r.skipped.map(s=>[s,"skipped"])].sort((x,y)=>x[0].date-y[0].date).map(([s,k]) => `<div><span>${esc(s.date.toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric"}))} · ${esc(fmtT(s.date))} <span class="tag">${esc(short(s.calName||D.calName(s.cal)))}</span>${k!=="done"?` <span class="chip ${k==="booked"?"info":"low"}">${k==="booked"?"Booked":"Not counted"}</span>`:""}${k==="skipped"?` <span class="small muted">“${esc(s.title)}”</span>`:""}</span><span class="small">${k==="done"?money(s.value)+(s.rent?` · ${money(s.rent)} rent`:""):""}</span></div>`).join("")}</div></td></tr>` : "";
+    return `<tr class="wkrow${open?" open":""}" data-act="rec-open" data-id="${r.c.id}" tabindex="0" role="button" aria-expanded="${!!open}"><td><div class="who"><span class="caret" aria-hidden="true">${open?"▾":"▸"}</span>${avatar(r.c)}<div style="min-width:0"><span class="n">${esc(r.c.name)}</span><div class="s">${BILLING[r.st.bill].label}${r.c.noRent?" · no rent":""}${payLine(r.c)}</div></div></div></td>
+      ${D.calIds.map(id => `<td class="num">${calCell(r,id)}</td>`).join("")}
+      <td class="num" style="font-weight:700">${r.done.length}${r.booked.length?`<span class="muted" style="font-weight:500"> +${r.booked.length}</span>`:""}</td>
+      <td class="num">${money(r.earned)}</td><td class="num">${r.rent?money(r.rent):"–"}</td><td class="num" style="font-weight:600">${money(r.net)}</td></tr>${detail}`; }).join("");
+  return `<section class="card"><div class="card-h">
+      <div class="seg" role="group" aria-label="Period">${[["week","Week"],["month","Month"]].map(([k,l]) => `<button data-act="rec-mode" data-k="${k}" aria-pressed="${R.mode===k}">${l}</button>`).join("")}</div>
+      <div class="monthsw"><button data-act="rec-prev" aria-label="Previous">${ic("left")}</button><span>${esc(label)}</span><button data-act="rec-next" aria-label="Next">${ic("right")}</button></div>
+      <div class="actions">${!isNow?`<button class="btn sm" data-act="rec-today">This ${R.mode}</button>`:""}<button class="btn sm" data-act="rec-csv">Export CSV</button></div></div>
+    ${isNow ? `<p class="small muted">Done so far, plus <span class="muted">+booked</span> for the rest of the ${R.mode}.</p>` : future ? `<p class="small muted">Everything here is still booked.</p>` : ""}
+  </section>
+  <div class="stats">
+    <div class="stat"><span class="k">Sessions done</span><span class="v">${D.tot.done}${D.tot.booked?`<span class="muted" style="font-size:14px;font-weight:600"> +${D.tot.booked}</span>`:""}</span><span class="d">${D.rows.length} client${D.rows.length===1?"":"s"}${D.tot.skipped?` · ${D.tot.skipped} not counted`:""}</span></div>
+    ${tiles}
+    <div class="stat"><span class="k">Net to you</span><span class="v">${money(D.tot.net)}</span><span class="d">${money(D.tot.earned)} earned · ${money(D.tot.rent)} rent</span></div>
+  </div>
+  <section class="card"><div class="card-h"><h2>By client</h2><span class="small muted">tap a client for dates</span></div>
+    ${D.rows.length ? `<div class="tablewrap"><table class="weeks"><thead><tr><th>Client</th>${D.calIds.map(id => `<th class="num">${esc(short(D.calName(id)))}</th>`).join("")}<th class="num">Total</th><th class="num">Earned</th><th class="num">Rent</th><th class="num">Net</th></tr></thead><tbody>${body}
+      <tr class="total"><td style="font-weight:700">Total</td>${D.calIds.map(id => `<td class="num" style="font-weight:700">${D.tot.byCal[id]||0}${D.tot.bookedByCal[id]?`<span class="muted" style="font-weight:500"> +${D.tot.bookedByCal[id]}</span>`:""}</td>`).join("")}<td class="num" style="font-weight:700">${D.tot.done}${D.tot.booked?`<span class="muted" style="font-weight:500"> +${D.tot.booked}</span>`:""}</td><td class="num">${money(D.tot.earned)}</td><td class="num">${money(D.tot.rent)}</td><td class="num" style="font-weight:700">${money(D.tot.net)}</td></tr>
+    </tbody></table></div>` : `<div class="empty">No sessions in this ${R.mode}.</div>`}
+    <p class="small muted">"Not counted" are calendar events with words like cancel, free or comp in the title. They show in a client's dates but aren't billed or charged rent.</p>
+  </section>`;
+}
+function exportReconcile(){
+  const D = recData(S.M), {label, a} = recPeriod(), R = S.rec;
+  const rows = [["client", ...D.calIds.map(id => D.calName(id) + " (done)"), "done", "booked", "not counted", "earned", "rent", "net"]];
+  for (const r of D.rows) rows.push([r.c.name, ...D.calIds.map(id => r.byCal[id]||0), r.done.length, r.booked.length, r.skipped.length, Math.round(r.earned*100)/100, Math.round(r.rent*100)/100, Math.round(r.net*100)/100]);
+  rows.push(["Total", ...D.calIds.map(id => D.tot.byCal[id]||0), D.tot.done, D.tot.booked, D.tot.skipped, Math.round(D.tot.earned*100)/100, Math.round(D.tot.rent*100)/100, Math.round(D.tot.net*100)/100]);
+  offerFile(`reconcile-${R.mode}-${ymd(a)}.csv`, csv(rows));
+}
+
 /* ---------- export / restore ---------- */
 function backupObject(){
   const prof = {...(S.prof||{})};
@@ -1234,6 +1304,11 @@ async function onClick(e){
     case "so-dispute": { const sid = el.getAttribute("data-sid"), mk = el.getAttribute("data-m"); const ms = S.studios.find(x => x.studioId === sid); openModal({type:"dispute", sid, month:mk, prev: ms && signoffFor(ms, mk)}); break; }
     case "so-send": { const m = S.modal; const note = val("so-note").trim(); if (!note){ toast("Add a note so the studio knows what to check"); break; } closeModal(); await signOff(m.sid, m.month, "disputed", note, Math.round(num(val("so-n")))); break; }
     case "trend-view": S.trendView = el.getAttribute("data-view"); render(); break;
+    case "rec-mode": S.rec.mode = el.getAttribute("data-k"); render(); break;
+    case "rec-prev": case "rec-next": { const d = act === "rec-next" ? 1 : -1; S.rec.at = S.rec.mode === "week" ? addDays(sow(S.rec.at), 7*d) : new Date(S.rec.at.getFullYear(), S.rec.at.getMonth()+d, 1); render(); break; }
+    case "rec-today": S.rec.at = new Date(); render(); break;
+    case "rec-open": { const id = el.getAttribute("data-id"); S.rec.open[id] = !S.rec.open[id]; render(); break; }
+    case "rec-csv": exportReconcile(); break;
     case "week-open": { const w = el.getAttribute("data-week"); S.weekOpen = S.weekOpen === w ? null : w; render(); break; }
     case "goto-settings": { S.tab = "settings"; render(); const a = document.getElementById(el.getAttribute("data-anchor")); if (a) a.scrollIntoView({block:"start"}); break; }
     case "save-notices": saveProfile({notices:{renewals:val("nt-renew"), weekly:chk("nt-weekly"), monthly:chk("nt-monthly"), email:val("nt-email").trim()}}).then(()=>toast("Saved")).catch(()=>{}); break;

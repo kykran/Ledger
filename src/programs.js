@@ -68,9 +68,10 @@ function render(){
     : `<div class="card"><div class="empty"><b>Couldn't load programs</b><span>${esc(PG.ready.message || "Check your connection and try again.")}</span><button class="btn" data-act="pg-retry">Try again</button></div></div>`;
   const seg = `<div class="seg" role="group" aria-label="Programs view">${[["clients", "Clients"], ["library", "Exercise library"]].map(([v, l]) => `<button data-act="pg-view" data-v="${v}" aria-pressed="${PG.view === v}">${l}</button>`).join("")}</div>`;
   const style = `<style>${LINECHART_CSS}${VIDEO_CSS}${CSS}</style>`;
-  if (PG.view === "library") return style + `<div class="pg-top">${seg}</div>` + renderLibrary();
+  const own = C.standalone ? "" : `<a class="btn sm ghost" href="/programs${C.A.name === "demo" ? "?demo" : ""}" target="_blank" rel="noopener" style="margin-left:auto">Open on its own ↗</a>`;
+  if (PG.view === "library") return style + `<div class="pg-top">${seg}${own}</div>` + renderLibrary();
   if (PG.clientId && client(PG.clientId)) return style + renderClient();
-  return style + `<div class="pg-top">${seg}</div>` + renderClientList();
+  return style + `<div class="pg-top">${seg}${own}</div>` + renderClientList();
 }
 
 function renderClientList(){

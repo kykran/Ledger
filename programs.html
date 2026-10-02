@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Programs · Trainer Tally</title>
+  <meta name="theme-color" content="#f5f0e6" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#101113" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+  <style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)} body{margin:0} [hidden]{display:none!important}
+    .pa-bar{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding:12px 24px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+    .pa-brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:16px;letter-spacing:-.02em;margin-right:auto;color:var(--ink);text-decoration:none}
+    .pa-main{padding:22px 24px 80px;display:flex;flex-direction:column;gap:18px;max-width:1180px;margin:0 auto;width:100%}
+    @media (max-width:900px){.pa-bar{padding:10px 16px}.pa-main{padding:16px 16px 60px}}
+  </style>
+</head>
+<body>
+  <header class="pa-bar">
+    <a class="pa-brand" href="/programs"><span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3.5 9.5v5M6.5 7v10M17.5 7v10M20.5 9.5v5M6.5 12h11"/></svg></span>Programs</a>
+    <span class="small muted" id="pa-who"></span>
+    <a class="btn sm" href="/" id="pa-home">Trainer Tally</a>
+  </header>
+  <main class="pa-main" id="main"><div class="card"><div class="empty"><b>Loading…</b></div></div></main>
+  <div id="modal"></div>
+  <script type="module" src="/src/programs-app.js"></script>
+</body>
+</html>

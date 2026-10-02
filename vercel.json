@@ -30,6 +30,10 @@
     {
       "source": "/p/:token",
       "destination": "/program.html"
+    },
+    {
+      "source": "/programs",
+      "destination": "/programs.html"
     }
   ],
   "functions": {
