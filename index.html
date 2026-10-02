@@ -11,6 +11,13 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+  <script>
+    // Reopen on the side you used last. Coming from Programs never shows billing first. Skipped during sign-in redirects.
+    try { var q = new URLSearchParams(location.search);
+      if (q.get("side") === "billing"){ localStorage.setItem("tt-side", "billing"); history.replaceState(null, "", location.pathname); }
+      else if (localStorage.getItem("tt-side") === "programs" && !location.search && !location.hash) location.replace("/programs");
+    } catch (e) {}
+  </script>
   <style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)} body{margin:0} [hidden]{display:none!important}</style>
 </head>
 <body>

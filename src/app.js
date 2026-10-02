@@ -933,6 +933,12 @@ function renderSettings(){
   </section></div>`;
 }
 
+/* ---------- switching to the Programs side (its own page, no money on screen) ---------- */
+function goPrograms(){
+  try { if (A.name !== "demo") localStorage.setItem("tt-side", "programs"); } catch(e){}
+  location.href = A.name === "demo" ? "/programs?demo" : "/programs";
+}
+
 /* ---------- reconcile ---------- */
 function recPeriod(){
   const R = S.rec || (S.rec = {mode:"month", at:new Date(), open:{}});
@@ -1316,6 +1322,7 @@ function applyBillVisibility(){
 /* ---------- actions ---------- */
 async function onClick(e){
   const tabBtn = e.target.closest("[data-tab]");
+  if (tabBtn && tabBtn.getAttribute("data-tab") === "programs"){ e.preventDefault(); goPrograms(); return; }
   if (tabBtn){ e.preventDefault(); if (S.tour != null) tourEnd(); S.tab = tabBtn.getAttribute("data-tab"); S.confirmReset = false; closeModal(); render(); window.scrollTo({top:0}); return; }
   const el = e.target.closest("[data-act]"); if (!el) return;
   const act = el.getAttribute("data-act"), id = el.getAttribute("data-id");
@@ -1353,7 +1360,7 @@ async function onClick(e){
     case "rec-mark": { const k = el.getAttribute("data-week"), a = parseDay(k), D = recData(M, {a, b:addDays(a,7)}); saveProfile({reconciled:{...(P("reconciled")||{}), [k]:{at:new Date().toISOString(), n:D.tot.done, net:Math.round(D.tot.net)}}}).then(()=>toast("Week reconciled")).catch(()=>{}); break; }
     case "rec-unmark": { const k = el.getAttribute("data-week"), cur = {...(P("reconciled")||{})}; delete cur[k]; saveProfile({reconciled:cur}).catch(()=>{}); break; }
     case "rec-go": S.tab = "reconcile"; S.rec = {...(S.rec||{open:{}}), mode:"week", at:parseDay(el.getAttribute("data-week")), open:(S.rec&&S.rec.open)||{}}; render(); window.scrollTo({top:0}); break;
-    case "goto-programs": S.tab = "programs"; if (PROGS()) PROGS().state.clientId = null; render(); window.scrollTo({top:0}); break;
+    case "goto-programs": goPrograms(); break;
     case "rec-open": { const id = el.getAttribute("data-id"); S.rec.open[id] = !S.rec.open[id]; render(); break; }
     case "rec-csv": exportReconcile(); break;
     case "week-open": { const w = el.getAttribute("data-week"); S.weekOpen = S.weekOpen === w ? null : w; render(); break; }

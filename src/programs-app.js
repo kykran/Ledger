@@ -65,7 +65,7 @@ async function start(){
       : `<div class="card"><div class="empty"><b>Couldn't load</b><span>Check your connection and refresh.</span></div></div>`;
     return;
   }
-  if (info.account && info.account.email) $("#pa-who").textContent = info.account.email;
+  if (!demo){ try { localStorage.setItem("tt-side", "programs"); } catch (e) {} }
   let gotP = false, gotC = false;
   let modelStarted = false;
   const go = () => { if (gotP && gotC){ S.ready = true; render(); if (!modelStarted && S.prof && S.prof.setupDone){ modelStarted = true; loadModel(); } else if (S.M && !S.calLoading){ S.M = globalThis.TallyEngine.compute({ profile: S.prof, clients: S.clients, events: S.M.ctx.events, now: new Date() }); render(); } } };

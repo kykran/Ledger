@@ -14,14 +14,14 @@
     .pa-bar{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding:12px 24px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
     .pa-brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:16px;letter-spacing:-.02em;margin-right:auto;color:var(--ink);text-decoration:none}
     .pa-main{padding:22px 24px 80px;display:flex;flex-direction:column;gap:18px;max-width:1180px;margin:0 auto;width:100%}
+    .pa-switch{color:var(--muted);font-weight:500}
     @media (max-width:900px){.pa-bar{padding:10px 16px}.pa-main{padding:16px 16px 60px}}
   </style>
 </head>
 <body>
   <header class="pa-bar">
     <a class="pa-brand" href="/programs"><span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3.5 9.5v5M6.5 7v10M17.5 7v10M20.5 9.5v5M6.5 12h11"/></svg></span>Programs</a>
-    <span class="small muted" id="pa-who"></span>
-    <a class="btn sm" href="/" id="pa-home">Trainer Tally</a>
+    <a class="btn sm ghost pa-switch" href="/?side=billing" id="pa-home" title="Switch to the billing side"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5h12v17l-2.5-1.6L13 20.5l-2.5-1.6L8 20.5l-2-1.3z"/><path d="M9 8.5h6M9 12h6"/></svg><span>Billing</span></a>
   </header>
   <main class="pa-main" id="main"><div class="card"><div class="empty"><b>Loading…</b></div></div></main>
   <div id="modal"></div>
