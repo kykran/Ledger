@@ -222,6 +222,9 @@ const sessionsIn = (M, a, b) => E.sessionsIn(M, a, b);
 const attention = M => E.attention(M);
 const fillTpl = (t, v) => E.fillTpl(t, v);
 const messageText = (c, kind, monthK) => E.messageText(S.M, c, kind, monthK);
+const payerOf = c => S.M ? E.payerOf(S.M, c) : null;
+const dependentsOf = c => S.M ? E.dependentsOf(S.M, c) : [];
+const payLine = c => { const p = payerOf(c), d = dependentsOf(c); return p ? ` · paid by ${esc(p.name)}` : d.length ? ` · pays for ${esc(d.map(x=>x.name).join(", "))}` : ""; };
 
 /* ---------- chrome ---------- */
 const inAppNow = () => S.screen === "data" && S.profLoaded && S.clientsLoaded && !!(S.prof && S.prof.setupDone);
@@ -509,7 +512,7 @@ function renderClients(M){
     const rate = st.bill === "membership" ? `${money(num(c.fee))}/mo` : st.bill === "package" ? `${money(st.perSession||0)}/session` : `${money(st.rate)}/session`;
     const bal = st.bill === "package" ? punch(st) : st.bill === "payg" ? `<span class="small muted">Paid at session</span>` : `<div style="font-weight:600">${st.balance>0.5?money(st.balance)+" due":"Paid up"}</div>${st.running?`<div class="small muted">${money(st.running)} this month so far</div>`:""}`;
     return `<tr>
-      <td><div class="who">${avatar(c)}<div style="min-width:0"><a href="#" class="n" data-act="edit" data-id="${c.id}">${esc(c.name)}</a><div class="s">${BILLING[st.bill].label} · ${rate}${c.noRent?" · no rent":""}</div></div></div></td>
+      <td><div class="who">${avatar(c)}<div style="min-width:0"><a href="#" class="n" data-act="edit" data-id="${c.id}">${esc(c.name)}</a><div class="s">${BILLING[st.bill].label} · ${rate}${c.noRent?" · no rent":""}${payLine(c)}</div></div></div></td>
       <td>${chipFor(st)}</td><td>${bal}</td>
       <td class="num">${st.pace ? st.pace.toFixed(1) : "–"}</td>
       <td class="small">${fmtD(st.last)}</td><td class="small">${fmtD(st.next)}</td>
@@ -548,13 +551,13 @@ function renderBilling(M){
   </div>
   <section class="card" data-tour="bills"><div class="card-h"><h2>Monthly bills</h2><span class="small muted">${k===cur?"Monthly-bill clients are due at month end":"Sessions × rate, or membership fee"}</span></div>
     ${monthly.length ? `<div class="tablewrap"><table><thead><tr><th>Client</th><th>Plan</th><th class="num">Sessions</th><th class="num">Amount</th><th class="num">Paid</th><th>Status</th><th></th></tr></thead><tbody>
-    ${monthly.map(({c,st,inv}) => `<tr><td><div class="who">${avatar(c)}<a href="#" class="n" data-act="edit" data-id="${c.id}">${esc(c.name)}</a></div></td><td class="small">${BILLING[st.bill].label}</td>
+    ${monthly.map(({c,st,inv}) => `<tr><td><div class="who">${avatar(c)}<div style="min-width:0"><a href="#" class="n" data-act="edit" data-id="${c.id}">${esc(c.name)}</a>${payLine(c)?`<div class="s">${payLine(c).slice(3)}</div>`:""}</div></div></td><td class="small">${BILLING[st.bill].label}</td>
       <td class="num">${inv.n}${inv.sched?`<span class="muted"> +${inv.sched}</span>`:""}</td><td class="num" style="font-weight:600">${money(inv.amount)}</td><td class="num">${money(inv.paid)}</td><td>${stateChip(inv)}</td>
       <td><div class="rowacts"><button class="btn sm" data-act="msg" data-id="${c.id}" data-kind="invoice" data-month="${inv.month}">Bill</button>${inv.state!=="paid"?`<button class="btn sm" data-act="payment" data-id="${c.id}" data-amount="${Math.max(0,inv.amount-inv.paid)}">Log payment</button>`:""}</div></td></tr>`).join("")}
     </tbody></table></div>` : `<div class="empty">No monthly-bill or membership clients had sessions this month.</div>`}
   </section>
   <section class="card"><div class="card-h"><h2>Packages</h2></div>
-    ${pkgs.length ? `<div class="list">${pkgs.map(({c,p}) => `<div><span class="who">${avatar(c)}<span><b>${esc(c.name)}</b> · ${num(p.size)} sessions · ${money(num(p.price))}</span></span>${p.paidDate?`<span class="chip ok">Paid ${fmtD(parseDay(p.paidDate))}</span>`:`<button class="btn sm" data-act="payment" data-id="${c.id}">Mark paid</button>`}</div>`).join("")}</div>` : `<div class="empty">No packages sold or started this month.</div>`}
+    ${pkgs.length ? `<div class="list">${pkgs.map(({c,p}) => `<div><span class="who">${avatar(c)}<span><b>${esc(c.name)}</b> · ${num(p.size)} sessions · ${money(num(p.price))}${payerOf(c)?` · paid by ${esc(payerOf(c).name)}`:""}</span></span>${p.paidDate?`<span class="chip ok">Paid ${fmtD(parseDay(p.paidDate))}</span>`:`<button class="btn sm" data-act="payment" data-id="${c.id}">Mark paid</button>`}</div>`).join("")}</div>` : `<div class="empty">No packages sold or started this month.</div>`}
   </section>
   ${payg.length ? `<section class="card"><div class="card-h"><h2>Pay as you go</h2></div><div class="list">${payg.map(({c,m}) => `<div><span class="who">${avatar(c)}<span><b>${esc(c.name)}</b> · ${m.n} session${m.n===1?"":"s"}</span></span><span style="font-weight:600">${money(m.earned)}</span></div>`).join("")}</div></section>` : ""}`;
 }
@@ -1006,6 +1009,10 @@ function renderModal(){
       <div class="field" data-bill-show="membership"><label for="ed-inc">Sessions included</label><input id="ed-inc" type="number" min="0" step="1" value="${esc(c.included ?? 0)}"><span class="hint">0 = unlimited</span></div>
       <div class="field" data-bill-show="membership"><label for="ed-over">Extra session rate ($)</label><input id="ed-over" type="number" min="0" step="1" value="${esc(c.overageRate ?? "")}"></div>
       <div class="field" data-bill-show="tab membership"><label for="ed-bs">Billing starts</label><input id="ed-bs" type="date" value="${esc(c.billingStart || P("historyStart"))}"><span class="hint">First month you bill them here</span></div>
+      ${(() => { const deps = m.id ? dependentsOf(c) : []; const cur = c.paidBy || "";
+        if (deps.length) return `<div class="field full"><label>Paid for by</label><input value="${esc(firstName(c.name))} pays for ${esc(deps.map(x=>x.name).join(", "))}" disabled><span class="hint">A client who pays for someone else can't also be paid for.</span></div>`;
+        const opts = S.clients.filter(x => x.id !== m.id && !x.paidBy).sort((a,b)=>a.name.localeCompare(b.name));
+        return `<div class="field full"><label for="ed-paidby">Paid for by</label><select id="ed-paidby"><option value="">Themselves</option>${opts.map(x=>`<option value="${esc(x.id)}" ${x.id===cur?"selected":""}>${esc(x.name)}${x.active===false?" (inactive)":""}</option>`).join("")}</select><span class="hint">If another client pays, bills and renewal messages go to them and show on their messages too.</span></div>`; })()}
       <div class="field"><label for="ed-email">Email</label><input id="ed-email" type="email" value="${esc(c.email||"")}"></div>
       <div class="field"><label for="ed-phone">Phone</label><input id="ed-phone" type="tel" value="${esc(c.phone||"")}"></div>
       <label class="check full"><input type="checkbox" id="ed-norent" ${c.noRent?"checked":""}> No studio rent for this client</label>
@@ -1063,9 +1070,10 @@ function renderModal(){
       <div class="actions"><button class="btn primary" data-act="save-payment" ${S.readOnly?"disabled":""}>Save payment</button></div>`;
     }
   } else if (m.type === "msg"){
-    const c = client(m.id);
-    title = "Message · " + c.name;
-    if (m.text == null) m.text = messageText(c, m.kind, m.month);
+    const c0 = client(m.id), bt = E.billTo(S.M, c0);
+    const c = {...c0, phone:bt.phone, email:bt.email};
+    title = "Message · " + (bt.payer ? `${bt.payer.name} (for ${c0.name})` : c0.name);
+    if (m.text == null) m.text = messageText(c0, m.kind, m.month);
     const text = m.text;
     const subj = encodeURIComponent(m.kind === "invoice" ? "Your training bill" : "Your training package");
     body = `<div class="field"><label for="msg-text">Message</label><textarea id="msg-text" rows="6">${esc(text)}</textarea></div>
@@ -1194,6 +1202,7 @@ async function onClick(e){
         packagePrice: val("ed-price") === "" ? null : num(val("ed-price")), fee: num(val("ed-fee")), included: Math.max(0, Math.round(num(val("ed-inc")))),
         overageRate: val("ed-over") === "" ? null : num(val("ed-over")), billingStart: val("ed-bs") || null,
         email: val("ed-email").trim(), phone: val("ed-phone").trim(), noRent: chk("ed-norent"), noRentNames: val("ed-nrn").split(",").map(s=>s.trim()).filter(Boolean), noAutoNotice: chk("ed-noauto"), active: chk("ed-active"),
+        paidBy: document.getElementById("ed-paidby") ? (val("ed-paidby") || null) : (old.paidBy || null),
         packages: old.packages || [], payments: old.payments || []};
       const isNew = !m.id;
       closeModal(); saveClient(c).then(()=>toast(isNew ? "Client added" : "Saved")).catch(()=>{});

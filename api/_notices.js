@@ -1,7 +1,7 @@
 // Decides which automatic emails are due for one trainer and puts them in the outbox.
 // Times are the trainer's local time (profile.timeZone, saved by the app).
 import { admin } from "./_lib.js";
-import { attention, weeklySummary, monthlySummary, renewalEmail, DEFAULTS, ymd } from "../src/engine.js";
+import { attention, weeklySummary, monthlySummary, renewalEmail, billTo, DEFAULTS, ymd } from "../src/engine.js";
 import { deliver, mailReady } from "./_mail.js";
 
 const cfgOf = profile => ({ ...DEFAULTS.notices, ...((profile && profile.notices) || {}) });
@@ -32,10 +32,11 @@ export function dueNotices(model, { authEmail, appUrl, now = new Date() } = {}){
   // Renewal reminders to clients, between 9am and 7pm.
   if (cfg.renewals && cfg.renewals !== "off" && hour >= 9 && hour < 19){
     for (const a of attention(M)){
-      if (a.kind !== "renew" || a.c.noAutoNotice || !a.c.email || !a.st.current) continue;
+      const to = billTo(M, a.c).email;
+      if (a.kind !== "renew" || a.c.noAutoNotice || !to || !a.st.current) continue;
       const pkg = a.st.current.id || a.st.current.start || a.st.current.index;
       const m = renewalEmail(M, a.c);
-      out.push({ kind: "renewal", client_id: a.c.id, dedupe_key: `renewal:${a.c.id}:${pkg}`, to_email: a.c.email,
+      out.push({ kind: "renewal", client_id: a.c.id, dedupe_key: `renewal:${a.c.id}:${pkg}`, to_email: to,
         subject: m.subject, html: m.html, body_text: m.text, status: cfg.renewals === "auto" ? "queued" : "held" });
     }
   }

@@ -308,17 +308,68 @@ export function attention(M){
 }
 
 export function fillTpl(t, vars){ return String(t||"").replace(/\{(\w+)\}/g, (m,k) => vars[k] !== undefined ? vars[k] : m); }
-export function messageText(M, c, kind, monthK){
-  CTX = M.ctx; const st = M.stats[c.id], me = P("trainerName") || "";
-  if (kind === "renew"){ const left = Math.max(0, st.remaining||0); return fillTpl(P("renewalTemplate"), {first:firstName(c.name), left, s:left===1?"":"s", size:st.nextSize, price:Math.round(st.nextPrice).toLocaleString(), me}).replace(/ - $/,""); }
-  if (kind === "unpaid") return `Hi ${firstName(c.name)}! Quick reminder that payment for your ${st.current ? st.current.size + "-session " : ""}package (${money(st.unpaidAmt)}) is still open. Thanks!${me?" - "+me:""}`;
+/* "Paid for by": a client can be billed to another client (e.g. a spouse or parent pays). */
+export function payerOf(M, c){
+  if (!c || !c.paidBy || c.paidBy === c.id) return null;
+  const p = (M.ctx.clients || []).find(x => x.id === c.paidBy);
+  return p && !p.paidBy ? p : null;
+}
+export function dependentsOf(M, c){
+  return (M.ctx.clients || []).filter(x => x.paidBy === c.id && x.id !== c.id && x.active !== false && M.stats[x.id]);
+}
+/* Where messages about this client should go: the payer's contact details if someone else pays. */
+export function billTo(M, c){ const p = payerOf(M, c); return p ? {name:p.name, email:p.email || c.email || "", phone:p.phone || c.phone || "", payer:p} : {name:c.name, email:c.email || "", phone:c.phone || "", payer:null}; }
+function ownMessage(M, c, kind, monthK, first){
+  const st = M.stats[c.id], me = P("trainerName") || "";
+  if (kind === "renew"){ const left = Math.max(0, st.remaining||0); return fillTpl(P("renewalTemplate"), {first, left, s:left===1?"":"s", size:st.nextSize, price:Math.round(st.nextPrice).toLocaleString(), me}).replace(/ - $/,""); }
+  if (kind === "unpaid") return `Hi ${first}! Quick reminder that payment for your ${st.current ? st.current.size + "-session " : ""}package (${money(st.unpaidAmt)}) is still open. Thanks!${me?" - "+me:""}`;
   const invs = st.invoices || [];
   const inv = monthK ? invs.find(i => i.month === monthK) : ([...invs].reverse().find(i => i.due && i.state !== "paid") || invs[invs.length-1]);
   if (!inv) return "";
-  let t = fillTpl(P("invoiceTemplate"), {first:firstName(c.name), month:mLabel(inv.month,true), amount:Math.round(inv.amount).toLocaleString(), details:inv.details, me});
+  let t = fillTpl(P("invoiceTemplate"), {first, month:mLabel(inv.month,true), amount:Math.round(inv.amount).toLocaleString(), details:inv.details, me});
   const otherOpen = st.balance - Math.max(0, inv.amount - inv.paid);
   if (otherOpen > 0.5) t += ` Total balance including earlier months: ${money(st.balance)}.`;
   return t.replace(/ - $/,"");
+}
+/* One line per client this person pays for, added to their own messages. */
+function dependentLines(M, c, kind, monthK){
+  const lines = []; let extraAmt = 0;
+  for (const d of dependentsOf(M, c)){
+    const st = M.stats[d.id], dn = firstName(d.name);
+    if (st.bill === "package"){
+      if (st.status === "setup") continue;
+      if (st.unpaidAmt > 0.5) lines.push(`${dn}'s package (${money(st.unpaidAmt)}) is also still open.`);
+      else if (kind === "renew" || st.status === "low" || st.status === "out") lines.push(st.remaining > 0 ? `${dn} has ${st.remaining} session${st.remaining===1?"":"s"} left on their package.` : `${dn} is out of sessions; their next ${st.nextSize}-session package is ${money(st.nextPrice)}.`);
+    } else if (st.bill !== "payg"){
+      const invs = st.invoices || [];
+      const k = monthK || ([...invs].reverse().find(i => i.due && i.state !== "paid") || invs[invs.length-1] || {}).month;
+      const inv = invs.find(i => i.month === k);
+      if (inv && inv.amount > 0.5){ extraAmt += Math.max(0, inv.amount - inv.paid); lines.push(`Plus ${dn}: ${money(inv.amount)} (${inv.details})${inv.paid > 0.5 && inv.paid < inv.amount - 0.5 ? `, ${money(inv.paid)} already paid` : inv.state === "paid" ? ", already paid" : ""}.`); }
+    }
+  }
+  return {lines, extraAmt};
+}
+export function messageText(M, c, kind, monthK){
+  CTX = M.ctx; const me = P("trainerName") || "";
+  const payer = payerOf(M, c);
+  const sign = t => { let tail = me ? " - " + me : ""; let body = tail && t.endsWith(tail) ? t.slice(0, -tail.length) : (tail = "", t);
+    const m = body.match(/\s+(Thanks!?|Thank you!?)$/i); if (m){ body = body.slice(0, -m[0].length); tail = " " + m[1] + tail; }
+    return { body, tail }; };
+  if (payer){
+    // Addressed to whoever pays, about this client's sessions.
+    const t = ownMessage(M, c, kind, monthK, firstName(payer.name)); if (!t) return "";
+    const {body, tail} = sign(t);
+    return `${body} (This is for ${firstName(c.name)}'s training.)${tail}`;
+  }
+  const t = ownMessage(M, c, kind, monthK, firstName(c.name));
+  const {lines, extraAmt} = dependentLines(M, c, kind, monthK);
+  if (!t || !lines.length) return t;
+  const {body, tail} = sign(t);
+  let total = "";
+  if (extraAmt > 0.5 && kind === "invoice"){ const st = M.stats[c.id], invs = st.invoices || [];
+    const inv = monthK ? invs.find(i => i.month === monthK) : ([...invs].reverse().find(i => i.due && i.state !== "paid") || invs[invs.length-1]);
+    if (inv) total = ` Together that's ${money(inv.amount + extraAmt)}.`; }
+  return `${body} ${lines.join(" ")}${total}${tail}`;
 }
 
 /* ======================================================================
