@@ -277,3 +277,13 @@ td.num,th.num{text-align:right;white-space:nowrap}
 .chip.neutral{background:var(--surface2);color:var(--ink2)}
 .aitem.so .meta{padding-left:0} .aitem.so .rowacts{grid-row:1/span 3}
 .warn{color:var(--warn)}
+
+/* weekly breakdown */
+.weeks .wkrow{cursor:pointer}
+.weeks .wkrow:hover td{background:var(--surface2)}
+.weeks .wkrow.open td{border-bottom-color:transparent;font-weight:600}
+.weeks .caret{display:inline-block;width:12px;color:var(--muted)}
+.weeks .wkdetail > td{padding:0 0 12px 20px;background:var(--bg)}
+.weeks table.sub{font-size:12.5px}
+.weeks table.sub td{padding:7px 8px}
+tr.total td{border-top:2px solid var(--line)}

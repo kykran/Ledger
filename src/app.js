@@ -564,8 +564,9 @@ function renderBilling(M){
 
 /* ---------- trends ---------- */
 function renderTrends(M){
-  const seg = `<div class="seg trendseg" role="group" aria-label="Trends view">${[["income","Income"],["clients","Clients"],["pricing","Pricing"]].map(([v,l])=>`<button data-act="trend-view" data-view="${v}" aria-pressed="${S.trendView===v}">${l}</button>`).join("")}</div>`;
+  const seg = `<div class="seg trendseg" role="group" aria-label="Trends view">${[["income","Income"],["weekly","Weekly"],["clients","Clients"],["pricing","Pricing"]].map(([v,l])=>`<button data-act="trend-view" data-view="${v}" aria-pressed="${S.trendView===v}">${l}</button>`).join("")}</div>`;
   if (S.trendView === "clients") return seg + renderClientTrends(M);
+  if (S.trendView === "weekly") return seg + renderWeekly(M);
   if (S.trendView === "pricing") return seg + renderPricing(M);
   return seg + renderIncomeTrends(M) + taxCard(M);
 }
@@ -610,6 +611,67 @@ function renewalForecast(M){
   const list = S.clients.filter(c => c.active !== false && M.stats[c.id].bill === "package" && M.stats[c.id].runout).map(c => ({c, st:M.stats[c.id]})).filter(x => x.st.runout < addDays(M.now, 45)).sort((a,b)=>a.st.runout-b.st.runout);
   if (!list.length) return "";
   return `<h3>Renewals coming up</h3><div class="list">${list.map(({c,st}) => `<div><span class="who">${avatar(c)}<span>${esc(c.name)}</span></span><span class="small">${st.remaining<=0?"now":(st.runoutEst?"~":"")+fmtD(st.runout)} · ${money(st.nextPrice)}</span></div>`).join("")}</div>`;
+}
+
+/* ---------- weekly ---------- */
+/* What one client is worth in a normal week, from their current price and last-8-week pace. */
+function typicalWeek(M){
+  const r = rentCfg();
+  const rows = S.clients.filter(c => c.active !== false && M.stats[c.id].pace > 0).map(c => {
+    const st = M.stats[c.id], n = st.pace;
+    const per = st.bill === "membership" ? num(c.fee) / Math.max(1, n * 52/12) : (st.perSession || st.rate || 0);
+    const rentPer = c.noRent ? 0 : r.mode === "perSession" ? num(r.perSession) * st.rentShare : r.mode === "percent" ? per * num(r.percent)/100 * st.rentShare : 0;
+    return {c, st, n, per, rentPer, gross:n*per, rent:n*rentPer, net:n*(per-rentPer)};
+  }).sort((a,b) => b.net - a.net);
+  const tot = rows.reduce((a,x) => ({n:a.n+x.n, gross:a.gross+x.gross, rent:a.rent+x.rent, net:a.net+x.net}), {n:0, gross:0, rent:0, net:0});
+  if (r.mode === "monthly"){ const wk = num(r.monthly) * 12/52; tot.rent += wk; tot.net -= wk; }
+  return {rows, tot};
+}
+function weekRows(M){
+  const r = rentCfg(), cur = sow(M.now), out = [];
+  for (let i = -11; i <= 4; i++){
+    const a = addDays(cur, 7*i), b = addDays(a, 7);
+    const list = sessionsIn(M, a, b).filter(s => s.billable !== false);
+    const done = list.filter(s => !s.future);
+    const earned = list.reduce((x,s)=>x+s.value,0);
+    let rent = list.reduce((x,s)=>x+s.rent,0);
+    if (r.mode === "monthly") rent += num(r.monthly) * 12/52;
+    const by = {};
+    for (const s of list){ const e = by[s.c.id] || (by[s.c.id] = {c:s.c, n:0, booked:0, earned:0, rent:0}); if (s.future) e.booked++; else e.n++; e.earned += s.value; e.rent += s.rent; }
+    out.push({key:ymd(a), a, b, i, n:done.length, booked:list.length-done.length, earned, rent, net:earned-rent, clients:Object.values(by).sort((x,y)=>(y.earned-y.rent)-(x.earned-x.rent))});
+  }
+  return out;
+}
+function renderWeekly(M){
+  const T = typicalWeek(M), W = weekRows(M);
+  const past = W.filter(w => w.i < 0), last8 = past.slice(-8);
+  const avg = k => last8.length ? last8.reduce((a,w)=>a+w[k],0)/last8.length : 0;
+  const thisW = W.find(w => w.i === 0);
+  const wkLabel = w => `${fmtD(w.a)} – ${fmtD(addDays(w.b,-1))}`;
+  const rowsHtml = [...W].reverse().map(w => {
+    const open = S.weekOpen === w.key;
+    const tag = w.i === 0 ? ' <span class="chip info">This week</span>' : w.i > 0 ? ' <span class="chip neutral">Booked</span>' : "";
+    const sess = w.i > 0 ? `${w.booked}` : `${w.n}${w.booked ? `<span class="muted"> +${w.booked}</span>` : ""}`;
+    const detail = open ? `<tr class="wkdetail"><td colspan="6">${w.clients.length ? `<table class="sub"><thead><tr><th>Client</th><th class="num">Sessions</th><th class="num">Earned</th><th class="num">Rent</th><th class="num">Net</th></tr></thead><tbody>${w.clients.map(x => `<tr><td><div class="who">${avatar(x.c)}<span class="n">${esc(x.c.name)}</span></div></td><td class="num">${x.n}${x.booked?`<span class="muted"> +${x.booked} booked</span>`:""}</td><td class="num">${money(x.earned)}</td><td class="num">${money(x.rent)}</td><td class="num" style="font-weight:600">${money(x.earned-x.rent)}</td></tr>`).join("")}</tbody></table>` : `<div class="empty">No sessions this week.</div>`}</td></tr>` : "";
+    return `<tr class="wkrow${open?" open":""}" data-act="week-open" data-week="${w.key}" tabindex="0" role="button" aria-expanded="${open}"><td><span class="caret" aria-hidden="true">${open?"▾":"▸"}</span> ${wkLabel(w)}${tag}</td><td class="num">${sess}</td><td class="num">${money(w.earned)}</td><td class="num">${money(w.rent)}</td><td class="num" style="font-weight:600">${money(w.net)}</td><td class="num small muted">${w.n+w.booked ? money2(w.net/(w.n+w.booked)) : "–"}</td></tr>${detail}`;
+  }).join("");
+  return `<div class="stats">
+      <div class="stat"><span class="k">Typical week</span><span class="v">${T.tot.n.toFixed(1)}</span><span class="d">sessions at your current setup</span></div>
+      <div class="stat"><span class="k">Typical week net</span><span class="v">${money(T.tot.net)}</span><span class="d">${money(T.tot.gross)} earned · ${money(T.tot.rent)} rent</span></div>
+      <div class="stat"><span class="k">Last 8 weeks, avg</span><span class="v">${avg("n").toFixed(1)}</span><span class="d">${money(avg("net"))} net a week</span></div>
+      <div class="stat"><span class="k">This week</span><span class="v">${thisW.n}<small class="muted" style="font-size:14px"> +${thisW.booked} booked</small></span><span class="d">${money(thisW.net)} net if all happen</span></div>
+    </div>
+  <section class="card" data-tour="weekly"><div class="card-h"><h2>Week by week</h2><span class="small muted">Monday to Sunday · tap a week for the client breakdown</span></div>
+    <div class="tablewrap"><table class="weeks"><thead><tr><th>Week</th><th class="num">Sessions</th><th class="num">Earned</th><th class="num">Rent</th><th class="num">Net</th><th class="num">Net / session</th></tr></thead><tbody>${rowsHtml}</tbody></table></div>
+    <p class="small muted">Past weeks count sessions that happened. Grey "+" numbers are booked but still ahead.${rentCfg().mode==="monthly"?" Monthly studio rent is spread evenly across weeks.":""}</p>
+  </section>
+  <section class="card"><div class="card-h"><h2>Your current setup, per week</h2><span class="small muted">each client's current price × their pace over the last 8 weeks</span></div>
+    ${T.rows.length ? `<div class="tablewrap"><table><thead><tr><th>Client</th><th class="num">Per week</th><th class="num">Price / session</th><th class="num">Rent / session</th><th class="num">Net / week</th><th class="num">Share</th></tr></thead><tbody>
+    ${T.rows.map(x => `<tr><td><div class="who">${avatar(x.c)}<div style="min-width:0"><a href="#" class="n" data-act="edit" data-id="${x.c.id}">${esc(x.c.name)}</a><div class="s">${BILLING[x.st.bill].label}${payLine(x.c)}</div></div></div></td><td class="num">${x.n.toFixed(1)}</td><td class="num">${money2(x.per)}</td><td class="num">${x.rentPer ? money2(x.rentPer) : "–"}</td><td class="num" style="font-weight:600">${money(x.net)}</td><td class="num">${T.tot.net > 0 ? Math.round(100*x.net/T.tot.net) : 0}%</td></tr>`).join("")}
+    <tr class="total"><td style="font-weight:700">Total</td><td class="num" style="font-weight:700">${T.tot.n.toFixed(1)}</td><td class="num">${T.tot.n ? money2(T.tot.gross/T.tot.n) : "–"}</td><td class="num">${T.tot.n ? money2(T.tot.rent/T.tot.n) : "–"}</td><td class="num" style="font-weight:700">${money(T.tot.net)}</td><td></td></tr>
+    </tbody></table></div>
+    <p class="small muted">Per year at this pace: ${money(T.tot.net*52)} net (${money(T.tot.net*48)} with 4 weeks off).</p>` : `<div class="empty">Once clients have sessions in the last 8 weeks, their weekly value shows here.</div>`}
+  </section>`;
 }
 
 /* ---------- client trends ---------- */
@@ -1165,6 +1227,7 @@ async function onClick(e){
     case "so-dispute": { const sid = el.getAttribute("data-sid"), mk = el.getAttribute("data-m"); const ms = S.studios.find(x => x.studioId === sid); openModal({type:"dispute", sid, month:mk, prev: ms && signoffFor(ms, mk)}); break; }
     case "so-send": { const m = S.modal; const note = val("so-note").trim(); if (!note){ toast("Add a note so the studio knows what to check"); break; } closeModal(); await signOff(m.sid, m.month, "disputed", note, Math.round(num(val("so-n")))); break; }
     case "trend-view": S.trendView = el.getAttribute("data-view"); render(); break;
+    case "week-open": { const w = el.getAttribute("data-week"); S.weekOpen = S.weekOpen === w ? null : w; render(); break; }
     case "goto-settings": { S.tab = "settings"; render(); const a = document.getElementById(el.getAttribute("data-anchor")); if (a) a.scrollIntoView({block:"start"}); break; }
     case "save-notices": saveProfile({notices:{renewals:val("nt-renew"), weekly:chk("nt-weekly"), monthly:chk("nt-monthly"), email:val("nt-email").trim()}}).then(()=>toast("Saved")).catch(()=>{}); break;
     case "save-tax": { const sa = val("tx-set"); saveProfile({tax:{enabled:chk("tx-on"), federal:num(val("tx-fed")), state:num(val("tx-state")), se:chk("tx-se"), setAside: sa === "" ? null : num(sa), expensesMonthly:num(val("tx-exp"))}}).then(()=>toast("Saved")).catch(()=>{}); break; }
@@ -1307,7 +1370,7 @@ async function start(adapter){
   document.addEventListener("click", onClick);
   document.addEventListener("change", onChange);
   document.addEventListener("input", onInput);
-  document.addEventListener("keydown", e => { if (e.key === "Escape"){ if (S.modal) closeModal(); else if (S.tour != null) tourEnd(); } });
+  document.addEventListener("keydown", e => { if ((e.key === "Enter" || e.key === " ") && e.target.matches && e.target.matches('tr[role="button"][data-act]')){ e.preventDefault(); e.target.click(); return; } if (e.key === "Escape"){ if (S.modal) closeModal(); else if (S.tour != null) tourEnd(); } });
   let rt; window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => S.M && drawCharts(S.M), 150); });
   try { const j = new URLSearchParams(location.search).get("join"); if (j){ localStorage.setItem("tt-join", j); history.replaceState(null, "", location.pathname); } } catch(e){}
   renderChrome();
