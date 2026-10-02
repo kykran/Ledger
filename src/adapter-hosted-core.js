@@ -117,10 +117,43 @@ export const adapter = {
     async videoUrl(path){ const { data, error } = await sb.storage.from("exercise-videos").createSignedUrl(path, 3600); if (error) throw fail(error); return data.signedUrl; },
     async deleteVideo(path){ await sb.storage.from("exercise-videos").remove([path]); },
     async listPrograms(){ const { data, error } = await query(() => sb.from("programs").select("id,client_id,data,updated_at").eq("user_id", session.user.id)); if (error) throw fail(error); return (data || []).map(r => ({ ...r.data, id: r.id, clientId: r.client_id, updatedAt: r.updated_at })); },
-    async saveProgram(p){ const { id, updatedAt, ...d } = p; const { error } = await sb.from("programs").upsert({ user_id: session.user.id, id, client_id: d.clientId, data: d, updated_at: new Date().toISOString() }); if (error) throw fail(error); },
+    async saveProgram(p){
+      const { id, updatedAt, ownerId, ownerName, shared, ...d } = p, now = new Date().toISOString();
+      // A program someone shared with me lives under their account: update it in place.
+      const { error } = shared
+        ? await sb.from("programs").update({ data: d, updated_at: now }).eq("user_id", ownerId).eq("id", id)
+        : await sb.from("programs").upsert({ user_id: session.user.id, id, client_id: d.clientId, data: d, updated_at: now });
+      if (error) throw fail(error);
+    },
     async deleteProgram(id){ const uid = session.user.id; const { error } = await sb.from("programs").delete().eq("user_id", uid).eq("id", id); if (error) throw fail(error); await sb.from("program_logs").delete().eq("user_id", uid).eq("program_id", id); },
     async logs(clientId){ const { data, error } = await query(() => sb.from("program_logs").select("*").eq("user_id", session.user.id).eq("client_id", clientId).order("logged_on")); if (error) throw fail(error); return data || []; },
-    async saveLogs(rows){ if (!rows.length) return; const uid = session.user.id, now = new Date().toISOString(); const { error } = await sb.from("program_logs").upsert(rows.map(r => ({ ...r, user_id: uid, source: "trainer", updated_at: now }))); if (error) throw fail(error); },
+    async saveLogs(rows, ownerId){ if (!rows.length) return; const uid = ownerId || session.user.id, now = new Date().toISOString(); const { error } = await sb.from("program_logs").upsert(rows.map(r => ({ ...r, user_id: uid, source: "trainer", updated_at: now }))); if (error) throw fail(error); },
+    async programLogs(ownerId, programId){ const { data, error } = await query(() => sb.from("program_logs").select("*").eq("user_id", ownerId).eq("program_id", programId).order("logged_on")); if (error) throw fail(error); return data || []; },
+    // Which days each client has anything logged (for the "workout not logged" to-do).
+    async logDates(){ const { data, error } = await sb.from("program_logs").select("client_id,logged_on").eq("user_id", session.user.id).gte("logged_on", new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10)); if (error) throw fail(error); return data || []; },
+    sharing: {
+      async ready(){ const { error } = await sb.from("program_shares").select("program_id").limit(1); return !error; },
+      async list(programId){ const { data, error } = await sb.from("program_shares").select("shared_email,created_at").eq("owner_id", session.user.id).eq("program_id", programId); if (error) throw fail(error); return data || []; },
+      async add(p, email, clientName, ownerName){ const { error } = await sb.from("program_shares").upsert({ owner_id: session.user.id, program_id: p.id, shared_email: email.trim().toLowerCase(), client_id: p.clientId, client_name: clientName, program_name: p.name || "", owner_name: ownerName || "" }); if (error) throw fail(error); },
+      async remove(programId, email){ const { error } = await sb.from("program_shares").delete().eq("owner_id", session.user.id).eq("program_id", programId).eq("shared_email", email); if (error) throw fail(error); },
+      // Programs other trainers shared with me, plus the exercises they use.
+      async withMe(){
+        const me = (session.user.email || "").toLowerCase();
+        const { data: sh, error } = await sb.from("program_shares").select("*").ilike("shared_email", me);
+        if (error) throw fail(error);
+        const programs = [], exercises = [];
+        for (const s of sh || []){
+          const { data } = await sb.from("programs").select("id,client_id,data,updated_at").eq("user_id", s.owner_id).eq("id", s.program_id).maybeSingle();
+          if (data) programs.push({ ...data.data, id: data.id, clientId: data.client_id, updatedAt: data.updated_at, ownerId: s.owner_id, ownerName: s.owner_name, shared: true, clientName: s.client_name });
+        }
+        for (const owner of [...new Set((sh || []).map(s => s.owner_id))]){
+          const { data } = await sb.from("exercises").select("id,data").eq("user_id", owner);
+          for (const r of data || []) exercises.push({ id: r.id, ...r.data, ownerId: owner });
+        }
+        return { programs, exercises };
+      },
+      async leave(ownerId, programId){ const me = (session.user.email || "").toLowerCase(); await sb.from("program_shares").delete().eq("owner_id", ownerId).eq("program_id", programId).ilike("shared_email", me); }
+    },
     async measurements(clientId){ const { data, error } = await query(() => sb.from("measurements").select("*").eq("user_id", session.user.id).eq("client_id", clientId).order("taken_on")); if (error) throw fail(error); return data || []; },
     async saveMeasurement(m){ const row = { ...m, user_id: session.user.id }; if (!row.id) delete row.id; const { error } = await sb.from("measurements").upsert(row); if (error) throw fail(error); },
     async deleteMeasurement(id){ const { error } = await sb.from("measurements").delete().eq("user_id", session.user.id).eq("id", id); if (error) throw fail(error); },

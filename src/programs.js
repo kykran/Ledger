@@ -3,22 +3,26 @@
  * app.js calls attach(ctx) once and then render()/onClick()/onChange()/onInput() while the Programs tab is open.
  * Data goes through ctx.A.programs (see adapter-hosted.js / programs-demo.js). */
 import { pid, newRow, newSession, newWeek, newProgram, copySession, copyWeek, repeatSession, repeatWeek, setCount,
-  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS } from "./programs-core.js";
+  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, programTodos } from "./programs-core.js";
 import { STARTER_EXERCISES } from "./exercise-seed.js";
 
 let C = null; // context from app.js
 const PG = { ready: null, loading: false, view: "clients", clientId: null, progId: null, week: 0, sub: "program",
-  lib: null, progs: null, logs: {}, meas: {}, clip: null, repeat: null, confirm: null, save: "", libQ: "", lift: "", link: {}, edEx: null, videoUrls: {} };
+  lib: null, progs: null, logs: {}, meas: {}, clip: null, repeat: null, confirm: null, save: "", libQ: "", lift: "", link: {}, edEx: null, videoUrls: {},
+  shared: [], sharedLib: [], sharing: false, shareList: null };
 const timers = {};
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const today = () => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
 const fmtDay = d => { if (!d) return "–"; const [y, m, dd] = String(d).slice(0, 10).split("-").map(Number); return new Date(y, m - 1, dd).toLocaleDateString(undefined, { month: "short", day: "numeric" }); };
 const num = v => { const x = parseFloat(v); return isFinite(x) ? x : null; };
-const P = () => PG.progs && PG.progs.find(p => p.id === PG.progId);
-const libById = () => Object.fromEntries((PG.lib || []).map(e => [e.id, e]));
+const P = () => PG.progs && [...PG.progs, ...PG.shared].find(p => p.id === PG.progId);
+const libById = () => Object.fromEntries([...(PG.sharedLib || []), ...(PG.lib || [])].map(e => [e.id, e]));
 const libByName = () => Object.fromEntries((PG.lib || []).map(e => [e.name.trim().toLowerCase(), e]));
-const client = id => C.S.clients.find(c => c.id === id);
+/* Programs other trainers shared with me show up as virtual clients: "sh:<owner>:<their client id>". */
+const sharedClients = () => { const out = {}; for (const p of PG.shared){ const id = "sh:" + p.ownerId + ":" + p.clientId; out[id] = out[id] || { id, name: p.clientName || "Client", shared: true, ownerId: p.ownerId, ownerName: p.ownerName, realId: p.clientId }; } return Object.values(out); };
+const client = id => C.S.clients.find(c => c.id === id) || sharedClients().find(c => c.id === id);
+const progsOf = c => c.shared ? PG.shared.filter(p => p.ownerId === c.ownerId && p.clientId === c.realId) : (PG.progs || []).filter(p => p.clientId === c.id);
 const redraw = () => C.render();
 
 /* ---------- loading ---------- */
@@ -29,6 +33,9 @@ async function load(){
     if (PG.ready.ok){
       const [lib, progs] = await Promise.all([C.A.programs.listExercises(), C.A.programs.listPrograms()]);
       PG.lib = lib; PG.progs = progs;
+      const sh = C.A.programs.sharing;
+      PG.sharing = sh ? await sh.ready().catch(() => false) : false;
+      if (PG.sharing){ try { const w = await sh.withMe(); PG.shared = w.programs; PG.sharedLib = w.exercises; } catch (e){} }
       if (!lib.length && !(C.S.prof && C.S.prof.programsSeeded)){
         const list = STARTER_EXERCISES.map(e => ({ id: pid("ex"), ...e }));
         await C.A.programs.saveExercises(list); PG.lib = list;
@@ -40,11 +47,40 @@ async function load(){
 }
 async function loadClient(id){
   try {
+    const sc = client(id);
+    if (sc && sc.shared){ const all = []; for (const p of progsOf(sc)) all.push(...await C.A.programs.programLogs(sc.ownerId, p.id)); PG.logs[id] = all; PG.meas[id] = []; return redraw(); }
     const [logs, meas] = await Promise.all([C.A.programs.logs(id), C.A.programs.measurements(id)]);
     PG.logs[id] = logs; PG.meas[id] = meas;
   } catch (e){ C.toast("Couldn't load this client's logs"); PG.logs[id] = PG.logs[id] || []; PG.meas[id] = PG.meas[id] || []; }
   if (C.A.programs.link) C.A.programs.link.get(id).then(l => { PG.link[id] = l || false; if (PG.clientId === id) redraw(); }).catch(() => {});
   redraw();
+}
+
+/* ---------- to-dos: calendar sessions without a planned workout ---------- */
+function todos(M){
+  M = M || (C.getModel && C.getModel());
+  if (!M || !PG.progs) return [];
+  return programTodos({ clients: C.S.clients, programs: PG.progs, now: M.now || new Date(), dismissed: (C.S.prof && C.S.prof.programsDismissed) || [],
+    sessionsOf: id => { const st = M.stats && M.stats[id]; return st ? [...st.past, ...st.future] : []; } });
+}
+const shortD = d => d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+function todoText(t){
+  const c = client(t.clientId), first = c ? c.name : "Client";
+  if (t.kind === "noprogram") return { who: first, what: `${t.n} session${t.n === 1 ? "" : "s"} on the calendar this week or next, and no program yet` };
+  const p = (PG.progs || []).find(x => x.id === t.progId), wl = p && p.weeks[t.week] ? p.weeks[t.week].label : "Week " + (t.week + 1);
+  return { who: first, what: t.kind === "noweek"
+    ? `${t.n} session${t.n === 1 ? "" : "s"} ${shortD(t.from)}–${shortD(t.to)}, but the program ends before ${wl}`
+    : `${t.n} session${t.n === 1 ? "" : "s"} ${shortD(t.from)}–${shortD(t.to)}, ${wl} has ${t.planned} workout${t.planned === 1 ? "" : "s"} planned` };
+}
+function renderTodos(){
+  if (C.modelLoading && C.modelLoading()) return `<section class="card"><div class="card-h"><h2>To do</h2><span class="small muted">Reading your calendar…</span></div></section>`;
+  const list = todos(); if (!list.length) return "";
+  const gaps = list.filter(t => t.kind !== "noprogram"), none = list.filter(t => t.kind === "noprogram");
+  const row = t => { const x = todoText(t); return `<div><span><b>${esc(x.who)}</b> · ${esc(x.what)}</span><span class="rowacts"><button class="btn sm primary" data-act="pg-todo-open" data-key="${esc(t.key)}">${t.kind === "noprogram" ? "Start program" : t.kind === "noweek" ? "Add week" : "Open"}</button><button class="btn sm ghost" data-act="pg-todo-x" data-key="${esc(t.key)}" title="${t.kind === "noprogram" ? "This client doesn't use programs" : "Dismiss"}">${t.kind === "noprogram" ? "Not needed" : "Dismiss"}</button></span></div>`; };
+  return `<section class="card"><div class="card-h"><h2>To do</h2><span class="small muted">from your calendar</span></div>
+    ${gaps.length ? `<div class="list">${gaps.map(row).join("")}</div>` : ""}
+    ${none.length ? `<details ${gaps.length ? "" : "open"}><summary class="small">${none.length} client${none.length === 1 ? "" : "s"} with sessions coming up and no program</summary><div class="list" style="margin-top:8px">${none.map(row).join("")}</div></details>` : ""}
+  </section>`;
 }
 
 /* ---------- saving ---------- */
@@ -77,30 +113,36 @@ function render(){
 function renderClientList(){
   const list = C.S.clients.filter(c => c.active !== false).sort((a, b) => a.name.localeCompare(b.name));
   const progOf = id => (PG.progs || []).filter(p => p.clientId === id && p.status !== "archived");
-  return `<section class="card"><div class="card-h"><h2>Client programs</h2><span class="small muted">${(PG.progs || []).filter(p => p.status !== "archived").length} active programs</span></div>
+  return renderTodos() + `<section class="card"><div class="card-h"><h2>Client programs</h2><span class="small muted">${(PG.progs || []).filter(p => p.status !== "archived").length} active programs</span></div>
     ${list.length ? `<div class="tablewrap"><table><thead><tr><th>Client</th><th>Program</th><th class="num">Weeks</th><th>Updated</th><th></th></tr></thead><tbody>
     ${list.map(c => { const ps = progOf(c.id), p = ps[0];
       return `<tr><td><div class="who">${C.avatar(c)}<a href="#" class="n" data-act="pg-open" data-id="${esc(c.id)}">${esc(c.name)}</a></div></td>
         <td>${p ? esc(p.name) + (ps.length > 1 ? ` <span class="small muted">+${ps.length - 1}</span>` : "") : `<span class="muted small">None yet</span>`}</td>
         <td class="num">${p ? (p.weeks || []).length : "–"}</td><td class="small">${p && p.updatedAt ? fmtDay(p.updatedAt) : "–"}</td>
         <td><div class="rowacts"><button class="btn sm ${p ? "" : "primary"}" data-act="pg-open" data-id="${esc(c.id)}">${p ? "Open" : "Start program"}</button></div></td></tr>`; }).join("")}
-    </tbody></table></div>` : `<div class="empty">Add clients first, then build their programs here.</div>`}</section>`;
+    </tbody></table></div>` : `<div class="empty">Add clients first, then build their programs here.</div>`}</section>` + renderShared();
+}
+function renderShared(){
+  const cs = sharedClients(); if (!cs.length) return "";
+  return `<section class="card"><div class="card-h"><h2>Shared with you</h2><span class="small muted">one client's program, shared by another trainer</span></div>
+    <div class="list">${cs.map(c => { const p = progsOf(c)[0]; return `<div><span class="who">${C.avatar(c)}<span><a href="#" data-act="pg-open" data-id="${esc(c.id)}" style="font-weight:600;color:var(--ink);text-decoration:none">${esc(c.name)}</a> <span class="small muted">· ${esc(p ? p.name : "")}${c.ownerName ? " · from " + esc(c.ownerName) : ""}</span></span></span><button class="btn sm" data-act="pg-open" data-id="${esc(c.id)}">Open</button></div>`; }).join("")}</div></section>`;
 }
 
 function renderClient(){
-  const c = client(PG.clientId), progs = (PG.progs || []).filter(p => p.clientId === c.id);
+  const c = client(PG.clientId), progs = progsOf(c);
   if (!PG.progId || !progs.find(p => p.id === PG.progId)){ const a = progs.find(p => p.status !== "archived") || progs[0]; PG.progId = a ? a.id : null; PG.week = 0; }
   const link = PG.link[c.id];
   const head = `<div class="pg-top"><button class="btn sm" data-act="pg-back">← All clients</button>
     <div class="who" style="margin-right:auto">${C.avatar(c)}<b style="font-size:16px">${esc(c.name)}</b></div>
     <div class="seg" role="group" aria-label="Client view">${[["program", "Program"], ["progress", "Progress"]].map(([v, l]) => `<button data-act="pg-sub" data-v="${v}" aria-pressed="${PG.sub === v}">${l}</button>`).join("")}</div>
-    <button class="btn sm" data-act="pg-share">${link ? "Client link" : "Share with client"}</button></div>`;
+    ${c.shared ? `<span class="tag">shared by ${esc(c.ownerName || "another trainer")}</span>` : `<button class="btn sm" data-act="pg-share">${link ? "Client link" : "Share with client"}</button>`}</div>`;
   return head + (PG.sub === "progress" ? renderProgress(c) : renderProgram(c, progs));
 }
 
 /* ---------- program builder ---------- */
 function renderProgram(c, progs){
   const p = P();
+  if (!p && c.shared) return `<section class="card"><div class="empty">This program is no longer shared with you.</div></section>`;
   if (!p) return `<section class="card"><div class="empty"><b>No program for ${esc(c.name.split(" ")[0])} yet</b><span>Start one, then add weeks, sessions and exercises.</span>
     <div class="actions"><input id="pg-newname" class="pg-in" placeholder="Program name" value="${esc(c.name.split(" ")[0])}'s program"><button class="btn primary" data-act="pg-new">Start program</button></div></div></section>`;
   const W = p.weeks || [], wi = Math.min(PG.week, Math.max(0, W.length - 1)); PG.week = wi;
@@ -116,9 +158,12 @@ function renderProgram(c, progs){
     </div>` : "";
   return `<section class="card pg-prog">
     <div class="card-h"><div class="pg-row">${progSel}<input class="pg-in pg-title" data-pg="prog" data-f="name" value="${esc(p.name)}" aria-label="Program name"></div>
-      <div class="pg-acts"><span class="small muted" id="pg-save">${esc(PG.save)}</span><button class="btn sm" data-act="pg-newprog">New program</button>
+      <div class="pg-acts"><span class="small muted" id="pg-save">${esc(PG.save)}</span>
+      ${p.shared ? (PG.confirm === "leave" ? `<button class="btn sm danger" data-act="pg-leave">Remove from my list?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="leave">Remove from my list</button>`) : `
+      ${PG.sharing ? `<button class="btn sm" data-act="pg-sharetr">Share with a trainer</button>` : ""}
+      <button class="btn sm" data-act="pg-newprog">New program</button>
       <button class="btn sm ghost" data-act="pg-archive">${p.status === "archived" ? "Unarchive" : "Archive"}</button>
-      ${PG.confirm === "delprog" ? `<button class="btn sm danger" data-act="pg-delprog">Delete program?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="delprog">Delete</button>`}</div></div>
+      ${PG.confirm === "delprog" ? `<button class="btn sm danger" data-act="pg-delprog">Delete program?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="delprog">Delete</button>`}`}</div></div>
     ${weekChips}
     ${week ? `<div class="pg-row"><input class="pg-in" data-pg="week" data-f="label" value="${esc(week.label)}" aria-label="Week name" style="max-width:180px">${weekActs}</div>` : ""}
   </section>
@@ -159,6 +204,8 @@ function renderSession(p, wi, si, s){
 function renderProgress(c){
   const meas = PG.meas[c.id], logs = PG.logs[c.id];
   if (!meas || !logs) return `<div class="card"><div class="empty">Loading…</div></div>`;
+  if (c.shared){ const H = liftHistory(logs), names = Object.keys(H); if (!PG.lift || !H[PG.lift]) PG.lift = names[0] || "";
+    return `<section class="card"><div class="card-h"><h2>Lifts over time</h2>${names.length ? `<select class="pg-in" data-pg="lift" aria-label="Exercise">${names.map(n => `<option ${n === PG.lift ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>` : ""}</div>${names.length ? lineChart((H[PG.lift] || []).map(x => ({ date: x.date, value: x.weight }))) : `<div class="empty">Nothing logged yet.</div>`}<p class="small muted">Bodyweight and body fat stay with ${esc(c.ownerName || "the trainer who shared this")}.</p></section>`; }
   const sex = c.sex || "", by = c.birthYear || "";
   const rows = meas.slice().sort((a, b) => String(a.taken_on).localeCompare(String(b.taken_on)));
   const bfOf = m => m.body_fat != null ? Number(m.body_fat) : bodyFat4(m, sex, ageOn(by, m.taken_on));
@@ -246,7 +293,7 @@ async function videoSheet(id){
 function logSheet(){
   const p = P(), L = PG.logFor; if (!p || !L) return;
   const s = p.weeks[L.w] && p.weeks[L.w].sessions[L.s]; if (!s) return;
-  const have = {}; for (const l of PG.logs[p.clientId] || []) if (l.session_id === s.id) have[l.row_id + "|" + l.set_no] = l;
+  const have = {}; for (const l of PG.logs[PG.clientId] || []) if (l.session_id === s.id) have[l.row_id + "|" + l.set_no] = l;
   const date = Object.values(have)[0] ? String(Object.values(have)[0].logged_on).slice(0, 10) : today();
   const rows = (s.rows || []).filter(r => r.name).map(r => { const n = setCount(r);
     return `<div class="lg-ex"><div class="lg-h"><b>${r.group ? `<span class="tag">${esc(r.group)}</span> ` : ""}${esc(r.name)}</b><span class="small muted">${esc([r.sets && r.reps ? r.sets + " × " + r.reps : r.reps, r.weight ? "@ " + r.weight : ""].filter(Boolean).join(" "))}</span></div>
@@ -254,6 +301,12 @@ function logSheet(){
         return `<div class="lg-set"><span class="small muted">Set ${k + 1}</span><input class="pg-in" data-lg="${esc(key)}" data-f="reps" type="number" inputmode="numeric" placeholder="Reps" value="${esc(l.reps ?? "")}"><input class="pg-in" data-lg="${esc(key)}" data-f="weight" type="number" step="0.5" inputmode="decimal" placeholder="Weight" value="${esc(l.weight ?? "")}"><label class="check"><input type="checkbox" data-lg="${esc(key)}" data-f="done" ${l.done ? "checked" : ""}> Done</label></div>`; }).join("")}</div>`; }).join("");
   sheet("Log · " + s.name, `<div class="field"><label for="lg-date">Date</label><input id="lg-date" type="date" value="${date}"></div>${rows || `<div class="empty">Add exercises to this session first.</div>`}
     <div class="actions"><button class="btn primary" data-act="pg-logsave">Save log</button></div>`);
+}
+function trainerShareSheet(){
+  const p = P(), c = client(PG.clientId), L = PG.shareList;
+  sheet("Share with a trainer", `<p class="small">Share <b>${esc(p.name)}</b> for ${esc(c.name)} with another trainer, using the Google email they sign in to Trainer Tally with. They can open, edit and log it under <b>Shared with you</b> in their Programs. Your other clients, billing and ${esc(c.name.split(" ")[0])}'s measurements stay private.</p>
+    <div class="pg-row"><input id="pg-tr-email" class="pg-in" type="email" placeholder="their Google email" style="flex:1"><button class="btn primary" data-act="pg-sharetr-add">Share</button></div>
+    ${L == null ? `<p class="small muted">Loading…</p>` : L.length ? `<h3>Shared with</h3><div class="list">${L.map(x => `<div><span>${esc(x.shared_email)}</span><button class="btn sm ghost" data-act="pg-sharetr-rm" data-e="${esc(x.shared_email)}">Stop sharing</button></div>`).join("")}</div>` : `<p class="small muted">Not shared with anyone yet.</p>`}`);
 }
 function shareSheet(){
   const c = client(PG.clientId), l = PG.link[c.id];
@@ -278,6 +331,14 @@ async function onClick(el, e){
   const p = P(), wi = PG.week;
   switch (act){
     case "pg-retry": PG.ready = null; redraw(); break;
+    case "pg-todo-x": { const k = el.getAttribute("data-key"); const cur = (C.S.prof && C.S.prof.programsDismissed) || []; C.saveProfile({ programsDismissed: [...cur, k].slice(-300) }).catch(() => {}); redraw(); break; }
+    case "pg-todo-open": {
+      const t = todos().find(x => x.key === el.getAttribute("data-key")); if (!t) break;
+      PG.clientId = t.clientId; PG.sub = "program"; PG.repeat = null; loadClient(t.clientId);
+      if (t.kind === "noprogram"){ PG.progId = null; PG.week = 0; redraw(); window.scrollTo({ top: 0 }); break; }
+      PG.progId = t.progId; const prog = P();
+      if (prog && t.week >= prog.weeks.length){ while (prog.weeks.length <= t.week) prog.weeks.push(newWeek("Week " + (prog.weeks.length + 1))); saveSoon(prog); C.toast(`Added ${prog.weeks[t.week].label}. Paste a week or session into it.`); }
+      PG.week = t.week; redraw(); window.scrollTo({ top: 0 }); break; }
     case "pg-view": PG.view = el.getAttribute("data-v"); redraw(); break;
     case "pg-open": PG.clientId = el.getAttribute("data-id"); PG.progId = null; PG.week = 0; PG.sub = "program"; PG.repeat = null; loadClient(PG.clientId); redraw(); window.scrollTo({ top: 0 }); break;
     case "pg-back": PG.clientId = null; redraw(); break;
@@ -314,7 +375,7 @@ async function onClick(el, e){
       const names = Object.fromEntries(s.rows.map(r => [r.id, r.name]));
       const rows = Object.entries(byKey).filter(([, v]) => v.done || v.reps !== "" || v.weight !== "").map(([k, v]) => { const [row_id, set] = k.split("|");
         return { program_id: p.id, session_id: s.id, row_id, set_no: +set, client_id: p.clientId, ex_name: names[row_id] || "", reps: num(v.reps), weight: num(v.weight), done: !!v.done || num(v.reps) != null, logged_on: date }; });
-      try { await C.A.programs.saveLogs(rows); C.closeModal(); C.toast("Logged"); loadClient(p.clientId); } catch (x){ C.toast("Couldn't save the log"); }
+      try { await C.A.programs.saveLogs(rows, p.shared ? p.ownerId : undefined); C.closeModal(); C.toast("Logged"); loadClient(PG.clientId); } catch (x){ C.toast("Couldn't save the log"); }
       break; }
     case "pg-vid": videoSheet(el.getAttribute("data-id")); break;
     case "pg-exnew": PG.edEx = { name: "", sets: "", reps: "" }; PG.confirm = null; exSheet(); break;
@@ -352,6 +413,15 @@ async function onClick(el, e){
       break; }
     case "pg-delmeas": { const id = el.getAttribute("data-id"), cid = PG.clientId; PG.meas[cid] = PG.meas[cid].filter(m => String(m.id) !== id); redraw(); C.A.programs.deleteMeasurement(id).catch(() => C.toast("Couldn't delete")); break; }
     case "pg-share": shareSheet(); break;
+    case "pg-sharetr": PG.shareList = null; trainerShareSheet(); C.A.programs.sharing.list(p.id).then(l => { PG.shareList = l; trainerShareSheet(); }).catch(() => { PG.shareList = []; trainerShareSheet(); }); break;
+    case "pg-sharetr-add": {
+      const email = valIn("pg-tr-email").trim().toLowerCase();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ C.toast("Enter their Google email"); break; }
+      const c = client(PG.clientId);
+      try { await C.A.programs.sharing.add(p, email, c.name, (C.S.prof && C.S.prof.trainerName) || ""); PG.shareList = await C.A.programs.sharing.list(p.id); C.toast("Shared"); } catch (x){ C.toast("Couldn't share: " + (x.message || "try again")); }
+      trainerShareSheet(); break; }
+    case "pg-sharetr-rm": { const email = el.getAttribute("data-e"); try { await C.A.programs.sharing.remove(p.id, email); PG.shareList = (PG.shareList || []).filter(x => x.shared_email !== email); C.toast("Stopped sharing"); } catch (x){ C.toast("Couldn't remove"); } trainerShareSheet(); break; }
+    case "pg-leave": { await C.A.programs.sharing.leave(p.ownerId, p.id).catch(() => {}); PG.shared = PG.shared.filter(x => x.id !== p.id); PG.clientId = null; redraw(); break; }
     case "pg-linkmake": { const id = PG.clientId; try { PG.link[id] = await C.A.programs.link.create(id); } catch (x){ C.toast("Couldn't create the link"); } shareSheet(); redraw(); break; }
     case "pg-linkoff": { const id = PG.clientId; try { await C.A.programs.link.revoke(id); PG.link[id] = false; C.toast("Link turned off"); } catch (x){ C.toast("Couldn't turn it off"); } shareSheet(); redraw(); break; }
     case "pg-linkcopy": { const t = document.getElementById("pg-link"); try { await navigator.clipboard.writeText(t.value); C.toast("Link copied"); } catch (x){ t.select(); } break; }
@@ -414,4 +484,5 @@ const CSS = `
 `;
 
 function attach(ctx){ C = ctx; }
-window.TallyPrograms = { attach, render, onClick, onInput, onChange, state: PG };
+function preload(){ if (!PG.ready && !PG.loading && C && C.A.programs) load(); }
+window.TallyPrograms = { attach, render, onClick, onInput, onChange, state: PG, todos, todoText, preload };

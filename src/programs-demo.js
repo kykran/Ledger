@@ -51,6 +51,17 @@ export function demoProgramsAdapter(){
     async saveProgram(p){ const i = P.programs.findIndex(x => x.id === p.id); if (i >= 0) P.programs[i] = c(p); else P.programs.push(c(p)); },
     async deleteProgram(id){ P.programs = P.programs.filter(p => p.id !== id); P.logs = P.logs.filter(l => l.program_id !== id); },
     async logs(clientId){ return c(P.logs.filter(l => l.client_id === clientId)); },
+    async programLogs(ownerId, programId){ return c(P.logs.filter(l => l.program_id === programId)); },
+    async logDates(){ return P.logs.map(l => ({ client_id: l.client_id, logged_on: l.logged_on })); },
+    sharing: {
+      shares: {},
+      async ready(){ return true; },
+      async list(pid){ return (this.shares[pid] || []).map(e => ({ shared_email: e })); },
+      async add(p, email){ (this.shares[p.id] = this.shares[p.id] || []).push(email.trim().toLowerCase()); },
+      async remove(pid, email){ this.shares[pid] = (this.shares[pid] || []).filter(e => e !== email); },
+      async withMe(){ return { programs: [], exercises: [] }; },
+      async leave(){}
+    },
     async saveLogs(rows){ for (const r of rows){ const i = P.logs.findIndex(l => key(l) === key(r)); const row = { ...c(r), source: "trainer" }; if (i >= 0) P.logs[i] = row; else P.logs.push(row); } },
     async measurements(clientId){ return c(P.measurements.filter(m => m.client_id === clientId)); },
     async saveMeasurement(m){ const row = c(m); if (!row.id) row.id = "m" + Date.now(); const i = P.measurements.findIndex(x => x.id === row.id); if (i >= 0) P.measurements[i] = row; else P.measurements.push(row); },

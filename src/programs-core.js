@@ -135,3 +135,39 @@ export function clientProgramView({ client, trainerName, programs, exercises, lo
     measurements: meas, updated: new Date().toISOString()
   };
 }
+
+/* Program to-dos from the calendar. A program's week N covers startDate + 7N days.
+ * For each client with an active program, this week or next with more calendar sessions
+ * than planned in-studio workouts is flagged; so is a calendar week past the end of the program.
+ * sessionsOf(clientId) -> [{date: Date, future: bool}] (billable sessions). Returns [{key, kind, clientId, progId, week, from, to, n, planned, dates}]. */
+export function programTodos({ clients, programs, sessionsOf, now = new Date(), dismissed = [] }){
+  const out = [], skip = new Set(dismissed || []);
+  const DAY = 86400000;
+  const sod = d => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const monday = d => { const x = sod(d); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; };
+  const from = monday(now), to = new Date(monday(now).getTime() + 14 * DAY); // this week and next: sessions coming up
+
+  const planned = w => (w && w.sessions || []).filter(s => !s.homework && (s.rows || []).some(r => r.name || r.exId)).length;
+  for (const c of clients || []){
+    if (c.active === false) continue;
+    const ss = (sessionsOf(c.id) || []).filter(s => s.date >= from && s.date < to);
+    const progs = (programs || []).filter(p => p.clientId === c.id && p.status !== "archived" && p.startDate);
+    if (!progs.length){
+      const soon = ss.filter(s => s.date >= monday(now));
+      if (soon.length) out.push({ key: `noprog:${c.id}`, kind: "noprogram", clientId: c.id, n: soon.length, dates: soon.map(s => s.date) });
+      continue;
+    }
+    const p = progs.sort((a, b) => b.startDate.localeCompare(a.startDate))[0];
+    const [y, m, d] = p.startDate.split("-").map(Number), start = new Date(y, m - 1, d);
+    const byWeek = {};
+    for (const s of ss){ if (s.date < start) continue; const i = Math.floor((sod(s.date) - start) / (7 * DAY)); (byWeek[i] = byWeek[i] || []).push(s); }
+    for (const [i, list] of Object.entries(byWeek)){
+      const wk = +i, w = p.weeks[wk], have = planned(w);
+      if (list.length <= have) continue;
+      const key = `gap:${p.id}:${wk}:${list.length}`;
+      if (skip.has(key)) continue;
+      out.push({ key, kind: w ? "short" : "noweek", clientId: c.id, progId: p.id, week: wk, from: new Date(start.getTime() + wk * 7 * DAY), to: new Date(start.getTime() + (wk * 7 + 6) * DAY), n: list.length, planned: have, dates: list.map(s => s.date) });
+    }
+  }
+  return out.filter(t => !skip.has(t.key)).sort((a, b) => (a.from || 0) - (b.from || 0));
+}
