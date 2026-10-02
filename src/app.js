@@ -451,6 +451,7 @@ function attnRow(a){
     meta = "Tell the tally where their current package stands";
     acts = `<button class="btn sm primary" data-act="setup-pkg" data-id="${c.id}">Set package</button>`;
   }
+  const pl = payLine(c); if (pl) meta += (meta ? " · " : "") + pl.slice(3);
   return `<div class="aitem"><div class="top">${avatar(c)}<a href="#" class="n" style="font-weight:600;color:var(--ink);text-decoration:none" data-act="edit" data-id="${c.id}">${esc(c.name)}</a>${chipFor(st)}</div><div class="meta">${meta}</div><div class="rowacts">${acts}</div></div>`;
 }
 
