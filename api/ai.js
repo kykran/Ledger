@@ -8,7 +8,7 @@
 // reviews the draft in the app and decides what to keep.
 import { admin, send, readJson, userFrom } from "./_lib.js";
 
-const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-5-5";
+const MODEL = process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001";
 const DIRECTIONS = { stability: "more stability and control (unilateral, anti-rotation, tempo, balance, controlled ranges)",
   strength: "more strength (heavier loads, lower reps, longer rest, bilateral compound lifts)",
   power: "more power (explosive intent, jumps, throws, Olympic-lift derivatives where appropriate, low reps)",
