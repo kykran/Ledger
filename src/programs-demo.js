@@ -51,6 +51,24 @@ export function demoProgramsAdapter(){
     async saveProgram(p){ const i = P.programs.findIndex(x => x.id === p.id); if (i >= 0) P.programs[i] = c(p); else P.programs.push(c(p)); },
     async deleteProgram(id){ P.programs = P.programs.filter(p => p.id !== id); P.logs = P.logs.filter(l => l.program_id !== id); },
     async logs(clientId){ return c(P.logs.filter(l => l.client_id === clientId)); },
+    // Demo stand-in for the AI assistant: canned but shaped exactly like the real /api/ai results.
+    async ai(b){
+      await new Promise(r => setTimeout(r, 400));
+      const prog = P.programs.find(p => p.id === b.programId);
+      const bump = r => ({ ...r, weight: /^\d+$/.test(r.weight || "") ? String(+r.weight + 5) : r.weight || "RPE 7", note: "Demo suggestion" });
+      if (b.action === "critique") return { result: { summary: "Demo critique: solid split between lower and upper days with sensible supersets. Pulling volume is a little light compared with pushing.",
+        strengths: ["Big lifts come first while fresh", "Homework is short and doable alone"], suggestions: [{ title: "Add a second pull", detail: "Add a row or pulldown on Day A to balance the presses.", priority: "medium", where: "Day A" }, { title: "Progress the deadlift", detail: "Climb by 5-10 lb a week while bar speed holds.", priority: "low" }],
+        flags: [{ exercise: "Trap Bar Deadlift", concern: "Demo flag: watch the low back if notes mention back pain.", alternative: "Hip Thrust" }] } };
+      if (b.action === "progress"){
+        const w = prog.weeks[b.week], ss = b.session != null ? [w.sessions[b.session]] : w.sessions;
+        return { result: { summary: `Demo: progressed toward ${b.direction || "your notes"}.`, changes: ["Loads up about 5 lb where logs allowed", "Swapped one exercise for a new single-leg option"],
+          sessions: ss.map(s => ({ name: s.name, homework: s.homework, notes: s.notes, rows: [...s.rows.slice(0, -1).map(bump), { group: "C", name: "Copenhagen Plank", sets: "2", reps: "20s each", weight: "", note: "New for adductor strength", isNew: true, muscle: "Core", equipment: "Bench" }] })),
+          flags: [] } };
+      }
+      const base = P.programs[0].weeks.slice(0, Math.min(4, +((b.brief || {}).weeks) || 4));
+      return { result: { name: "Demo program", summary: "Demo draft: two full-body days and one homework session, building load each week.", flags: [],
+        weeks: base.map(w => ({ label: w.label, sessions: w.sessions.map(s => ({ name: s.name, homework: s.homework, notes: s.notes, rows: s.rows.map(r => ({ group: r.group, name: r.name, sets: r.sets, reps: r.reps, weight: r.weight, note: "" })) })) })) } };
+    },
     async programLogs(ownerId, programId){ return c(P.logs.filter(l => l.program_id === programId)); },
     async logDates(){ return P.logs.map(l => ({ client_id: l.client_id, logged_on: l.logged_on })); },
     sharing: {

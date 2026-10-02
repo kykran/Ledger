@@ -136,7 +136,10 @@ function renderClient(){
     <div class="who" style="margin-right:auto">${C.avatar(c)}<b style="font-size:16px">${esc(c.name)}</b></div>
     <div class="seg" role="group" aria-label="Client view">${[["program", "Program"], ["progress", "Progress"]].map(([v, l]) => `<button data-act="pg-sub" data-v="${v}" aria-pressed="${PG.sub === v}">${l}</button>`).join("")}</div>
     ${c.shared ? `<span class="tag">shared by ${esc(c.ownerName || "another trainer")}</span>` : `<button class="btn sm" data-act="pg-share">${link ? "Client link" : "Share with client"}</button>`}</div>`;
-  return head + (PG.sub === "progress" ? renderProgress(c) : renderProgram(c, progs));
+  const notes = c.shared ? "" : `<details class="card pg-notes" ${c.programNotes ? "" : "open"}><summary><b>Programming notes</b> <span class="small muted">${c.programNotes ? esc(c.programNotes.slice(0, 90)) + (c.programNotes.length > 90 ? "…" : "") : "injuries, limitations, goals. The assistant reads these and flags anything risky"}</span></summary>
+    <textarea class="pg-in" data-pg="cnotes" rows="3" placeholder="e.g. Left knee meniscus repair 2024, no deep loaded flexion. Lower back flares with heavy hinging. Goal: hike Kilimanjaro in March.">${esc(c.programNotes || "")}</textarea>
+    <span class="small muted">Private to you. Saved when you click away.</span></details>`;
+  return head + (PG.sub === "progress" ? renderProgress(c) : notes + renderProgram(c, progs));
 }
 
 /* ---------- program builder ---------- */
@@ -144,7 +147,7 @@ function renderProgram(c, progs){
   const p = P();
   if (!p && c.shared) return `<section class="card"><div class="empty">This program is no longer shared with you.</div></section>`;
   if (!p) return `<section class="card"><div class="empty"><b>No program for ${esc(c.name.split(" ")[0])} yet</b><span>Start one, then add weeks, sessions and exercises.</span>
-    <div class="actions"><input id="pg-newname" class="pg-in" placeholder="Program name" value="${esc(c.name.split(" ")[0])}'s program"><button class="btn primary" data-act="pg-new">Start program</button></div></div></section>`;
+    <div class="actions"><input id="pg-newname" class="pg-in" placeholder="Program name" value="${esc(c.name.split(" ")[0])}'s program"><button class="btn primary" data-act="pg-new">Start program</button>${C.A.programs.ai ? `<button class="btn" data-act="pg-ai" data-mode="create">✦ Draft with AI</button>` : ""}</div></div></section>`;
   const W = p.weeks || [], wi = Math.min(PG.week, Math.max(0, W.length - 1)); PG.week = wi;
   const week = W[wi];
   const clip = PG.clip;
@@ -154,6 +157,7 @@ function renderProgram(c, progs){
       <button class="btn sm" data-act="pg-copyweek">Copy week</button>
       ${clip && clip.type === "week" ? `<button class="btn sm" data-act="pg-pasteweek">Paste week here</button>` : ""}
       ${PG.repeat && PG.repeat.week ? repeatForm() : `<button class="btn sm" data-act="pg-repeat" data-week="1">Repeat week…</button>`}
+      ${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress">✦ Progress week</button><button class="btn sm" data-act="pg-ai" data-mode="critique">✦ Critique program</button>` : ""}
       ${PG.confirm === "delweek" ? `<button class="btn sm danger" data-act="pg-delweek">Delete ${esc(week.label)}?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="delweek">Delete week</button>`}
     </div>` : "";
   return `<section class="card pg-prog">
@@ -189,7 +193,7 @@ function renderSession(p, wi, si, s){
   return `<section class="card pg-sess ${s.homework ? "hw" : ""}">
     <div class="card-h"><div class="pg-row" style="flex:1"><input class="pg-in pg-sname" data-pg="sess" data-s="${si}" data-f="name" value="${esc(s.name)}" aria-label="Session name">
       <label class="check small"><input type="checkbox" data-pg="sess" data-s="${si}" data-f="homework" ${s.homework ? "checked" : ""}> Homework <span class="muted">(client can log)</span></label></div>
-      <div class="pg-acts"><button class="btn sm" data-act="pg-log" data-s="${si}">Log</button><button class="btn sm" data-act="pg-copysess" data-s="${si}">Copy</button>
+      <div class="pg-acts"><button class="btn sm" data-act="pg-log" data-s="${si}">Log</button>${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress" data-s="${si}">✦ Progress</button>` : ""}<button class="btn sm" data-act="pg-copysess" data-s="${si}">Copy</button>
         ${rep ? "" : `<button class="btn sm" data-act="pg-repeat" data-s="${si}">Repeat…</button>`}
         <button class="btn sm ghost" data-act="pg-up" data-s="${si}" aria-label="Move up" ${si ? "" : "disabled"}>↑</button>
         ${PG.confirm === cKey ? `<button class="btn sm danger" data-act="pg-delsess" data-s="${si}">Delete?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="${cKey}">Delete</button>`}</div></div>
@@ -317,6 +321,89 @@ function shareSheet(){
     : `<div class="actions"><button class="btn primary" data-act="pg-linkmake">Create link</button></div>`}`);
 }
 
+/* ---------- AI assistant ---------- */
+const DIRS = [["strength", "Strength"], ["stability", "Stability"], ["power", "Power"], ["coordination", "Coordination"], ["endurance", "Endurance"], ["hypertrophy", "Muscle"], ["mobility", "Mobility"], ["deload", "Deload"]];
+function aiSheet(){
+  const X = PG.ai, c = client(PG.clientId), p = P(), first = c ? c.name.split(" ")[0] : "client";
+  const title = X.mode === "create" ? "Draft a program" : X.mode === "critique" ? "Critique · " + (p ? p.name : "") : "Progress " + (X.session != null && p ? "“" + p.weeks[X.week].sessions[X.session].name + "”" : p ? p.weeks[X.week].label : "");
+  let body = "";
+  const flags = f => (f || []).length ? `<div class="ai-flags"><h3>⚠ Check before using</h3>${f.map(x => `<div><b>${esc(x.exercise)}</b>: ${esc(x.concern)}${x.alternative ? ` <span class="muted">Try: ${esc(x.alternative)}</span>` : ""}</div>`).join("")}</div>` : "";
+  const lib = libByName();
+  const rowsTbl = rows => `<table class="ai-rows"><tbody>${rows.map(r => `<tr><td class="small muted">${esc(r.group || "")}</td><td>${esc(r.name)}${!lib[String(r.name).trim().toLowerCase()] ? ` <span class="pg-new">new</span>` : ""}${r.note ? `<div class="small muted">${esc(r.note)}</div>` : ""}</td><td class="num">${esc(r.sets)} × ${esc(r.reps)}</td><td class="small">${esc(r.weight || "")}</td></tr>`).join("")}</tbody></table>`;
+  const sess = s => `<div class="ai-sess"><div class="lg-h"><b>${esc(s.name)}</b>${s.homework ? `<span class="tag">homework</span>` : ""}</div>${s.notes ? `<div class="small muted">${esc(s.notes)}</div>` : ""}${rowsTbl(s.rows || [])}</div>`;
+  if (X.step === "form"){
+    const notesLine = c && !c.shared ? (c.programNotes ? `<p class="small">Reading ${esc(first)}'s notes: <i>${esc(c.programNotes.slice(0, 160))}${c.programNotes.length > 160 ? "…" : ""}</i></p>` : `<p class="small muted">No programming notes for ${esc(first)} yet. Add injuries or limitations above the program so the assistant can flag them.</p>`) : "";
+    if (X.mode === "create") body = `${notesLine}<div class="form">
+        <div class="field"><label for="ai-weeks">Weeks</label><input id="ai-weeks" type="number" min="1" max="12" value="4"></div>
+        <div class="field"><label for="ai-days">Sessions per week</label><input id="ai-days" type="number" min="1" max="6" value="2"></div>
+        <div class="field"><label for="ai-hw">Homework per week</label><input id="ai-hw" type="number" min="0" max="4" value="1"></div>
+        <div class="field"><label for="ai-eq">Equipment</label><input id="ai-eq" value="Full gym"></div>
+        <div class="field full"><label for="ai-goal">Goal</label><input id="ai-goal" placeholder="e.g. get stronger, lose 15 lb, run a half marathon in May"></div>
+        <div class="field full"><label for="ai-notes">Anything else</label><textarea id="ai-notes" rows="2" placeholder="Preferences, style, what's worked before"></textarea></div></div>
+      <div class="actions"><button class="btn primary" data-act="pg-ai-go">✦ Draft program</button></div>`;
+    else if (X.mode === "critique") body = `${notesLine}<p class="small">The assistant reviews balance, volume, exercise order, progression and fit with ${esc(first)}'s notes and logs. Nothing changes until you decide to.</p><div class="actions"><button class="btn primary" data-act="pg-ai-go">✦ Critique</button></div>`;
+    else body = `${notesLine}<h3>Direction</h3><div class="ai-dirs">${DIRS.map(([k, l]) => `<button class="btn sm ${X.direction === k ? "primary" : ""}" data-act="pg-ai-dir" data-k="${k}" aria-pressed="${X.direction === k}">${l}</button>`).join("")}</div>
+      <div class="field"><label for="ai-notes">Or describe it</label><input id="ai-notes" placeholder="e.g. more single-leg work, she's bored of deadlifts" value="${esc(X.notes || "")}"></div>
+      <div class="actions"><button class="btn primary" data-act="pg-ai-go">✦ Progress</button></div>`;
+  } else if (X.step === "loading") body = `<div class="empty"><b>Thinking…</b><span>Reading the program, ${esc(first)}'s notes and recent logs. This can take up to a minute.</span></div>`;
+  else if (X.step === "error") body = `<div class="banner err"><span>${esc(X.error)}</span></div><div class="actions"><button class="btn" data-act="pg-ai-back">Back</button></div>`;
+  else {
+    const R = X.result;
+    if (X.mode === "critique") body = `<p>${esc(R.summary)}</p>${flags(R.flags)}
+      ${(R.strengths || []).length ? `<h3>Working well</h3><ul class="ai-list">${R.strengths.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+      <h3>Suggestions</h3><div class="list">${(R.suggestions || []).map(x => `<div style="display:block"><b>${esc(x.title)}</b> <span class="chip ${x.priority === "high" ? "owes" : x.priority === "medium" ? "low" : "info"}">${esc(x.priority)}</span>${x.where ? ` <span class="small muted">${esc(x.where)}</span>` : ""}<div class="small">${esc(x.detail)}</div></div>`).join("")}</div>
+      <div class="actions"><button class="btn primary" data-act="close">Done</button><button class="btn" data-act="pg-ai-back">Run again</button></div>`;
+    else if (X.mode === "create") body = `<p><b>${esc(R.name)}</b>. ${esc(R.summary)}</p>${flags(R.flags)}${(R.weeks || []).map(w => `<details ${w === R.weeks[0] ? "open" : ""}><summary><b>${esc(w.label)}</b> <span class="small muted">${(w.sessions || []).length} sessions</span></summary>${(w.sessions || []).map(sess).join("")}</details>`).join("")}
+      <div class="actions"><button class="btn primary" data-act="pg-ai-accept" data-how="newprog">Use this program</button><button class="btn" data-act="pg-ai-back">Try again</button><button class="btn ghost" data-act="close">Discard</button></div>
+      <p class="small muted">New exercises are added to your library when you use the program.</p>`;
+    else body = `<p>${esc(R.summary)}</p>${flags(R.flags)}${(R.changes || []).length ? `<h3>Changes</h3><ul class="ai-list">${R.changes.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}${(R.sessions || []).map(sess).join("")}
+      <div class="actions">${X.session != null
+        ? `<button class="btn primary" data-act="pg-ai-accept" data-how="nextweek">Add to next week</button><button class="btn" data-act="pg-ai-accept" data-how="replace">Replace this session</button>`
+        : `<button class="btn primary" data-act="pg-ai-accept" data-how="newweek">Insert as next week</button><button class="btn" data-act="pg-ai-accept" data-how="replace">Replace this week</button>`}
+        <button class="btn" data-act="pg-ai-back">Try again</button><button class="btn ghost" data-act="close">Discard</button></div>`;
+  }
+  sheet("✦ " + title, body);
+}
+async function aiRun(){
+  const X = PG.ai, c = client(PG.clientId), p = P();
+  const body = { action: X.mode, clientId: c.shared ? c.realId : c.id, ownerId: c.shared ? c.ownerId : undefined, programId: p ? p.id : undefined };
+  if (X.mode === "create") body.brief = { weeks: valIn("ai-weeks"), daysPerWeek: valIn("ai-days"), homework: valIn("ai-hw"), equipment: valIn("ai-eq"), goal: valIn("ai-goal"), notes: valIn("ai-notes") };
+  if (X.mode === "progress"){ X.notes = valIn("ai-notes"); body.week = X.week; body.session = X.session; body.direction = X.direction || ""; body.notes = X.notes; if (!X.direction && !X.notes){ C.toast("Pick a direction or describe it"); return; } }
+  X.step = "loading"; aiSheet();
+  try { const r = await C.A.programs.ai(body); X.result = r.result; X.step = "result"; }
+  catch (e){ X.error = e.code === "ai_not_setup" ? "The AI assistant isn't switched on yet. It needs an Anthropic API key added to the app (ANTHROPIC_API_KEY in Vercel)." : (e.message || "Something went wrong. Try again."); X.step = "error"; }
+  if (PG.ai === X) aiSheet();
+}
+/* Turn AI rows into program rows, linking library exercises and creating new ones. */
+async function aiToRows(rows){
+  const lib = libByName(), fresh = [];
+  const out = (rows || []).map(r => {
+    const key = String(r.name || "").trim().toLowerCase(); let e = lib[key];
+    if (!e && r.name){ e = { id: pid("ex"), name: String(r.name).trim(), muscle: r.muscle || "", equipment: r.equipment || "", cues: r.cues || "", sets: r.sets || "", reps: r.reps || "", videoUrl: "" }; lib[key] = e; fresh.push(e); }
+    return { id: pid("r"), exId: e ? e.id : null, name: e ? e.name : r.name || "", group: r.group || "", sets: String(r.sets ?? ""), reps: String(r.reps ?? ""), weight: String(r.weight ?? ""), note: r.note || "" };
+  });
+  if (fresh.length && !P()?.shared){ try { await C.A.programs.saveExercises(fresh); PG.lib.push(...fresh); } catch (e){} }
+  return out;
+}
+const aiSession = async s => ({ id: pid("s"), name: s.name || "Session", homework: !!s.homework, notes: s.notes || "", rows: await aiToRows(s.rows) });
+async function aiAccept(how){
+  const X = PG.ai, R = X.result;
+  if (X.mode === "create"){
+    const weeks = []; for (const w of R.weeks || []){ const ss = []; for (const s of w.sessions || []) ss.push(await aiSession(s)); weeks.push({ id: pid("w"), label: w.label || "Week " + (weeks.length + 1), sessions: ss }); }
+    const np = { id: pid("p"), ...newProgram(PG.clientId, R.name || "Program"), weeks };
+    PG.progs.push(np); PG.progId = np.id; PG.week = 0; saveSoon(np);
+  } else {
+    const p = P(), ss = []; for (const s of R.sessions || []) ss.push(await aiSession(s));
+    if (X.session != null){
+      if (how === "replace") p.weeks[X.week].sessions[X.session] = ss[0];
+      else { const wi = X.week + 1; if (!p.weeks[wi]) p.weeks.push({ id: pid("w"), label: "Week " + (p.weeks.length + 1), sessions: [] }); p.weeks[wi].sessions.push(...ss); PG.week = wi; }
+    } else if (how === "replace") p.weeks[X.week].sessions = ss;
+    else { p.weeks.splice(X.week + 1, 0, { id: pid("w"), label: "Week " + (X.week + 2), sessions: ss }); p.weeks.forEach((w, i) => { if (/^Week \d+$/.test(w.label || "")) w.label = "Week " + (i + 1); }); PG.week = X.week + 1; }
+    saveSoon(p);
+  }
+  PG.ai = null; C.closeModal(); C.toast("Added. Edit anything you like."); redraw();
+}
+
 /* ---------- edits ---------- */
 function mutate(fn, rerender = true){ const p = P(); if (!p) return; fn(p); saveSoon(p); if (rerender) redraw(); }
 function fillFromLibrary(r){
@@ -413,6 +500,11 @@ async function onClick(el, e){
       break; }
     case "pg-delmeas": { const id = el.getAttribute("data-id"), cid = PG.clientId; PG.meas[cid] = PG.meas[cid].filter(m => String(m.id) !== id); redraw(); C.A.programs.deleteMeasurement(id).catch(() => C.toast("Couldn't delete")); break; }
     case "pg-share": shareSheet(); break;
+    case "pg-ai": PG.ai = { mode: el.getAttribute("data-mode"), step: "form", week: wi, session: el.getAttribute("data-s") != null ? si : null, direction: "", notes: "" }; aiSheet(); break;
+    case "pg-ai-dir": PG.ai.notes = valIn("ai-notes"); PG.ai.direction = el.getAttribute("data-k"); aiSheet(); break;
+    case "pg-ai-go": aiRun(); break;
+    case "pg-ai-back": PG.ai.step = "form"; aiSheet(); break;
+    case "pg-ai-accept": el.disabled = true; aiAccept(el.getAttribute("data-how")).catch(() => { el.disabled = false; C.toast("Couldn't add it"); }); break;
     case "pg-sharetr": PG.shareList = null; trainerShareSheet(); C.A.programs.sharing.list(p.id).then(l => { PG.shareList = l; trainerShareSheet(); }).catch(() => { PG.shareList = []; trainerShareSheet(); }); break;
     case "pg-sharetr-add": {
       const email = valIn("pg-tr-email").trim().toLowerCase();
@@ -444,6 +536,7 @@ function onChange(t){
   const k = t.getAttribute("data-pg"); if (!k) return false;
   const si = +t.getAttribute("data-s"), ri = +t.getAttribute("data-r");
   if (k === "progsel"){ PG.progId = t.value; PG.week = 0; redraw(); return true; }
+  if (k === "cnotes"){ const c = client(PG.clientId); if (c && !c.shared && (c.programNotes || "") !== t.value){ C.saveClient({ ...c, programNotes: t.value.trim() }).then(() => C.toast("Notes saved")).catch(() => {}); } return true; }
   if (k === "lift"){ PG.lift = t.value; redraw(); return true; }
   if (k === "who"){ const c = client(PG.clientId); C.saveClient({ ...c, sex: valIn("pg-sex"), birthYear: num(valIn("pg-by")) }).catch(() => {}); return true; }
   const p = P(); if (!p) return true;
@@ -459,6 +552,13 @@ function updateBfPreview(){
 }
 
 const CSS = `
+.pg-notes summary{cursor:pointer;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.pg-notes textarea{min-height:70px;resize:vertical}
+.ai-dirs{display:flex;gap:6px;flex-wrap:wrap}
+.ai-flags{border:1px solid color-mix(in srgb,var(--warn) 45%,var(--line));background:var(--warn-bg);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:5px;font-size:13.5px}
+.ai-flags h3{color:var(--warn)}
+.ai-sess{border:1px solid var(--line);border-radius:10px;padding:10px;margin-top:8px;display:flex;flex-direction:column;gap:6px}
+.ai-rows td{padding:5px 6px}.ai-list{margin:0;padding-left:18px;font-size:13.5px;display:flex;flex-direction:column;gap:3px}
 .pg-top{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .pg-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .pg-acts{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
