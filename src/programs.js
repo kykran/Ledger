@@ -3,7 +3,7 @@
  * app.js calls attach(ctx) once and then render()/onClick()/onChange()/onInput() while the Programs tab is open.
  * Data goes through ctx.A.programs (see adapter-hosted.js / programs-demo.js). */
 import { pid, newRow, newSession, newWeek, newProgram, copySession, copyWeek, repeatSession, repeatWeek, setCount,
-  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, programTodos } from "./programs-core.js";
+  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, programTodos } from "./programs-core.js";
 import { STARTER_EXERCISES } from "./exercise-seed.js";
 
 let C = null; // context from app.js
@@ -201,13 +201,16 @@ function repeatForm(){
 function renderSession(p, wi, si, s){
   const lib = libById();
   const rep = PG.repeat && !PG.repeat.week && PG.repeat.s === si;
+  const segStart = {}; for (const g of segments(s.rows || [])) if (g.L) segStart[g.start] = g.L;
   const rows = (s.rows || []).map((r, ri) => {
     const ex = r.exId && lib[r.exId]; const hasVid = ex && (ex.videoUrl || ex.videoPath);
     const f = (k, ph, w) => `<input class="pg-in" data-pg="row" data-s="${si}" data-r="${ri}" data-f="${k}" value="${esc(r[k])}" placeholder="${ph}" ${w ? `style="width:${w}"` : ""} aria-label="${ph}">`;
     const recOn = PG.rec && PG.rec.sid === s.id;
     const done = setsDone(s, r), planned = setCount(r);
     const sum = !recOn && done.n ? `<span class="pg-done" title="Sets recorded">✓ ${done.n}/${Math.max(planned, done.total)}${done.top != null ? ` · ${done.top}` : ""}</span>` : "";
-    return `<tr class="pg-g ${grpClass(r.group)}"><td>${f("group", "A1", "48px")}</td>
+    const label = esc(r.name || "exercise");
+    return `<tr class="pg-g ${grpClass(r.group)}" data-r="${ri}"><td class="pg-gripcell"><button class="pg-grip" data-drag="row" data-s="${si}" data-r="${ri}" title="Drag to move this exercise" aria-label="Move ${label}. Drag, or use arrow keys">⠿</button></td>
+      <td><div class="pg-grpcell">${segStart[ri] ? `<button class="pg-bgrip" data-drag="block" data-s="${si}" data-r="${ri}" title="Drag to move block ${segStart[ri]}" aria-label="Move block ${segStart[ri]}. Drag, or use arrow keys">⇕</button>` : `<span class="pg-bgrip-sp"></span>`}${f("group", "A1", "48px")}</div></td>
       <td><div class="pg-exname"><input class="pg-in" list="pg-exlist" data-pg="row" data-s="${si}" data-r="${ri}" data-f="name" value="${esc(r.name)}" placeholder="Exercise" aria-label="Exercise">${hasVid ? `<button class="btn sm ghost" data-act="pg-vid" data-id="${esc(ex.id)}" title="Watch video" aria-label="Watch video">▶</button>` : ex ? "" : r.name ? `<span class="pg-new" title="Not in your library yet">new</span>` : ""}</div></td>
       <td>${f("sets", "Sets", "56px")}</td><td>${f("reps", "Reps", "72px")}</td><td>${f("weight", "Weight", "72px")}</td><td>${f("note", "Note")}</td>
       <td>${sum}<button class="btn sm ghost" data-act="pg-delrow" data-s="${si}" data-r="${ri}" aria-label="Remove row">✕</button></td></tr>${recOn && r.name ? recordRows(p, s, si, r, ri) : ""}`;
@@ -222,7 +225,7 @@ function renderSession(p, wi, si, s){
         ${PG.confirm === cKey ? `<button class="btn sm danger" data-act="pg-delsess" data-s="${si}">Delete?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="${cKey}">Delete</button>`}</div></div>
     ${rep ? `<div class="pg-acts" style="justify-content:flex-start">${repeatForm()}</div>` : ""}
     ${PG.rec && PG.rec.sid === s.id ? recordBar(s) : ""}
-    <div class="tablewrap"><table class="pg-rows"><thead><tr><th>Group</th><th>Exercise</th><th>Sets</th><th>Reps</th><th>Weight</th><th>Note</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="tablewrap"><table class="pg-rows"><thead><tr><th></th><th>Group</th><th>Exercise</th><th>Sets</th><th>Reps</th><th>Weight</th><th>Note</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
     <div class="pg-row"><button class="btn sm" data-act="pg-addrow" data-s="${si}">+ Exercise</button>
       <input class="pg-in" data-pg="sess" data-s="${si}" data-f="notes" value="${esc(s.notes || "")}" placeholder="Session note for the client (optional)" style="flex:1"></div>
   </section>`;
@@ -259,7 +262,7 @@ function recordRows(p, s, si, r, ri){
       <span class="muted">×</span>
       <input class="pg-in" type="number" inputmode="decimal" step="0.5" data-pg="set" data-s="${si}" data-r="${ri}" data-n="${no}" data-f="weight" value="${esc(l.weight ?? "")}" placeholder="${esc(parseFloat(r.weight) || "wt")}" aria-label="Set ${no} weight">
       <button class="pg-chk" data-act="pg-set-done" data-s="${si}" data-r="${ri}" data-n="${no}" aria-pressed="${!!l.done}" aria-label="Set ${no} done">✓</button></div>`; }).join("");
-  return `<tr class="pg-recrow ${grpClass(r.group)}"><td></td><td colspan="6"><div class="pg-sets">${sets}<button class="btn sm ghost" data-act="pg-set-add" data-s="${si}" data-r="${ri}">+ Set</button></div>${last ? `<div class="small muted">Last time ${esc(last)}</div>` : ""}</td></tr>`;
+  return `<tr class="pg-recrow ${grpClass(r.group)}"><td colspan="2"></td><td colspan="6"><div class="pg-sets">${sets}<button class="btn sm ghost" data-act="pg-set-add" data-s="${si}" data-r="${ri}">+ Set</button></div>${last ? `<div class="small muted">Last time ${esc(last)}</div>` : ""}</td></tr>`;
 }
 const setTimers = {};
 /* Update one set locally and save it a moment later (typing doesn't fire a save per keystroke). */
@@ -642,6 +645,18 @@ function updateBfPreview(){
 }
 
 const CSS = `
+.pg-gripcell{width:28px;padding-right:0!important}
+.pg-grip,.pg-bgrip{touch-action:none;cursor:grab;border:0;background:none;color:var(--muted);border-radius:6px;line-height:1;user-select:none;-webkit-user-select:none}
+.pg-grip{font-size:18px;padding:6px 4px}
+.pg-grip:hover,.pg-bgrip:hover,.pg-grip:focus-visible,.pg-bgrip:focus-visible{color:var(--ink);background:var(--surface2)}
+.pg-grpcell{display:flex;align-items:center;gap:3px}
+.pg-bgrip{font-size:13px;font-weight:700;width:20px;height:30px;color:var(--g,var(--muted));background:color-mix(in srgb,var(--g,var(--muted)) 14%,transparent)}
+.pg-bgrip-sp{display:inline-block;width:20px}
+.pg-dragging{opacity:.45}
+.pg-dragging td{background:color-mix(in srgb,var(--accent) 8%,transparent)}
+tr.pg-drop-before td{box-shadow:inset 0 3px 0 var(--accent)!important}
+tr.pg-drop-after td{box-shadow:inset 0 -3px 0 var(--accent)!important}
+body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:none!important;-webkit-user-select:none!important}
 .pg-recbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:color-mix(in srgb,var(--accent) 10%,var(--surface));border:1px solid color-mix(in srgb,var(--accent) 40%,var(--line));border-radius:10px;padding:8px 12px}
 .pg-recrow td{padding-top:0!important}
 .pg-recrow td:first-child{box-shadow:inset 4px 0 0 var(--g,transparent)}
@@ -674,7 +689,7 @@ const CSS = `
 .pg-sess.hw{border-color:color-mix(in srgb,var(--accent) 45%,var(--line));box-shadow:inset 3px 0 0 var(--accent)}
 .pg-rows td{padding:4px 4px;border-bottom:0}
 .pg-g td:first-child{box-shadow:inset 4px 0 0 var(--g,transparent);border-radius:6px 0 0 6px;padding-left:9px}
-.pg-g td:first-child .pg-in{border-color:color-mix(in srgb,var(--g,var(--line)) 60%,var(--line));background:color-mix(in srgb,var(--g,transparent) 12%,var(--bg));font-weight:700}
+.pg-g td:nth-child(2) .pg-in{border-color:color-mix(in srgb,var(--g,var(--line)) 60%,var(--line));background:color-mix(in srgb,var(--g,transparent) 12%,var(--bg));font-weight:700}
 .ai-rows tr td:first-child{box-shadow:inset 3px 0 0 var(--g,transparent)}.pg-rows th{padding:4px}
 .pg-rows td:nth-child(2){min-width:190px}.pg-rows td:nth-child(6){min-width:120px}
 .pg-exname{display:flex;gap:4px;align-items:center}
@@ -688,6 +703,76 @@ const CSS = `
 .lg-set{display:grid;grid-template-columns:48px 1fr 1fr auto;gap:6px;align-items:center}
 `;
 
-function attach(ctx){ C = ctx; }
+/* ---------- drag to reorder (pointer events: mouse, finger or pen) ---------- */
+let DRAG = null;
+function dragItems(){
+  const s = P().weeks[PG.week].sessions[DRAG.si], tb = DRAG.tbody;
+  const trOf = i => tb.querySelector(`tr.pg-g[data-r="${i}"]`);
+  const recOf = tr => tr && tr.nextElementSibling && tr.nextElementSibling.classList.contains("pg-recrow") ? tr.nextElementSibling : tr;
+  if (DRAG.kind === "row") return (s.rows || []).map((_, i) => { const tr = trOf(i); return { first: tr, last: recOf(tr), rows: [tr, recOf(tr)] }; });
+  return segments(s.rows || []).map(g => { const trs = []; for (let i = g.start; i <= g.end; i++){ const tr = trOf(i); trs.push(tr); if (recOf(tr) !== tr) trs.push(recOf(tr)); } return { first: trs[0], last: trs[trs.length - 1], rows: trs }; });
+}
+function dropTarget(y){
+  const items = dragItems();
+  for (let i = 0; i < items.length; i++){ const a = items[i].first.getBoundingClientRect(), b = items[i].last.getBoundingClientRect(); if (y < (a.top + b.bottom) / 2) return i; }
+  return items.length;
+}
+function markDrop(t){
+  DRAG.tbody.querySelectorAll(".pg-drop-before,.pg-drop-after").forEach(x => x.classList.remove("pg-drop-before", "pg-drop-after"));
+  const items = dragItems(), noop = t === DRAG.from || t === DRAG.from + 1; DRAG.to = t;
+  if (noop) return;
+  if (t < items.length) items[t].first.classList.add("pg-drop-before"); else items[items.length - 1].last.classList.add("pg-drop-after");
+}
+function applyMove(si, kind, from, to){
+  if (to === from || to === from + 1) return false;
+  const p = P(), s = p.weeks[PG.week].sessions[si];
+  s.rows = kind === "row" ? moveRow(s.rows, from, to) : moveBlock(s.rows, from, to);
+  saveSoon(p); redraw(); return true;
+}
+function onPointerDown(e){
+  const h = e.target.closest && e.target.closest("[data-drag]"); if (!h || (e.button && e.button !== 0) || !P()) return;
+  e.preventDefault();
+  const si = +h.getAttribute("data-s"), ri = +h.getAttribute("data-r"), kind = h.getAttribute("data-drag");
+  const s = P().weeks[PG.week].sessions[si];
+  const from = kind === "row" ? ri : segments(s.rows).findIndex(g => g.start <= ri && ri <= g.end);
+  DRAG = { kind, si, from, to: from, tbody: h.closest("tbody"), id: e.pointerId, y: e.clientY, moved: false };
+  dragItems()[from].rows.forEach(tr => tr.classList.add("pg-dragging"));
+  document.body.classList.add("pg-is-dragging");
+  try { h.setPointerCapture(e.pointerId); } catch (x){}
+  window.addEventListener("pointermove", onPointerMove); window.addEventListener("pointerup", onPointerUp); window.addEventListener("pointercancel", onPointerUp);
+}
+let scrollTimer = null;
+function onPointerMove(e){
+  if (!DRAG || e.pointerId !== DRAG.id) return;
+  DRAG.y = e.clientY; DRAG.moved = true; markDrop(dropTarget(e.clientY));
+  const edge = 70, v = e.clientY < edge ? -14 : e.clientY > window.innerHeight - edge ? 14 : 0;
+  clearInterval(scrollTimer); if (v) scrollTimer = setInterval(() => { window.scrollBy(0, v); if (DRAG) markDrop(dropTarget(DRAG.y)); }, 30);
+}
+function onPointerUp(e){
+  if (!DRAG || e.pointerId !== DRAG.id) return;
+  clearInterval(scrollTimer);
+  window.removeEventListener("pointermove", onPointerMove); window.removeEventListener("pointerup", onPointerUp); window.removeEventListener("pointercancel", onPointerUp);
+  document.body.classList.remove("pg-is-dragging");
+  const d = DRAG; DRAG = null;
+  if (e.type === "pointercancel" || !d.moved || !applyMove(d.si, d.kind, d.from, d.to)){
+    d.tbody.querySelectorAll(".pg-dragging,.pg-drop-before,.pg-drop-after").forEach(x => x.classList.remove("pg-dragging", "pg-drop-before", "pg-drop-after"));
+  }
+}
+/* Keyboard: focus a handle and press the up or down arrow. */
+function onDragKey(e){
+  const h = e.target.closest && e.target.closest("[data-drag]"); if (!h || (e.key !== "ArrowUp" && e.key !== "ArrowDown") || !P()) return;
+  e.preventDefault();
+  const si = +h.getAttribute("data-s"), ri = +h.getAttribute("data-r"), kind = h.getAttribute("data-drag"), s = P().weeks[PG.week].sessions[si];
+  const n = kind === "row" ? s.rows.length : segments(s.rows).length;
+  const from = kind === "row" ? ri : segments(s.rows).findIndex(g => g.start <= ri && ri <= g.end);
+  const to = e.key === "ArrowUp" ? Math.max(0, from - 1) : Math.min(n, from + 2);
+  const movedId = kind === "row" ? s.rows[ri].id : null;
+  if (!applyMove(si, kind, from, to)) return;
+  const s2 = P().weeks[PG.week].sessions[si];
+  const newRi = kind === "row" ? s2.rows.findIndex(r => r.id === movedId) : segments(s2.rows)[e.key === "ArrowUp" ? from - 1 : from + 1].start;
+  const nh = document.querySelector(`[data-drag="${kind}"][data-s="${si}"][data-r="${newRi}"]`); if (nh) nh.focus();
+}
+
+function attach(ctx){ C = ctx; document.addEventListener("pointerdown", onPointerDown); document.addEventListener("keydown", onDragKey); }
 function preload(){ if (!PG.ready && !PG.loading && C && C.A.programs) load(); }
 window.TallyPrograms = { attach, render, onClick, onInput, onChange, state: PG, todos, todoText, preload };

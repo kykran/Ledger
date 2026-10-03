@@ -181,3 +181,41 @@ export const GROUP_CSS = `${gv(GL)}.g-x{--g:var(--muted)}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]) ${"ABCDEF".split("").map((L, i) => `.g-${L}{--g:${GD[i]}}`).join(":root:not([data-theme=\"light\"]) ")}}
 :root[data-theme="dark"] ${"ABCDEF".split("").map((L, i) => `.g-${L}{--g:${GD[i]}}`).join(":root[data-theme=\"dark\"] ")}
 .gchip{display:inline-block;min-width:26px;text-align:center;font-weight:700;font-size:11.5px;border-radius:6px;padding:1px 6px;color:var(--ink);background:color-mix(in srgb,var(--g,var(--muted)) 22%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--g,var(--muted)) 55%,transparent)}`;
+
+/* ---------- reordering rows and blocks ----------
+ * A block is a run of consecutive rows whose group starts with the same letter (A1, A2, A3).
+ * Rows without a group letter are their own one-row segment. */
+export const letterOf = g => (String(g || "").trim().match(/^[A-Za-z]/) || [""])[0].toUpperCase();
+export function segments(rows){
+  const segs = [];
+  (rows || []).forEach((r, i) => { const L = letterOf(r.group), last = segs[segs.length - 1];
+    if (L && last && last.L === L && last.end === i - 1) last.end = i; else segs.push({ L, start: i, end: i }); });
+  return segs;
+}
+/* Re-letter blocks top to bottom (A, B, C...) and number rows inside multi-row blocks (A1, A2, A3).
+ * Rows with no group letter are left alone and don't use up a letter. */
+export function relabel(rows){
+  let k = 0;
+  for (const g of segments(rows)){
+    if (!g.L) continue;
+    const L = String.fromCharCode(65 + Math.min(k++, 25)), single = g.end === g.start;
+    for (let i = g.start; i <= g.end; i++) rows[i].group = single ? (/\d/.test(rows[i].group) ? L + "1" : L) : L + (i - g.start + 1);
+  }
+  return rows;
+}
+/* Move one row so it lands before index `to` (0..n, in the original order). Dropped between two rows of the
+ * same block, it joins that block. */
+export function moveRow(rows, from, to){
+  const arr = rows.slice(), [item] = arr.splice(from, 1), t = to > from ? to - 1 : to;
+  arr.splice(t, 0, item);
+  const La = arr[t - 1] && letterOf(arr[t - 1].group), Lb = arr[t + 1] && letterOf(arr[t + 1].group);
+  if (La && La === Lb) item.group = La;
+  return relabel(arr);
+}
+/* Move a whole block so it lands before segment `to`, then re-letter blocks top to bottom (A, B, C...). */
+export function moveBlock(rows, from, to){
+  const segs = segments(rows), groups = segs.map(s => rows.slice(s.start, s.end + 1));
+  const [g] = groups.splice(from, 1), t = to > from ? to - 1 : to;
+  groups.splice(t, 0, g);
+  return relabel(groups.flat());
+}
