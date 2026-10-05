@@ -9,7 +9,7 @@ const clone = o => JSON.parse(JSON.stringify(o));
 const n = v => { const x = parseFloat(v); return isFinite(x) ? x : null; };
 
 export const newRow = (ex) => ({ id: pid("r"), exId: ex ? ex.id : null, name: ex ? ex.name : "", group: "", sets: ex && ex.sets ? String(ex.sets) : "", reps: ex && ex.reps ? String(ex.reps) : "", weight: "", note: "" });
-export const newSession = (name) => ({ id: pid("s"), name: name || "Day A", homework: false, notes: "", rows: [newRow(), newRow(), newRow()] });
+export const newSession = (name) => ({ id: pid("s"), name: name || "Day A", homework: false, notes: "", rows: [] });
 export const newWeek = (label) => ({ id: pid("w"), label: label || "Week 1", sessions: [newSession("Day A")] });
 export function newProgram(clientId, name){
   return { name: name || "Program", clientId, status: "active", startDate: new Date().toISOString().slice(0, 10), weeks: [newWeek("Week 1")] };
@@ -199,7 +199,7 @@ export function relabel(rows){
   for (const g of segments(rows)){
     if (!g.L) continue;
     const L = String.fromCharCode(65 + Math.min(k++, 25)), single = g.end === g.start;
-    for (let i = g.start; i <= g.end; i++) rows[i].group = single ? (/\d/.test(rows[i].group) ? L + "1" : L) : L + (i - g.start + 1);
+    for (let i = g.start; i <= g.end; i++) rows[i].group = single ? L : L + (i - g.start + 1);
   }
   return rows;
 }
@@ -218,4 +218,33 @@ export function moveBlock(rows, from, to){
   const [g] = groups.splice(from, 1), t = to > from ? to - 1 : to;
   groups.splice(t, 0, g);
   return relabel(groups.flat());
+}
+
+/* Labels are automatic: every exercise belongs to a block, and blocks read A, B, C top to bottom.
+ * A temporary letter that differs from the neighbours marks a new block; relabel() then renames everything. */
+const tempLetter = (...avoid) => ["Q", "X", "Y", "Z", "W"].find(L => !avoid.includes(L));
+export function normalizeBlocks(rows){
+  (rows || []).forEach((r, i) => { if (!letterOf(r.group)) r.group = tempLetter(i ? letterOf(rows[i - 1].group) : "", rows[i + 1] ? letterOf(rows[i + 1].group) : ""); });
+  return relabel(rows || []);
+}
+/* Superset row i (and the rest of its block) with the block above. */
+export function linkUp(rows, i){
+  if (i <= 0) return rows;
+  const L = letterOf(rows[i - 1].group), g = segments(rows).find(x => x.start <= i && i <= x.end);
+  for (let k = g.start; k <= g.end; k++) rows[k].group = L;
+  return relabel(rows);
+}
+/* Split a superset so row i and the rows after it in that block become their own block. */
+export function splitAt(rows, i){
+  const g = segments(rows).find(x => x.start <= i && i <= x.end); if (!g || i === g.start) return rows;
+  const T = tempLetter(g.L, rows[g.end + 1] ? letterOf(rows[g.end + 1].group) : "");
+  for (let k = i; k <= g.end; k++) rows[k].group = T;
+  return relabel(rows);
+}
+/* Add a row at the end, as a new block or supersetted with the last block. */
+export function addToBlocks(rows, row, superset){
+  const last = rows[rows.length - 1];
+  row.group = superset && last ? letterOf(last.group) : tempLetter(last ? letterOf(last.group) : "");
+  rows.push(row);
+  return normalizeBlocks(rows);
 }

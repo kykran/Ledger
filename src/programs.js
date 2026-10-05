@@ -3,13 +3,13 @@
  * app.js calls attach(ctx) once and then render()/onClick()/onChange()/onInput() while the Programs tab is open.
  * Data goes through ctx.A.programs (see adapter-hosted.js / programs-demo.js). */
 import { pid, newRow, newSession, newWeek, newProgram, copySession, copyWeek, repeatSession, repeatWeek, setCount,
-  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, programTodos } from "./programs-core.js";
+  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, programTodos } from "./programs-core.js";
 import { STARTER_EXERCISES } from "./exercise-seed.js";
 
 let C = null; // context from app.js
 const PG = { ready: null, loading: false, view: "clients", clientId: null, progId: null, week: 0, sub: "program",
   lib: null, progs: null, logs: {}, meas: {}, clip: null, repeat: null, confirm: null, save: "", libQ: "", lift: "", link: {}, edEx: null, videoUrls: {},
-  shared: [], sharedLib: [], sharing: false, shareList: null };
+  shared: [], sharedLib: [], sharing: false, shareList: null, ss: {}, qa: null, filled: {} };
 const timers = {};
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -23,7 +23,21 @@ const libByName = () => Object.fromEntries((PG.lib || []).map(e => [e.name.trim(
 const sharedClients = () => { const out = {}; for (const p of PG.shared){ const id = "sh:" + p.ownerId + ":" + p.clientId; out[id] = out[id] || { id, name: p.clientName || "Client", shared: true, ownerId: p.ownerId, ownerName: p.ownerName, realId: p.clientId }; } return Object.values(out); };
 const client = id => C.S.clients.find(c => c.id === id) || sharedClients().find(c => c.id === id);
 const progsOf = c => c.shared ? PG.shared.filter(p => p.ownerId === c.ownerId && p.clientId === c.realId) : (PG.progs || []).filter(p => p.clientId === c.id);
-const redraw = () => C.render();
+/* Re-render without losing your place: the field you were typing in keeps focus and cursor position. */
+const FKEYS = ["data-pg", "data-s", "data-r", "data-f", "data-n"];
+function redraw(){
+  const a = document.activeElement; let sel = null, pos = null;
+  if (a && a.matches && a.matches("input,textarea,select") && a.closest && a.closest("#main")){
+    const attrs = FKEYS.filter(k => a.hasAttribute(k)).map(k => `[${k}="${String(a.getAttribute(k)).replace(/"/g, '\\"')}"]`).join("");
+    sel = attrs ? a.tagName.toLowerCase() + attrs : a.id ? "#" + a.id : null;
+    try { pos = [a.selectionStart, a.selectionEnd]; } catch (x){}
+  }
+  C.render();
+  if (!sel) return;
+  const n = document.querySelector("#main " + sel); if (!n || n === document.activeElement) return;
+  try { n.focus({ preventScroll: true }); } catch (x){ n.focus(); }
+  if (pos && pos[0] != null){ try { n.setSelectionRange(pos[0], pos[1]); } catch (x){} }
+}
 
 /* ---------- loading ---------- */
 async function load(){
@@ -168,6 +182,7 @@ function renderProgram(c, progs){
   if (!p && c.shared) return `<section class="card"><div class="empty">This program is no longer shared with you.</div></section>`;
   if (!p) return `<section class="card"><div class="empty"><b>No program for ${esc(c.name.split(" ")[0])} yet</b><span>Start one, then add weeks, sessions and exercises.</span>
     <div class="actions"><input id="pg-newname" class="pg-in" placeholder="Program name" value="${esc(c.name.split(" ")[0])}'s program"><button class="btn primary" data-act="pg-new">Start program</button>${C.A.programs.ai ? `<button class="btn" data-act="pg-ai" data-mode="create">✦ Draft with AI</button>` : ""}</div></div></section>`;
+  tidyProgram(p);
   const W = p.weeks || [], wi = Math.min(PG.week, Math.max(0, W.length - 1)); PG.week = wi;
   const week = W[wi];
   const clip = PG.clip;
@@ -198,6 +213,30 @@ function renderProgram(c, progs){
 function repeatForm(){
   return `<span class="pg-repeat">Copy into the next <input type="number" min="1" max="52" value="${esc(PG.repeat.n || 3)}" id="pg-rep-n" class="pg-in" style="width:64px"> weeks <button class="btn sm primary" data-act="pg-repeat-go">Paste</button><button class="btn sm ghost" data-act="pg-repeat-x">Cancel</button></span>`;
 }
+const LINK_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1 1"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1-1"/></svg>`;
+/* Blocks are automatic; keep labels tidy and every exercise in the library (own programs). */
+function tidyProgram(p){
+  let changed = false;
+  for (const w of p.weeks || []) for (const s of w.sessions || []){
+    const before = (s.rows || (s.rows = [])).map(r => r.group + "|" + r.exId).join(",");
+    normalizeBlocks(s.rows);
+    if (!p.shared && !PG.filled[p.id]) ensureInLibrary(s.rows);
+    if (before !== s.rows.map(r => r.group + "|" + r.exId).join(",")) changed = true;
+  }
+  PG.filled[p.id] = 1;
+  if (changed) saveSoon(p);
+}
+function ensureInLibrary(rows){
+  const p = P(); if (!p || p.shared || !PG.lib) return;
+  const by = libByName(), fresh = [];
+  for (const r of rows){
+    const n = String(r.name || "").trim(); if (n.length < 3) continue;
+    let e = by[n.toLowerCase()];
+    if (!e){ e = { id: pid("ex"), name: n, muscle: "", equipment: "", cues: "", sets: r.sets || "", reps: r.reps || "", videoUrl: "" }; by[n.toLowerCase()] = e; fresh.push(e); }
+    if (r.exId !== e.id) r.exId = e.id;
+  }
+  if (fresh.length){ PG.lib.push(...fresh); C.A.programs.saveExercises(fresh).catch(() => {}); }
+}
 function renderSession(p, wi, si, s){
   const lib = libById();
   const rep = PG.repeat && !PG.repeat.week && PG.repeat.s === si;
@@ -210,8 +249,9 @@ function renderSession(p, wi, si, s){
     const sum = !recOn && done.n ? `<span class="pg-done" title="Sets recorded">✓ ${done.n}/${Math.max(planned, done.total)}${done.top != null ? ` · ${done.top}` : ""}</span>` : "";
     const label = esc(r.name || "exercise");
     return `<tr class="pg-g ${grpClass(r.group)}" data-r="${ri}"><td class="pg-gripcell"><button class="pg-grip" data-drag="row" data-s="${si}" data-r="${ri}" title="Drag to move this exercise" aria-label="Move ${label}. Drag, or use arrow keys">⠿</button></td>
-      <td><div class="pg-grpcell">${segStart[ri] ? `<button class="pg-bgrip" data-drag="block" data-s="${si}" data-r="${ri}" title="Drag to move block ${segStart[ri]}" aria-label="Move block ${segStart[ri]}. Drag, or use arrow keys">⇕</button>` : `<span class="pg-bgrip-sp"></span>`}${f("group", "A1", "48px")}</div></td>
-      <td><div class="pg-exname"><input class="pg-in" list="pg-exlist" data-pg="row" data-s="${si}" data-r="${ri}" data-f="name" value="${esc(r.name)}" placeholder="Exercise" aria-label="Exercise">${hasVid ? `<button class="btn sm ghost" data-act="pg-vid" data-id="${esc(ex.id)}" title="Watch video" aria-label="Watch video">▶</button>` : ex ? "" : r.name ? `<span class="pg-new" title="Not in your library yet">new</span>` : ""}</div></td>
+      <td><div class="pg-grpcell">${segStart[ri] ? `<button class="pg-bgrip" data-drag="block" data-s="${si}" data-r="${ri}" title="Drag to move block ${segStart[ri]}" aria-label="Move block ${segStart[ri]}. Drag, or use arrow keys">⇕</button>` : `<span class="pg-bgrip-sp"></span>`}<span class="gchip pg-lbl ${grpClass(r.group)}">${esc(r.group || "")}</span>${ri > 0 ? (() => { const on = letterOf(r.group) && letterOf(r.group) === letterOf(s.rows[ri - 1].group);
+        return `<button class="pg-link ${on ? "on" : ""}" data-act="pg-link" data-s="${si}" data-r="${ri}" aria-pressed="${on}" title="${on ? "Linked as a superset with the exercise above. Click to unlink" : "Superset with the exercise above"}" aria-label="${on ? "Unlink " + label + " from the superset" : "Superset " + label + " with the exercise above"}">${LINK_SVG}</button>`; })() : `<span class="pg-link-sp"></span>`}</div></td>
+      <td><div class="pg-exname"><input class="pg-in" list="pg-exlist" data-pg="row" data-s="${si}" data-r="${ri}" data-f="name" value="${esc(r.name)}" placeholder="Exercise" aria-label="Exercise">${hasVid ? `<button class="btn sm ghost" data-act="pg-vid" data-id="${esc(ex.id)}" title="Watch video" aria-label="Watch video">▶</button>` : ""}</div></td>
       <td>${f("sets", "Sets", "56px")}</td><td>${f("reps", "Reps", "72px")}</td><td>${f("weight", "Weight", "72px")}</td><td>${f("note", "Note")}</td>
       <td>${sum}<button class="btn sm ghost" data-act="pg-delrow" data-s="${si}" data-r="${ri}" aria-label="Remove row">✕</button></td></tr>${recOn && r.name ? recordRows(p, s, si, r, ri) : ""}`;
   }).join("");
@@ -225,10 +265,65 @@ function renderSession(p, wi, si, s){
         ${PG.confirm === cKey ? `<button class="btn sm danger" data-act="pg-delsess" data-s="${si}">Delete?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="${cKey}">Delete</button>`}</div></div>
     ${rep ? `<div class="pg-acts" style="justify-content:flex-start">${repeatForm()}</div>` : ""}
     ${PG.rec && PG.rec.sid === s.id ? recordBar(s) : ""}
-    <div class="tablewrap"><table class="pg-rows"><thead><tr><th></th><th>Group</th><th>Exercise</th><th>Sets</th><th>Reps</th><th>Weight</th><th>Note</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
-    <div class="pg-row"><button class="btn sm" data-act="pg-addrow" data-s="${si}">+ Exercise</button>
-      <input class="pg-in" data-pg="sess" data-s="${si}" data-f="notes" value="${esc(s.notes || "")}" placeholder="Session note for the client (optional)" style="flex:1"></div>
+    ${(s.rows || []).length ? "" : `<div class="pg-emptyhint small muted">No exercises yet. Start typing below.</div>`}
+    <div class="tablewrap" ${(s.rows || []).length ? "" : "hidden"}><table class="pg-rows"><thead><tr><th></th><th>Block</th><th>Exercise</th><th>Sets</th><th>Reps</th><th>Weight</th><th>Note</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="pg-qa"><div class="pg-qa-box"><input class="pg-in pg-qa-in" data-pg="qa" data-s="${si}" placeholder="+ Add exercise: type to search your library" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pg-qa-list-${si}" aria-label="Add exercise"><div class="pg-qa-list" id="pg-qa-list-${si}" role="listbox" hidden></div></div>
+      <button class="btn sm pg-ss ${PG.ss[s.id] ? "on" : ""}" data-act="pg-ss" data-s="${si}" aria-pressed="${!!PG.ss[s.id]}" title="When on, each exercise you add joins the last block as a superset">${LINK_SVG} Superset</button></div>
+    <div class="small muted pg-qa-hint">Enter adds it as its own block. Shift+Enter, or turn on Superset, to link it with the block above. Click the chain on any row to link or unlink.</div>
+    <div class="pg-row"><input class="pg-in" data-pg="sess" data-s="${si}" data-f="notes" value="${esc(s.notes || "")}" placeholder="Session note for the client (optional)" style="flex:1"></div>
   </section>`;
+}
+
+/* ---------- quick add ---------- */
+function qaMatches(q){
+  q = q.trim().toLowerCase(); if (!q) return [];
+  const words = q.split(/\s+/);
+  return (PG.lib || []).map(e => { const n = e.name.toLowerCase(), hay = n + " " + (e.muscle || "").toLowerCase() + " " + (e.equipment || "").toLowerCase();
+      if (!words.every(w => hay.includes(w))) return null;
+      return { e, s: n === q ? -1 : n.startsWith(q) ? 0 : n.split(/[\s-]+/).some(w => w.startsWith(words[0])) ? 1 : 2 }; })
+    .filter(Boolean).sort((a, b) => a.s - b.s || a.e.name.localeCompare(b.e.name)).slice(0, 8).map(x => x.e);
+}
+function qaRender(si){
+  const box = document.getElementById("pg-qa-list-" + si), inp = document.querySelector(`#main input[data-pg="qa"][data-s="${si}"]`); if (!box || !inp) return;
+  const q = inp.value.trim(), m = qaMatches(q), exact = m.some(e => e.name.toLowerCase() === q.toLowerCase());
+  const items = [...m.map(e => ({ e })), ...(q && !exact ? [{ nu: q }] : [])];
+  const hi = PG.qa && PG.qa.si === si ? Math.min(PG.qa.hi, items.length - 1) : 0;
+  PG.qa = { si, items, hi: Math.max(0, hi) };
+  box.hidden = !items.length; inp.setAttribute("aria-expanded", String(!!items.length));
+  box.innerHTML = items.map((it, i) => `<div class="pg-qa-it ${i === PG.qa.hi ? "on" : ""}" role="option" id="pg-qa-${si}-${i}" aria-selected="${i === PG.qa.hi}" data-act="pg-qa-pick" data-s="${si}" data-i="${i}">${it.e
+    ? `<b>${esc(it.e.name)}</b><span class="small muted">${esc([it.e.muscle, it.e.equipment, it.e.sets && it.e.reps ? it.e.sets + " × " + it.e.reps : ""].filter(Boolean).join(" · "))}</span>`
+    : `<span>Add “<b>${esc(it.nu)}</b>” as a new exercise</span>`}</div>`).join("");
+  if (items.length) inp.setAttribute("aria-activedescendant", `pg-qa-${si}-${PG.qa.hi}`);
+}
+function qaAdd(si, it, superset){
+  const p = P(); if (!p || !it) return;
+  const s = p.weeks[PG.week].sessions[si], last = s.rows[s.rows.length - 1];
+  const row = newRow(it.e); if (!it.e) row.name = it.nu.trim();
+  if (!row.sets && last) row.sets = last.sets;      // no library defaults: carry the last exercise's sets x reps
+  if (!row.reps && last) row.reps = last.reps;
+  addToBlocks(s.rows, row, superset);
+  ensureInLibrary([row]);
+  saveSoon(p); PG.qa = null; redraw();
+  const inp = document.querySelector(`#main input[data-pg="qa"][data-s="${si}"]`); if (inp){ inp.value = ""; inp.focus(); }
+}
+function onBuilderKey(e){
+  const t = e.target, k = t.getAttribute && t.getAttribute("data-pg"); if (!k) return;
+  if (k === "qa"){
+    const si = +t.getAttribute("data-s"), sess = P() && P().weeks[PG.week].sessions[si];
+    if ((e.key === "ArrowDown" || e.key === "ArrowUp") && PG.qa && PG.qa.si === si && PG.qa.items.length){
+      e.preventDefault(); const Q = PG.qa; Q.hi = (Q.hi + (e.key === "ArrowDown" ? 1 : -1) + Q.items.length) % Q.items.length; qaRender(si); return; }
+    if (e.key === "Enter"){ e.preventDefault(); if (!t.value.trim()) return; if (!PG.qa || PG.qa.si !== si) qaRender(si);
+      qaAdd(si, PG.qa.items[PG.qa.hi], e.shiftKey || !!(sess && PG.ss[sess.id])); return; }
+    if (e.key === "Escape"){ const b = document.getElementById("pg-qa-list-" + si); if (b) b.hidden = true; return; }
+    return;
+  }
+  // Enter moves along the row: sets, reps, weight, note, then back to the add box.
+  if (k === "row" && e.key === "Enter" && t.getAttribute("data-f") !== "name"){
+    e.preventDefault();
+    const ins = [...t.closest("tr").querySelectorAll('input[data-pg="row"]')], i = ins.indexOf(t);
+    if (i < ins.length - 1){ ins[i + 1].focus(); try { ins[i + 1].select(); } catch (x){} }
+    else { const q = document.querySelector(`#main input[data-pg="qa"][data-s="${t.getAttribute("data-s")}"]`); if (q) q.focus(); }
+  }
 }
 
 /* ---------- recording sets inline ---------- */
@@ -516,7 +611,8 @@ async function onClick(el, e){
     case "pg-delweek": mutate(p => { p.weeks.splice(wi, 1); PG.week = Math.max(0, wi - 1); }); break;
     case "pg-copyweek": PG.clip = { type: "week", data: JSON.parse(JSON.stringify(p.weeks[wi])) }; C.toast("Week copied. Open any week or client and paste."); redraw(); break;
     case "pg-pasteweek": if (PG.clip && PG.clip.type === "week") mutate(p => { p.weeks[wi] = copyWeek(PG.clip.data, p.weeks[wi].label); }); break;
-    case "pg-addsess": mutate(p => { const n = p.weeks[wi].sessions.length; p.weeks[wi].sessions.push(newSession("Day " + String.fromCharCode(65 + Math.min(n, 25)))); }); break;
+    case "pg-addsess": { let n = 0; mutate(p => { n = p.weeks[wi].sessions.length; p.weeks[wi].sessions.push(newSession("Day " + String.fromCharCode(65 + Math.min(n, 25)))); });
+      const q = document.querySelector(`#main input[data-pg="qa"][data-s="${n}"]`); if (q){ q.focus(); q.scrollIntoView({ block: "center" }); } break; }
     case "pg-copysess": PG.clip = { type: "session", data: JSON.parse(JSON.stringify(p.weeks[wi].sessions[si])) }; C.toast("Session copied. Paste it into any week."); redraw(); break;
     case "pg-pastesess": if (PG.clip && PG.clip.type === "session") mutate(p => p.weeks[wi].sessions.push(copySession(PG.clip.data))); break;
     case "pg-delsess": mutate(p => p.weeks[wi].sessions.splice(si, 1)); break;
@@ -527,8 +623,11 @@ async function onClick(el, e){
       const n = Math.max(1, Math.min(52, parseInt(valIn("pg-rep-n"), 10) || 1)), R = PG.repeat; PG.repeat = null;
       const next = R.week ? repeatWeek(p, wi, n) : repeatSession(p, wi, R.s, n);
       p.weeks = next.weeks; saveSoon(p); redraw(); C.toast(`Copied into the next ${n} week${n === 1 ? "" : "s"}`); break; }
-    case "pg-addrow": mutate(p => p.weeks[wi].sessions[si].rows.push(newRow())); break;
-    case "pg-delrow": mutate(p => p.weeks[wi].sessions[si].rows.splice(ri, 1)); break;
+    case "pg-addrow": { const q = document.querySelector(`#main input[data-pg="qa"][data-s="${si}"]`); if (q) q.focus(); break; }
+    case "pg-delrow": mutate(p => { const rows = p.weeks[wi].sessions[si].rows; rows.splice(ri, 1); relabel(rows); }); break;
+    case "pg-link": mutate(p => { const rows = p.weeks[wi].sessions[si].rows, on = letterOf(rows[ri].group) === letterOf(rows[ri - 1].group); if (on) splitAt(rows, ri); else linkUp(rows, ri); }); break;
+    case "pg-ss": { const sid = p.weeks[wi].sessions[si].id; PG.ss[sid] = !PG.ss[sid]; redraw(); const q = document.querySelector(`#main input[data-pg="qa"][data-s="${si}"]`); if (q) q.focus(); break; }
+    case "pg-qa-pick": { const i = +el.getAttribute("data-i"), sess = p.weeks[wi].sessions[si]; if (PG.qa && PG.qa.si === si) qaAdd(si, PG.qa.items[i], !!PG.ss[sess.id]); break; }
     case "pg-rec": { const s = p.weeks[wi].sessions[si]; const have = (PG.logs[PG.clientId] || []).find(l => l.session_id === s.id);
       PG.rec = { sid: s.id, date: have ? String(have.logged_on).slice(0, 10) : today(), extra: {} }; redraw(); break; }
     case "pg-rec-done": PG.rec = null; redraw(); break;
@@ -612,6 +711,7 @@ function onInput(t){
   const f = t.getAttribute("data-f"), si = +t.getAttribute("data-s"), ri = +t.getAttribute("data-r");
   if (k === "libq"){ PG.libQ = t.value; const pos = t.selectionStart; redraw(); const n = document.getElementById("pg-libq"); if (n){ n.focus(); try { n.setSelectionRange(pos, pos); } catch (x){} } return true; }
   if (k === "calc" || k === "who"){ updateBfPreview(); return true; }
+  if (k === "qa"){ if (PG.qa && PG.qa.si !== +t.getAttribute("data-s")) PG.qa = null; if (PG.qa) PG.qa.hi = 0; qaRender(+t.getAttribute("data-s")); return true; }
   if (k === "set"){ const v = t.value === "" ? null : Number(t.value); putSet(+t.getAttribute("data-s"), +t.getAttribute("data-r"), +t.getAttribute("data-n"), { [t.getAttribute("data-f")]: v }); return true; }
   const p = P(); if (!p) return true;
   if (k === "prog"){ p[f] = t.value; saveSoon(p); return true; }
@@ -633,8 +733,8 @@ function onChange(t){
   if (k === "who"){ const c = client(PG.clientId); C.saveClient({ ...c, sex: valIn("pg-sex"), birthYear: num(valIn("pg-by")) }).catch(() => {}); return true; }
   const p = P(); if (!p) return true;
   if (k === "sess" && t.type === "checkbox"){ mutate(p => p.weeks[PG.week].sessions[si].homework = t.checked); return true; }
-  if (k === "row" && t.getAttribute("data-f") === "group"){ redraw(); return true; }
-  if (k === "row" && t.getAttribute("data-f") === "name"){ mutate(p => fillFromLibrary(p.weeks[PG.week].sessions[si].rows[ri])); return true; }
+  // Wait a tick so focus has moved to the next field first; the redraw then keeps you there.
+  if (k === "row" && t.getAttribute("data-f") === "name"){ setTimeout(() => mutate(p => { const r = p.weeks[PG.week].sessions[si].rows[ri]; if (!r) return; fillFromLibrary(r); ensureInLibrary([r]); }), 0); return true; }
   return true;
 }
 function updateBfPreview(){
@@ -645,6 +745,22 @@ function updateBfPreview(){
 }
 
 const CSS = `
+.pg-lbl{min-width:34px}
+.pg-link,.pg-link-sp{width:26px;height:26px;flex:none}
+.pg-link{display:grid;place-items:center;border:1px dashed var(--line);border-radius:7px;background:none;color:var(--muted);cursor:pointer;opacity:.7}
+.pg-link:hover,.pg-link:focus-visible{opacity:1;color:var(--ink);border-style:solid}
+.pg-link.on{opacity:1;border-style:solid;color:var(--g,var(--accent));border-color:color-mix(in srgb,var(--g,var(--accent)) 55%,var(--line));background:color-mix(in srgb,var(--g,var(--accent)) 12%,transparent)}
+.pg-qa{display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap}
+.pg-qa-box{position:relative;flex:1;min-width:220px}
+.pg-qa-in{width:100%;padding:9px 12px;font-size:14.5px;border-style:dashed}
+.pg-qa-in:focus{border-style:solid}
+.pg-qa-list{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:30;background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);max-height:320px;overflow:auto;padding:4px}
+.pg-qa-it{display:flex;justify-content:space-between;gap:10px;align-items:baseline;padding:8px 10px;border-radius:7px;cursor:pointer}
+.pg-qa-it.on,.pg-qa-it:hover{background:var(--surface2)}
+.pg-ss{display:inline-flex;align-items:center;gap:5px}
+.pg-ss.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+.pg-qa-hint{margin-top:-6px}
+.pg-emptyhint{padding:4px 2px}
 .pg-gripcell{width:28px;padding-right:0!important}
 .pg-grip,.pg-bgrip{touch-action:none;cursor:grab;border:0;background:none;color:var(--muted);border-radius:6px;line-height:1;user-select:none;-webkit-user-select:none}
 .pg-grip{font-size:18px;padding:6px 4px}
@@ -773,6 +889,12 @@ function onDragKey(e){
   const nh = document.querySelector(`[data-drag="${kind}"][data-s="${si}"][data-r="${newRi}"]`); if (nh) nh.focus();
 }
 
-function attach(ctx){ C = ctx; document.addEventListener("pointerdown", onPointerDown); document.addEventListener("keydown", onDragKey); }
+function attach(ctx){
+  C = ctx;
+  document.addEventListener("pointerdown", e => { if (e.target.closest && e.target.closest(".pg-qa-list")) e.preventDefault(); onPointerDown(e); });
+  document.addEventListener("keydown", onDragKey); document.addEventListener("keydown", onBuilderKey);
+  document.addEventListener("focusout", e => { const t = e.target; if (t.getAttribute && t.getAttribute("data-pg") === "qa"){ const si = t.getAttribute("data-s"); setTimeout(() => { const b = document.getElementById("pg-qa-list-" + si), a = document.activeElement; if (b && !(a && a.getAttribute && a.getAttribute("data-pg") === "qa" && a.getAttribute("data-s") === si)) b.hidden = true; }, 150); } });
+  document.addEventListener("focusin", e => { const t = e.target; if (t.getAttribute && t.getAttribute("data-pg") === "qa" && t.value.trim()) qaRender(+t.getAttribute("data-s")); });
+}
 function preload(){ if (!PG.ready && !PG.loading && C && C.A.programs) load(); }
 window.TallyPrograms = { attach, render, onClick, onInput, onChange, state: PG, todos, todoText, preload };
