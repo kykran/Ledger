@@ -248,3 +248,72 @@ export function addToBlocks(rows, row, superset){
   rows.push(row);
   return normalizeBlocks(rows);
 }
+
+/* ---------- one "sets x reps" field ----------
+ * "3x8" -> 3 sets of 8 · "3x8,8,6" -> 3 sets: 8, 8, 6 · "8,8,6" -> 3 sets · "4x8-10" · "3x8 each" · "3x30s" · "10" -> reps only.
+ * Stored as sets ("3") and reps ("8" or "8,8,6") so everything else keeps working. */
+const stripX = s => String(s || "").replace(/^\s*[x×*]\s*/i, "").trim();
+export function parseSetsReps(str){
+  const t = String(str || "").trim().replace(/\s+/g, " ");
+  if (!t) return { sets: "", reps: "" };
+  const m = t.match(/^(\d+)\s*(?:x|×|\*|sets? of)\s*(.*)$/i);
+  const sets = m ? m[1] : "", repsPart = stripX(m ? m[2] : t);
+  const parts = repsPart.split(/\s*,\s*/).filter(Boolean);
+  if (parts.length > 1){
+    let n = Math.max(sets ? +sets : 0, parts.length);
+    while (parts.length < n) parts.push(parts[parts.length - 1]);
+    return { sets: String(n), reps: parts.join(",") };
+  }
+  return { sets, reps: repsPart };
+}
+export function fmtSetsReps(r){
+  const sets = String((r && r.sets) || "").trim(), reps = stripX(r && r.reps);
+  return sets && reps ? `${sets}x${reps}` : reps || (sets ? sets + "x" : "");
+}
+/* Target reps for set k (0-based), as a number when there is one. */
+export function repsFor(r, k){
+  const parts = stripX(r && r.reps).split(/\s*,\s*/);
+  return parseInt(parts[Math.min(k, parts.length - 1)], 10) || null;
+}
+
+/* ---------- workout emails ---------- */
+const DAYMS = 86400000;
+const sod = d => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+const parseYmd = s => { const [y, m, d] = String(s).slice(0, 10).split("-").map(Number); return new Date(y, m - 1, d); };
+/* Which written session a client does on `date`: program week = weeks since the program's start date, and the
+ * nth calendar session in that week gets the nth in-studio session (Day A, Day B...). null if nothing is written. */
+export function sessionForDate(program, date, sessionDates){
+  if (!program || !program.startDate) return null;
+  const start = parseYmd(program.startDate), wk = Math.floor((sod(date) - start) / (7 * DAYMS));
+  if (wk < 0 || wk >= (program.weeks || []).length) return null;
+  const week = program.weeks[wk], list = (week.sessions || []).filter(s => !s.homework && (s.rows || []).some(r => r.name));
+  const days = [...new Set((sessionDates || []).filter(d => Math.floor((sod(d) - start) / (7 * DAYMS)) === wk).map(d => sod(d).getTime()))].sort((a, b) => a - b);
+  const n = days.indexOf(sod(date).getTime());
+  if (n < 0 || n >= list.length) return null;
+  return { week, weekIndex: wk, session: list[n] };
+}
+const EMAIL_G = { A: "#2a78d6", B: "#eb6834", C: "#1baf7a", D: "#eda100", E: "#e87ba4", F: "#008300" };
+const escH = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+/* The email a client gets for one session. when: Date of the session (or null for "send now"). */
+export function workoutEmail({ first, trainer, session, weekLabel, when, link }){
+  const day = when ? when.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }) : "";
+  const time = when ? when.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "";
+  const subject = `Your workout${day ? " for " + day.replace(/,.*$/, "") : ""}: ${session.name}`;
+  const rows = (session.rows || []).filter(r => r.name);
+  const rx = r => [fmtSetsReps(r).replace("x", " × "), r.weight ? "@ " + r.weight : ""].filter(Boolean).join(" ");
+  const text = [`Hi ${first},`, "", `Here's your workout${day ? " for " + day + (time ? " at " + time : "") : ""}: ${session.name}${weekLabel ? " (" + weekLabel + ")" : ""}.`, "",
+    ...rows.map(r => `${r.group ? r.group + "  " : ""}${r.name}  ${rx(r)}${r.note ? "  (" + r.note + ")" : ""}`),
+    ...(session.notes ? ["", session.notes] : []), ...(link ? ["", "Videos, cues and your log: " + link] : []), "", trainer ? "- " + trainer : ""].join("\n").trim();
+  const html = `<div style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto;color:#1d1a14;background:#fffcf6;border:1px solid #e2d9c8;border-radius:14px;padding:24px">
+  <p style="margin:0 0 4px;font-size:15px">Hi ${escH(first)},</p>
+  <h1 style="font-size:20px;margin:0 0 4px">${escH(session.name)}</h1>
+  <p style="margin:0 0 16px;color:#877f6f;font-size:13px">${escH([day && day + (time ? " · " + time : ""), weekLabel].filter(Boolean).join(" · "))}</p>
+  <table style="width:100%;border-collapse:collapse;font-size:14px">${rows.map(r => { const c = EMAIL_G[letterOf(r.group)] || "#877f6f";
+    return `<tr><td style="padding:8px 8px 8px 0;border-top:1px solid #eee7da;width:38px;vertical-align:top">${r.group ? `<span style="display:inline-block;min-width:26px;text-align:center;font-weight:700;font-size:12px;border-radius:6px;padding:2px 6px;border:1px solid ${c};color:#1d1a14;background:${c}22">${escH(r.group)}</span>` : ""}</td>
+      <td style="padding:8px 0;border-top:1px solid #eee7da;vertical-align:top"><b>${escH(r.name)}</b>${r.note ? `<div style="color:#4f493d;font-size:13px">${escH(r.note)}</div>` : ""}</td>
+      <td style="padding:8px 0 8px 8px;border-top:1px solid #eee7da;text-align:right;white-space:nowrap;vertical-align:top">${escH(rx(r))}</td></tr>`; }).join("")}</table>
+  ${session.notes ? `<p style="margin:16px 0 0;font-size:14px;color:#4f493d">${escH(session.notes)}</p>` : ""}
+  ${link ? `<p style="margin:20px 0 0"><a href="${escH(link)}" style="display:inline-block;background:#1f4c9c;color:#fff;text-decoration:none;padding:10px 16px;border-radius:10px;font-weight:600">Open videos and log your sets</a></p>` : ""}
+  <p style="margin:20px 0 0;color:#877f6f;font-size:12px">Sent by ${escH(trainer || "your trainer")}. Reply to this email to reach them.</p></div>`;
+  return { subject, text, html };
+}

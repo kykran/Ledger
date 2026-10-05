@@ -50,6 +50,7 @@ export function demoProgramsAdapter(){
     async listPrograms(){ return c(P.programs); },
     async saveProgram(p){ const i = P.programs.findIndex(x => x.id === p.id); if (i >= 0) P.programs[i] = c(p); else P.programs.push(c(p)); },
     async deleteProgram(id){ P.programs = P.programs.filter(p => p.id !== id); P.logs = P.logs.filter(l => l.program_id !== id); },
+    async emailWorkout(){ await new Promise(r => setTimeout(r, 200)); return { status: "sent", mailReady: true }; },
     async logs(clientId){ return c(P.logs.filter(l => l.client_id === clientId)); },
     // Demo stand-in for the AI assistant: canned but shaped exactly like the real /api/ai results.
     async ai(b){

@@ -3,7 +3,7 @@
  * app.js calls attach(ctx) once and then render()/onClick()/onChange()/onInput() while the Programs tab is open.
  * Data goes through ctx.A.programs (see adapter-hosted.js / programs-demo.js). */
 import { pid, newRow, newSession, newWeek, newProgram, copySession, copyWeek, repeatSession, repeatWeek, setCount,
-  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, programTodos } from "./programs-core.js";
+  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos } from "./programs-core.js";
 import { STARTER_EXERCISES } from "./exercise-seed.js";
 
 let C = null; // context from app.js
@@ -173,7 +173,12 @@ function renderClient(){
   const notes = c.shared ? "" : `<details class="card pg-notes" ${c.programNotes ? "" : "open"}><summary><b>Programming notes</b> <span class="small muted">${c.programNotes ? esc(c.programNotes.slice(0, 90)) + (c.programNotes.length > 90 ? "…" : "") : "injuries, limitations, goals. The assistant reads these and flags anything risky"}</span></summary>
     <textarea class="pg-in" data-pg="cnotes" rows="3" placeholder="e.g. Left knee meniscus repair 2024, no deep loaded flexion. Lower back flares with heavy hinging. Goal: hike Kilimanjaro in March.">${esc(c.programNotes || "")}</textarea>
     <span class="small muted">Private to you. Saved when you click away.</span></details>`;
-  return head + (PG.sub === "progress" ? renderProgress(c) : notes + renderProgram(c, progs));
+  const first = esc(c.name.split(" ")[0]), wm = c.workoutEmail || "off";
+  const mail = c.shared || !C.A.programs.emailWorkout ? "" : `<section class="card pg-mail"><div class="pg-row"><b>✉ Workout emails</b>
+      <select class="pg-in" data-pg="wmail" aria-label="When to email ${first} their workout" style="width:auto">${[["off", "Off"], ["evening", "Evening before (7 PM)"], ["morning", "Morning of (6 AM)"]].map(([v, l]) => `<option value="${v}" ${wm === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+      <input class="pg-in" data-pg="cemail" type="email" value="${esc(c.email || "")}" placeholder="${first}'s email" aria-label="${first}'s email" style="width:230px"></div>
+    <span class="small muted">${wm === "off" ? `Turn on to email ${first} each workout on days they're on your calendar.` : `Sent on days ${first} is on your calendar, as long as that day's workout is written. Includes a link to their videos and log.`} Use ✉ Email on a session to send one now.</span></section>`;
+  return head + (PG.sub === "progress" ? renderProgress(c) : notes + mail + renderProgram(c, progs));
 }
 
 /* ---------- program builder ---------- */
@@ -252,21 +257,21 @@ function renderSession(p, wi, si, s){
       <td><div class="pg-grpcell">${segStart[ri] ? `<button class="pg-bgrip" data-drag="block" data-s="${si}" data-r="${ri}" title="Drag to move block ${segStart[ri]}" aria-label="Move block ${segStart[ri]}. Drag, or use arrow keys">⇕</button>` : `<span class="pg-bgrip-sp"></span>`}<span class="gchip pg-lbl ${grpClass(r.group)}">${esc(r.group || "")}</span>${ri > 0 ? (() => { const on = letterOf(r.group) && letterOf(r.group) === letterOf(s.rows[ri - 1].group);
         return `<button class="pg-link ${on ? "on" : ""}" data-act="pg-link" data-s="${si}" data-r="${ri}" aria-pressed="${on}" title="${on ? "Linked as a superset with the exercise above. Click to unlink" : "Superset with the exercise above"}" aria-label="${on ? "Unlink " + label + " from the superset" : "Superset " + label + " with the exercise above"}">${LINK_SVG}</button>`; })() : `<span class="pg-link-sp"></span>`}</div></td>
       <td><div class="pg-exname"><input class="pg-in" list="pg-exlist" data-pg="row" data-s="${si}" data-r="${ri}" data-f="name" value="${esc(r.name)}" placeholder="Exercise" aria-label="Exercise">${hasVid ? `<button class="btn sm ghost" data-act="pg-vid" data-id="${esc(ex.id)}" title="Watch video" aria-label="Watch video">▶</button>` : ""}</div></td>
-      <td>${f("sets", "Sets", "56px")}</td><td>${f("reps", "Reps", "72px")}</td><td>${f("weight", "Weight", "72px")}</td><td>${f("note", "Note")}</td>
+      <td><input class="pg-in pg-sr" data-pg="row" data-s="${si}" data-r="${ri}" data-f="sr" value="${esc(fmtSetsReps(r))}" placeholder="3x8" style="width:112px" aria-label="Sets x reps, e.g. 3x8 or 3x8,8,6" title="Type 3x8, 3x8,8,6, 4x8-10, 3x30s or 3x8 each"></td><td>${f("weight", "Weight", "72px")}</td><td>${f("note", "Note")}</td>
       <td>${sum}<button class="btn sm ghost" data-act="pg-delrow" data-s="${si}" data-r="${ri}" aria-label="Remove row">✕</button></td></tr>${recOn && r.name ? recordRows(p, s, si, r, ri) : ""}`;
   }).join("");
   const cKey = "delsess" + si;
   return `<section class="card pg-sess ${s.homework ? "hw" : ""}">
     <div class="card-h"><div class="pg-row" style="flex:1"><input class="pg-in pg-sname" data-pg="sess" data-s="${si}" data-f="name" value="${esc(s.name)}" aria-label="Session name">
       <label class="check small"><input type="checkbox" data-pg="sess" data-s="${si}" data-f="homework" ${s.homework ? "checked" : ""}> Homework <span class="muted">(client can log)</span></label></div>
-      <div class="pg-acts">${PG.rec && PG.rec.sid === s.id ? "" : `<button class="btn sm primary" data-act="pg-rec" data-s="${si}">Record sets</button>`}${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress" data-s="${si}">✦ Progress</button>` : ""}<button class="btn sm" data-act="pg-copysess" data-s="${si}">Copy</button>
+      <div class="pg-acts">${PG.rec && PG.rec.sid === s.id ? "" : `<button class="btn sm primary" data-act="pg-rec" data-s="${si}">Record sets</button>`}${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress" data-s="${si}">✦ Progress</button>` : ""}${!p.shared && C.A.programs.emailWorkout ? `<button class="btn sm" data-act="pg-mail" data-s="${si}" title="Email this workout to the client now">✉ Email</button>` : ""}<button class="btn sm" data-act="pg-copysess" data-s="${si}">Copy</button>
         ${rep ? "" : `<button class="btn sm" data-act="pg-repeat" data-s="${si}">Repeat…</button>`}
         <button class="btn sm ghost" data-act="pg-up" data-s="${si}" aria-label="Move up" ${si ? "" : "disabled"}>↑</button>
         ${PG.confirm === cKey ? `<button class="btn sm danger" data-act="pg-delsess" data-s="${si}">Delete?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="${cKey}">Delete</button>`}</div></div>
     ${rep ? `<div class="pg-acts" style="justify-content:flex-start">${repeatForm()}</div>` : ""}
     ${PG.rec && PG.rec.sid === s.id ? recordBar(s) : ""}
     ${(s.rows || []).length ? "" : `<div class="pg-emptyhint small muted">No exercises yet. Start typing below.</div>`}
-    <div class="tablewrap" ${(s.rows || []).length ? "" : "hidden"}><table class="pg-rows"><thead><tr><th></th><th>Block</th><th>Exercise</th><th>Sets</th><th>Reps</th><th>Weight</th><th>Note</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="tablewrap" ${(s.rows || []).length ? "" : "hidden"}><table class="pg-rows"><thead><tr><th></th><th>Block</th><th>Exercise</th><th title="Type 3x8, 3x8,8,6, 4x8-10, 3x30s or 3x8 each">Sets × Reps</th><th>Weight</th><th>Note</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
     <div class="pg-qa"><div class="pg-qa-box"><input class="pg-in pg-qa-in" data-pg="qa" data-s="${si}" placeholder="+ Add exercise: type to search your library" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pg-qa-list-${si}" aria-label="Add exercise"><div class="pg-qa-list" id="pg-qa-list-${si}" role="listbox" hidden></div></div>
       <button class="btn sm pg-ss ${PG.ss[s.id] ? "on" : ""}" data-act="pg-ss" data-s="${si}" aria-pressed="${!!PG.ss[s.id]}" title="When on, each exercise you add joins the last block as a superset">${LINK_SVG} Superset</button></div>
     <div class="small muted pg-qa-hint">Enter adds it as its own block. Shift+Enter, or turn on Superset, to link it with the block above. Click the chain on any row to link or unlink.</div>
@@ -353,7 +358,7 @@ function recordRows(p, s, si, r, ri){
   const last = lastTime(r.name, s.id);
   const sets = Array.from({ length: n }, (_, k) => { const no = k + 1, l = m[logKey(s.id, r.id, no)] || {};
     return `<div class="pg-set ${l.done ? "on" : ""}"><span class="small muted">Set ${no}</span>
-      <input class="pg-in" type="number" inputmode="numeric" data-pg="set" data-s="${si}" data-r="${ri}" data-n="${no}" data-f="reps" value="${esc(l.reps ?? "")}" placeholder="${esc(parseInt(r.reps, 10) || "reps")}" aria-label="Set ${no} reps">
+      <input class="pg-in" type="number" inputmode="numeric" data-pg="set" data-s="${si}" data-r="${ri}" data-n="${no}" data-f="reps" value="${esc(l.reps ?? "")}" placeholder="${esc(repsFor(r, no - 1) || "reps")}" aria-label="Set ${no} reps">
       <span class="muted">×</span>
       <input class="pg-in" type="number" inputmode="decimal" step="0.5" data-pg="set" data-s="${si}" data-r="${ri}" data-n="${no}" data-f="weight" value="${esc(l.weight ?? "")}" placeholder="${esc(parseFloat(r.weight) || "wt")}" aria-label="Set ${no} weight">
       <button class="pg-chk" data-act="pg-set-done" data-s="${si}" data-r="${ri}" data-n="${no}" aria-pressed="${!!l.done}" aria-label="Set ${no} done">✓</button></div>`; }).join("");
@@ -637,7 +642,7 @@ async function onClick(el, e){
       const on = !cur.done, patch = { done: on };
       if (on){ // tapping ✓ on an empty set records it as prescribed (or same as the set before)
         const prev = logMap()[logKey(s.id, r.id, no - 1)] || {};
-        if (cur.reps == null) patch.reps = prev.reps ?? (parseInt(r.reps, 10) || null);
+        if (cur.reps == null) patch.reps = repsFor(r, no - 1) ?? prev.reps ?? null;
         if (cur.weight == null) patch.weight = prev.weight ?? (isFinite(parseFloat(r.weight)) ? parseFloat(r.weight) : null);
       }
       putSet(si, ri, no, patch, true); redraw(); break; }
@@ -686,6 +691,17 @@ async function onClick(el, e){
       break; }
     case "pg-delmeas": { const id = el.getAttribute("data-id"), cid = PG.clientId; PG.meas[cid] = PG.meas[cid].filter(m => String(m.id) !== id); redraw(); C.A.programs.deleteMeasurement(id).catch(() => C.toast("Couldn't delete")); break; }
     case "pg-share": shareSheet(); break;
+    case "pg-mail": {
+      const c = client(PG.clientId), s = p.weeks[wi].sessions[si];
+      if (!c.email){ C.toast(`Add ${c.name.split(" ")[0]}'s email first (Workout emails, above)`); const f = document.querySelector('#main [data-pg="cemail"]'); if (f) f.focus(); break; }
+      if (!(s.rows || []).some(r => r.name)){ C.toast("Add exercises to this session first"); break; }
+      el.disabled = true; el.textContent = "Sending…";
+      try {
+        clearTimeout(timers[p.id]); await C.A.programs.saveProgram(p);   // make sure the latest edits are what gets sent
+        const r = await C.A.programs.emailWorkout({ clientId: c.id, programId: p.id, sessionId: s.id });
+        C.toast(r.status === "sent" ? `Emailed “${s.name}” to ${c.email}` : r.status === "queued" ? "Saved to your outbox. It sends once email is switched on." : "Couldn't send. Check the email address.");
+      } catch (x){ C.toast(x.message || "Couldn't send"); }
+      el.disabled = false; el.textContent = "✉ Email"; break; }
     case "pg-ai": PG.ai = { mode: el.getAttribute("data-mode"), step: "form", week: wi, session: el.getAttribute("data-s") != null ? si : null, direction: "", notes: "" }; aiSheet(); break;
     case "pg-ai-dir": PG.ai.notes = valIn("ai-notes"); PG.ai.direction = el.getAttribute("data-k"); aiSheet(); break;
     case "pg-ai-go": aiRun(); break;
@@ -717,6 +733,7 @@ function onInput(t){
   if (k === "prog"){ p[f] = t.value; saveSoon(p); return true; }
   if (k === "week"){ p.weeks[PG.week][f] = t.value; saveSoon(p); return true; }
   if (k === "sess" && t.type !== "checkbox"){ p.weeks[PG.week].sessions[si][f] = t.value; saveSoon(p); return true; }
+  if (k === "row" && f === "sr"){ Object.assign(p.weeks[PG.week].sessions[si].rows[ri], parseSetsReps(t.value)); saveSoon(p); return true; }
   if (k === "row"){ p.weeks[PG.week].sessions[si].rows[ri][f] = t.value; saveSoon(p); return true; }
   return false;
 }
@@ -728,11 +745,16 @@ function onChange(t){
     if (si >= 0){ const s = p.weeks[PG.week].sessions[si]; for (const l of (PG.logs[PG.clientId] || []).filter(x => x.session_id === s.id)){ const ri = s.rows.findIndex(r => r.id === l.row_id); if (ri >= 0) putSet(si, ri, l.set_no, {}); } }
     return true; }
   if (k === "progsel"){ PG.progId = t.value; PG.week = 0; redraw(); return true; }
+  if (k === "wmail"){ const c = client(PG.clientId); C.saveClient({ ...c, workoutEmail: t.value }).then(() => { C.toast(t.value === "off" ? "Workout emails off" : c.email ? "Workout emails on" : `On. Add ${c.name.split(" ")[0]}'s email so they can go out.`); redraw(); }).catch(() => {}); return true; }
+  if (k === "cemail"){ const c = client(PG.clientId), v = t.value.trim();
+    if (v && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)){ C.toast("That email doesn't look right"); return true; }
+    if (v !== (c.email || "")) C.saveClient({ ...c, email: v }).then(() => C.toast("Email saved")).catch(() => {}); return true; }
   if (k === "cnotes"){ const c = client(PG.clientId); if (c && !c.shared && (c.programNotes || "") !== t.value){ C.saveClient({ ...c, programNotes: t.value.trim() }).then(() => C.toast("Notes saved")).catch(() => {}); } return true; }
   if (k === "lift"){ PG.lift = t.value; redraw(); return true; }
   if (k === "who"){ const c = client(PG.clientId); C.saveClient({ ...c, sex: valIn("pg-sex"), birthYear: num(valIn("pg-by")) }).catch(() => {}); return true; }
   const p = P(); if (!p) return true;
   if (k === "sess" && t.type === "checkbox"){ mutate(p => p.weeks[PG.week].sessions[si].homework = t.checked); return true; }
+  if (k === "row" && t.getAttribute("data-f") === "sr"){ setTimeout(() => redraw(), 0); return true; } // show it tidied: "8,8,6" -> "3x8,8,6"
   // Wait a tick so focus has moved to the next field first; the redraw then keeps you there.
   if (k === "row" && t.getAttribute("data-f") === "name"){ setTimeout(() => mutate(p => { const r = p.weeks[PG.week].sessions[si].rows[ri]; if (!r) return; fillFromLibrary(r); ensureInLibrary([r]); }), 0); return true; }
   return true;

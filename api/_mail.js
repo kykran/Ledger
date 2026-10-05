@@ -25,7 +25,7 @@ export async function deliver(row, { trainerName, replyTo } = {}){
   }
   if (!row.to_email){ await admin.from("outbox").update({ status: "failed", error: "No email address" }).eq("id", row.id); return "failed"; }
   try {
-    const toClient = row.kind === "renewal";
+    const toClient = row.kind === "renewal" || row.kind === "workout";
     await sendMail({ to: row.to_email, subject: row.subject, html: row.html, text: row.body_text,
       fromName: toClient ? trainerName : "Trainer Tally", replyTo: toClient ? replyTo : undefined });
     await admin.from("outbox").update({ status: "sent", sent_at: new Date().toISOString(), error: null }).eq("id", row.id);
