@@ -18,7 +18,7 @@ function render(v){
     head = `<div class="card"><h2>This month</h2><div><span class="big">${v.thisMonth || 0}</span><span class="of">${v.included ? `of ${v.included} included` : "sessions so far"}</span></div>
       <p class="note" style="margin-top:10px">${v.bookedThisMonth ? `${v.bookedThisMonth} more booked this month.` : "No more booked this month."}</p></div>`;
   }
-  let recent = `<div class="card"><h2>Recent sessions</h2>${rows(v.recent, false)}</div>`;
+  let recent = `<div class="card"><h2>${v.packSessions ? "Sessions this package" : "Recent sessions"}</h2>${rows(v.recent, false)}</div>`;
   if (v.months){
     // Monthly-bill clients: every session this month and last, by date (and by person if they pay for someone else).
     const items = list => list.length ? `<ul>${list.map(x => `<li><span>${esc(day(x.at))}</span><span>${esc(x.who || "")}</span></li>`).join("")}</ul>` : `<p class="empty">None.</p>`;

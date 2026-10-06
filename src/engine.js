@@ -505,7 +505,11 @@ export function clientView(M, clientId){
     next: st.future.slice(0, 6).map(s => s.date.toISOString()), recent: st.past.slice(-6).reverse().map(s => s.date.toISOString()),
     updated: now.toISOString()};
   if (st.bill === "package" && st.current){ v.left = Math.max(0, st.remaining); v.size = st.current.size; v.used = Math.min(st.current.size, st.current.usedIn); v.over = Math.max(0, -st.remaining);
-    v.runout = st.runout ? st.runout.toISOString() : null; v.runoutEst = !!st.runoutEst; }
+    v.runout = st.runout ? st.runout.toISOString() : null; v.runoutEst = !!st.runoutEst;
+    // Every session in this package (plus any past it), newest first.
+    const inPack = st.past.filter(s => s.pkg === st.current.index || s.over);
+    if (inPack.length > v.recent.length) v.recent = inPack.slice().reverse().map(s => s.date.toISOString());
+    v.packSessions = true; }
   else { const k = M.curM; v.thisMonth = st.past.filter(s => mkey(s.date) === k).length; v.bookedThisMonth = st.future.filter(s => mkey(s.date) === k).length;
     if (st.bill === "membership" && num(c.included)) v.included = num(c.included);
     // Dated session lists for this month and last, including anyone this client pays for.
