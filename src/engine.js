@@ -512,7 +512,11 @@ export function clientView(M, clientId){
     const deps = dependentsOf(M, c), people = [c, ...deps], who = p => deps.length ? firstName(p.name) : "";
     const pk = mkey(new Date(now.getFullYear(), now.getMonth() - 1, 1));
     v.people = deps.length ? people.map(p => firstName(p.name)) : null;
-    v.months = [k, pk].map(m => ({month:m, label:mLabel(m, true),
+    // From the oldest month still unpaid (theirs or anyone they pay for) through this month; at least last month.
+    let from = pk;
+    for (const p of people) for (const inv of (M.stats[p.id].invoices || [])) if (inv.due && inv.amount > 0.5 && inv.state !== "paid" && inv.month < from) from = inv.month;
+    const keys = []; for (let m = from; m <= k; m = mNext(m)) keys.push(m);
+    v.months = keys.map(m => ({month:m, label:mLabel(m, true),
       done: monthSessions(M, c, m).map(x => ({at:x.date.toISOString(), who:who(x.who)})),
       booked: m === k ? people.flatMap(p => M.stats[p.id].future.filter(s => mkey(s.date) === k).map(s => ({at:s.date.toISOString(), who:who(p)}))).sort((a,b) => a.at.localeCompare(b.at)) : []})); }
   return v;

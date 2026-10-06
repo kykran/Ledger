@@ -23,12 +23,13 @@ function render(v){
     // Monthly-bill clients: every session this month and last, by date (and by person if they pay for someone else).
     const items = list => list.length ? `<ul>${list.map(x => `<li><span>${esc(day(x.at))}</span><span>${esc(x.who || "")}</span></li>`).join("")}</ul>` : `<p class="empty">None.</p>`;
     const by = list => v.people ? `<p class="note">${v.people.map(n => `${esc(n)}: ${list.filter(x => x.who === n).length}`).join(" · ")}</p>` : "";
-    const [cur, last] = v.months;
-    const early = new Date(v.updated).getDate() <= 10; // early in the month, last month (the one just billed) comes first
-    head = `<div class="card"><h2>${esc(cur.label)}</h2><div><span class="big">${cur.done.length}</span><span class="of">session${cur.done.length === 1 ? "" : "s"} so far</span></div>${by(cur.done)}
-      ${items(cur.done)}${cur.booked.length ? `<p class="note" style="margin-top:10px">${cur.booked.length} more booked this month.</p>` : ""}</div>`;
-    recent = `<div class="card"><h2>${esc(last.label)}</h2><div><span class="big">${last.done.length}</span><span class="of">session${last.done.length === 1 ? "" : "s"}</span></div>${by(last.done)}${items(last.done)}</div>`;
-    if (early) [head, recent] = [recent, head];
+    // Oldest open month first, this month last.
+    const card = (m, isCur) => `<div class="card"><h2>${esc(m.label)}</h2><div><span class="big">${m.done.length}</span><span class="of">session${m.done.length === 1 ? "" : "s"}${isCur ? " so far" : ""}</span></div>${by(m.done)}
+      ${items(m.done)}${m.booked.length ? `<p class="note" style="margin-top:10px">${m.booked.length} more booked this month.</p>` : ""}</div>`;
+    const ms = v.months, total = ms.reduce((a, m) => a + m.done.length, 0);
+    head = (ms.length > 2 ? `<div class="card"><h2>Since ${esc(ms[0].label.replace(/ \d{4}$/, ""))}</h2><div><span class="big">${total}</span><span class="of">sessions</span></div>${by(ms.flatMap(m => m.done))}</div>` : "")
+      + ms.map((m, i) => card(m, i === ms.length - 1)).join("");
+    recent = "";
   }
   document.title = `${v.first}'s sessions`;
   $m.innerHTML = `<div><h1>Hi ${esc(v.first)}</h1><p class="sub">${v.trainer ? `Your training with ${esc(v.trainer)}` : "Your training"}</p></div>
