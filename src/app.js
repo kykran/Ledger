@@ -223,7 +223,7 @@ const projectMonth = (M, k) => E.projectMonth(M, k);
 const sessionsIn = (M, a, b) => E.sessionsIn(M, a, b);
 const attention = M => E.attention(M);
 const fillTpl = (t, v) => E.fillTpl(t, v);
-const messageText = (c, kind, monthK) => E.messageText(S.M, c, kind, monthK);
+const messageText = (c, kind, monthK, link) => E.messageText(S.M, c, kind, monthK, link);
 const payerOf = c => S.M ? E.payerOf(S.M, c) : null;
 const dependentsOf = c => S.M ? E.dependentsOf(S.M, c) : [];
 const payLine = c => { const p = payerOf(c), d = dependentsOf(c); return p ? ` · paid by ${esc(p.name)}` : d.length ? ` · pays for ${esc(d.map(x=>x.name).join(", "))}` : ""; };
@@ -445,9 +445,10 @@ function renderOverview(M){
   </div>`;
 }
 function todoCard(M){
-  const rec = recTodos(M), pg = PROGS() ? PROGS().todos(M).filter(t => t.kind !== "noprogram") : [];
-  if (!rec.length && !pg.length) return "";
+  const rec = recTodos(M), pg = PROGS() ? PROGS().todos(M).filter(t => t.kind !== "noprogram") : [], ml = E.monthLinkTodos(M);
+  if (!rec.length && !pg.length && !ml.length) return "";
   const items = [
+    ...ml.map(t => `<div><span>Send <b>${esc(firstName(t.c.name))}</b> ${esc(mLabel(t.month, true).replace(/ \d{4}$/, ""))}'s sessions · ${t.n} session${t.n===1?"":"s"}</span><button class="btn sm" data-act="msg" data-id="${t.c.id}" data-kind="monthlink" data-month="${t.month}">Send link</button></div>`),
     ...rec.map(t => `<div><span>${t.state === "changed" ? `Re-check week of <b>${esc(weekLabel(t.a))}</b> · changed since you reconciled (${t.was} → ${t.n} sessions)` : `Reconcile week of <b>${esc(weekLabel(t.a))}</b> · ${t.n} session${t.n===1?"":"s"}, ${money(t.net)} net`}</span><button class="btn sm" data-act="rec-go" data-week="${t.key}">Review</button></div>`),
     ...pg.slice(0, 4).map(t => { const x = PROGS().todoText(t); return `<div><span><b>${esc(x.who)}</b> · ${esc(x.what)}</span><button class="btn sm" data-act="goto-programs">Programs</button></div>`; }),
     ...(pg.length > 4 ? [`<div><span class="muted">${pg.length - 4} more program to-do${pg.length - 4 === 1 ? "" : "s"}</span><button class="btn sm" data-act="goto-programs">See all</button></div>`] : [])
@@ -1204,6 +1205,7 @@ function renderModal(){
       <div class="field"><label for="ed-phone">Phone</label><input id="ed-phone" type="tel" value="${esc(c.phone||"")}"></div>
       <label class="check full"><input type="checkbox" id="ed-norent" ${c.noRent?"checked":""}> No studio rent for this client</label>
       <div class="field full"><label for="ed-nrn">No rent when the event is named</label><input id="ed-nrn" value="${esc((c.noRentNames||[]).join(", "))}" placeholder="e.g. a partner billed to this client"><span class="hint">Optional. Comma separated calendar names.</span></div>
+      <label class="check full" data-bill-show="tab membership"><input type="checkbox" id="ed-mlink" ${c.monthlyLink?"checked":""}> Send them a monthly link to their sessions<span class="hint" style="display:block">A to-do on the 1st with a ready message and their client page link${m.id && dependentsOf(c).length ? ", including " + esc(dependentsOf(c).map(x=>firstName(x.name)).join(", ")) + "'s sessions" : ""}.</span></label>
       <label class="check full" data-bill-show="package"><input type="checkbox" id="ed-noauto" ${c.noAutoNotice?"checked":""}> Don't send automatic renewal emails</label>
       <label class="check full"><input type="checkbox" id="ed-active" ${c.active!==false?"checked":""}> Active</label>
     </div>
@@ -1260,11 +1262,19 @@ function renderModal(){
     const c0 = client(m.id), bt = E.billTo(S.M, c0);
     const c = {...c0, phone:bt.phone, email:bt.email};
     title = "Message · " + (bt.payer ? `${bt.payer.name} (for ${c0.name})` : c0.name);
-    if (m.text == null) m.text = messageText(c0, m.kind, m.month);
+    if (m.kind === "monthlink" && m.link === undefined){
+      // Their client page link goes in the message; make one if they don't have it yet.
+      m.link = null;
+      (A.links ? A.links.get(c0.id).then(x => x || A.links.create(c0.id)) : Promise.resolve(null))
+        .then(x => { m.link = (x && x.url) || ""; }).catch(() => { m.link = ""; })
+        .then(() => { m.text = null; if (S.modal === m) renderModal(); });
+    }
+    if (m.text == null) m.text = messageText(c0, m.kind, m.month, m.link || "");
     const text = m.text;
-    const subj = encodeURIComponent(m.kind === "invoice" ? "Your training bill" : "Your training package");
+    const subj = encodeURIComponent(m.kind === "invoice" ? "Your training bill" : m.kind === "monthlink" ? "Your training sessions" : "Your training package");
     body = `<div class="field"><label for="msg-text">Message</label><textarea id="msg-text" rows="6">${esc(text)}</textarea></div>
-      <div class="actions"><button class="btn primary" data-act="copy">Copy message</button>
+      ${m.kind === "monthlink" && m.link === null ? `<p class="small muted">Getting their link…</p>` : ""}
+      <div class="actions"><button class="btn primary" data-act="copy">Copy message</button>${m.kind === "monthlink" ? `<button class="btn" data-act="mlink-sent">Mark sent</button>` : ""}
         ${c.phone ? `<a class="btn" href="sms:${esc(c.phone.replace(/[^\d+]/g,""))}?&body=${encodeURIComponent(text)}">Open text</a>` : ""}
         ${c.email ? `<a class="btn" href="mailto:${esc(c.email)}?subject=${subj}&body=${encodeURIComponent(text)}">Open email</a>` : ""}</div>
       <p class="small muted">${c.phone || c.email ? `Send to ${esc([c.phone, c.email].filter(Boolean).join(" or "))}. If the buttons don't open your apps, copy the message instead.` : "Add a phone or email to the client to open your texting or mail app from here."}</p>`;
@@ -1400,7 +1410,7 @@ async function onClick(e){
         rate: num(val("ed-rate"), num(defs().rate, 100)), packageSize: Math.max(1, Math.round(num(val("ed-size"), 10))),
         packagePrice: val("ed-price") === "" ? null : num(val("ed-price")), fee: num(val("ed-fee")), included: Math.max(0, Math.round(num(val("ed-inc")))),
         overageRate: val("ed-over") === "" ? null : num(val("ed-over")), billingStart: val("ed-bs") || null,
-        email: val("ed-email").trim(), phone: val("ed-phone").trim(), noRent: chk("ed-norent"), noRentNames: val("ed-nrn").split(",").map(s=>s.trim()).filter(Boolean), noAutoNotice: chk("ed-noauto"), active: chk("ed-active"),
+        email: val("ed-email").trim(), phone: val("ed-phone").trim(), noRent: chk("ed-norent"), noRentNames: val("ed-nrn").split(",").map(s=>s.trim()).filter(Boolean), noAutoNotice: chk("ed-noauto"), monthlyLink: chk("ed-mlink"), active: chk("ed-active"),
         paidBy: document.getElementById("ed-paidby") ? (val("ed-paidby") || null) : (old.paidBy || null),
         packages: old.packages || [], payments: old.payments || []};
       const isNew = !m.id;
@@ -1447,6 +1457,7 @@ async function onClick(e){
       break;
     }
     case "msg": openModal({type:"msg", id, kind:el.getAttribute("data-kind"), month:el.getAttribute("data-month")}); break;
+    case "mlink-sent": { const m = S.modal, c = client(m.id); closeModal(); if (c) saveClient({...c, monthlyLinkSent: m.month}).then(()=>toast("Marked sent")).catch(()=>{}); break; }
     case "copy": { const t = document.getElementById("msg-text"); try { await navigator.clipboard.writeText(t.value); toast("Message copied"); } catch(err){ t.focus(); t.select(); toast("Selected. Use your device's copy."); } break; }
     case "copy-out": { const t = document.getElementById("co-text"); try { await navigator.clipboard.writeText(t.value); toast("Copied"); } catch(err){ t.focus(); t.select(); toast("Selected. Use your device's copy."); } break; }
     case "sugg-add": { const u = M.unmatched[+el.getAttribute("data-i")]; if (u) openModal({type:"edit", name:u.title.replace(/^\s*(pt|session|training)\s*[-:–]?\s*/i,"").trim()}); break; }

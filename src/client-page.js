@@ -1,4 +1,4 @@
-/* The page a client opens from their trainer's link: sessions left and upcoming dates. Read-only, no prices. */
+/* The page a client opens from their trainer's link: sessions left (packages) or each month's dated sessions (monthly bill), plus upcoming dates. Read-only, no prices. */
 const $m = document.getElementById("m");
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const token = (location.pathname.match(/\/s\/([A-Za-z0-9_-]+)/) || [])[1] || new URLSearchParams(location.search).get("t") || "";
@@ -18,11 +18,23 @@ function render(v){
     head = `<div class="card"><h2>This month</h2><div><span class="big">${v.thisMonth || 0}</span><span class="of">${v.included ? `of ${v.included} included` : "sessions so far"}</span></div>
       <p class="note" style="margin-top:10px">${v.bookedThisMonth ? `${v.bookedThisMonth} more booked this month.` : "No more booked this month."}</p></div>`;
   }
+  let recent = `<div class="card"><h2>Recent sessions</h2>${rows(v.recent, false)}</div>`;
+  if (v.months){
+    // Monthly-bill clients: every session this month and last, by date (and by person if they pay for someone else).
+    const items = list => list.length ? `<ul>${list.map(x => `<li><span>${esc(day(x.at))}</span><span>${esc(x.who || "")}</span></li>`).join("")}</ul>` : `<p class="empty">None.</p>`;
+    const by = list => v.people ? `<p class="note">${v.people.map(n => `${esc(n)}: ${list.filter(x => x.who === n).length}`).join(" · ")}</p>` : "";
+    const [cur, last] = v.months;
+    const early = new Date(v.updated).getDate() <= 10; // early in the month, last month (the one just billed) comes first
+    head = `<div class="card"><h2>${esc(cur.label)}</h2><div><span class="big">${cur.done.length}</span><span class="of">session${cur.done.length === 1 ? "" : "s"} so far</span></div>${by(cur.done)}
+      ${items(cur.done)}${cur.booked.length ? `<p class="note" style="margin-top:10px">${cur.booked.length} more booked this month.</p>` : ""}</div>`;
+    recent = `<div class="card"><h2>${esc(last.label)}</h2><div><span class="big">${last.done.length}</span><span class="of">session${last.done.length === 1 ? "" : "s"}</span></div>${by(last.done)}${items(last.done)}</div>`;
+    if (early) [head, recent] = [recent, head];
+  }
   document.title = `${v.first}'s sessions`;
   $m.innerHTML = `<div><h1>Hi ${esc(v.first)}</h1><p class="sub">${v.trainer ? `Your training with ${esc(v.trainer)}` : "Your training"}</p></div>
     ${head}
     <div class="card"><h2>Coming up</h2>${rows(v.next, true)}</div>
-    <div class="card"><h2>Recent sessions</h2>${rows(v.recent, false)}</div>
+    ${recent}
     <footer>Updated ${esc(new Date(v.updated).toLocaleString("en-US", {month:"short", day:"numeric", hour:"numeric", minute:"2-digit", timeZone: tz}))} · Trainer Tally</footer>`;
 }
 

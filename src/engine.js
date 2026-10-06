@@ -349,8 +349,25 @@ function dependentLines(M, c, kind, monthK){
   }
   return {lines, extraAmt};
 }
-export function messageText(M, c, kind, monthK){
+/* Past sessions in month k for a client plus everyone they pay for, oldest first. */
+export function monthSessions(M, c, k){
+  return [c, ...dependentsOf(M, c)].flatMap(p => ((M.stats[p.id] || {}).past || []).filter(s => mkey(s.date) === k).map(s => ({date:s.date, who:p}))).sort((a,b) => a.date - b.date);
+}
+/* Monthly sessions link: from the 1st to the 10th, a to-do to send last month's sessions to clients set up for it. */
+export function monthLinkTodos(M){
+  CTX = M.ctx; const now = M.now; if (now.getDate() > 10) return [];
+  const pk = mkey(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+  return M.ctx.clients.filter(c => c.monthlyLink && c.active !== false && !payerOf(M, c) && c.monthlyLinkSent !== pk && M.stats[c.id])
+    .map(c => ({c, month:pk, n:monthSessions(M, c, pk).length})).filter(t => t.n > 0);
+}
+export function messageText(M, c, kind, monthK, link){
   CTX = M.ctx; const me = P("trainerName") || "";
+  if (kind === "monthlink"){
+    const list = monthSessions(M, c, monthK), deps = dependentsOf(M, c).filter(d => list.some(x => x.who.id === d.id));
+    const cnt = p => list.filter(x => x.who.id === p.id).length;
+    const parts = deps.length ? ` (${[`${cnt(c)} for you`, ...deps.map(d => `${cnt(d)} for ${firstName(d.name)}`)].join(", ")})` : ` (${cnt(c)})`;
+    return `Hi ${firstName(c.name)}! Here are your ${mLabel(monthK, true).replace(/ \d{4}$/, "")} sessions${parts}: ${link || "[link]"}${me ? " - " + me : ""}`;
+  }
   const payer = payerOf(M, c);
   const sign = t => { let tail = me ? " - " + me : ""; let body = tail && t.endsWith(tail) ? t.slice(0, -tail.length) : (tail = "", t);
     const m = body.match(/\s+(Thanks!?|Thank you!?)$/i); if (m){ body = body.slice(0, -m[0].length); tail = " " + m[1] + tail; }
@@ -490,7 +507,14 @@ export function clientView(M, clientId){
   if (st.bill === "package" && st.current){ v.left = Math.max(0, st.remaining); v.size = st.current.size; v.used = Math.min(st.current.size, st.current.usedIn); v.over = Math.max(0, -st.remaining);
     v.runout = st.runout ? st.runout.toISOString() : null; v.runoutEst = !!st.runoutEst; }
   else { const k = M.curM; v.thisMonth = st.past.filter(s => mkey(s.date) === k).length; v.bookedThisMonth = st.future.filter(s => mkey(s.date) === k).length;
-    if (st.bill === "membership" && num(c.included)) v.included = num(c.included); }
+    if (st.bill === "membership" && num(c.included)) v.included = num(c.included);
+    // Dated session lists for this month and last, including anyone this client pays for.
+    const deps = dependentsOf(M, c), people = [c, ...deps], who = p => deps.length ? firstName(p.name) : "";
+    const pk = mkey(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+    v.people = deps.length ? people.map(p => firstName(p.name)) : null;
+    v.months = [k, pk].map(m => ({month:m, label:mLabel(m, true),
+      done: monthSessions(M, c, m).map(x => ({at:x.date.toISOString(), who:who(x.who)})),
+      booked: m === k ? people.flatMap(p => M.stats[p.id].future.filter(s => mkey(s.date) === k).map(s => ({at:s.date.toISOString(), who:who(p)}))).sort((a,b) => a.at.localeCompare(b.at)) : []})); }
   return v;
 }
 
