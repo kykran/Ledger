@@ -45,7 +45,9 @@ function redraw(){
   }
   C.render();
   if (!sel) return;
-  const n = document.querySelector("#main " + sel); if (!n || n === document.activeElement) return;
+  // The same field can exist twice (builder row hidden in Record mode, editor shown): take the visible one.
+  const all = [...document.querySelectorAll("#main " + sel)], n = all.find(x => x.offsetParent !== null) || all[0];
+  if (!n || n === document.activeElement) return;
   try { n.focus({ preventScroll: true }); } catch (x){ n.focus(); }
   if (pos && pos[0] != null){ try { n.setSelectionRange(pos[0], pos[1]); } catch (x){} }
 }
@@ -327,7 +329,7 @@ function renderSession(p, wi, si, s){
   return `<section class="card pg-sess ${s.homework ? "hw" : ""} ${recS ? "rec" : ""}" id="pg-s-${esc(s.id)}">
     <div class="card-h"><div class="pg-row" style="flex:1"><input class="pg-in pg-sname" data-pg="sess" data-s="${si}" data-f="name" value="${esc(s.name)}" aria-label="Session name">
       <label class="check small pg-planonly"><input type="checkbox" data-pg="sess" data-s="${si}" data-f="homework" ${s.homework ? "checked" : ""}> Homework <span class="muted">(client can log)</span></label></div>
-      <div class="pg-acts">${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress" data-s="${si}">✦ Progress</button>` : ""}${!p.shared && C.A.programs.emailWorkout ? `<button class="btn sm" data-act="pg-mail" data-s="${si}" title="Email this workout to the client now">✉ Email</button>` : ""}<button class="btn sm pg-planonly" data-act="pg-copysess" data-s="${si}">Copy</button>
+      <div class="pg-acts">${recS ? `<button class="btn sm" data-act="pg-editsess" data-s="${si}" title="Switch to Plan to rewrite this workout">✎ Edit workout</button>` : ""}${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress" data-s="${si}">✦ Progress</button>` : ""}${!p.shared && C.A.programs.emailWorkout ? `<button class="btn sm" data-act="pg-mail" data-s="${si}" title="Email this workout to the client now">✉ Email</button>` : ""}<button class="btn sm pg-planonly" data-act="pg-copysess" data-s="${si}">Copy</button>
         ${rep ? "" : `<button class="btn sm pg-planonly" data-act="pg-repeat" data-s="${si}">Repeat…</button>`}
         <button class="btn sm ghost pg-planonly" data-act="pg-up" data-s="${si}" aria-label="Move up" ${si ? "" : "disabled"}>↑</button>
         ${PG.confirm === cKey ? `<button class="btn sm danger" data-act="pg-delsess" data-s="${si}">Delete?</button>` : `<button class="btn sm ghost pg-planonly" data-act="pg-confirm" data-k="${cKey}">Delete</button>`}</div></div>
@@ -399,6 +401,14 @@ function onBuilderKey(e){
     return;
   }
   // Enter moves along the row: sets, reps, weight, note, then back to the add box.
+  if (k === "row" && e.key === "Enter" && t.closest(".pg-edit")){
+    e.preventDefault();
+    const ins = [...t.closest(".pg-edit").querySelectorAll('input[data-pg="row"]')], i = ins.indexOf(t);
+    if (i < ins.length - 1){ ins[i + 1].focus(); try { ins[i + 1].select(); } catch (x){} return; }
+    const si = t.getAttribute("data-s"), ri = t.getAttribute("data-r"); t.blur(); PG.editRow = null;
+    setTimeout(() => { redraw(); const l = document.querySelector(`#main input[data-pg="logline"][data-s="${si}"][data-r="${ri}"]`); if (l) l.focus(); }, 0);
+    return;
+  }
   if (k === "row" && e.key === "Enter" && t.getAttribute("data-f") !== "name"){
     e.preventDefault();
     const ins = [...t.closest("tr").querySelectorAll('input[data-pg="row"]')], i = ins.indexOf(t);
@@ -463,7 +473,12 @@ function loggedSets(s, r){
 const prevText = list => list.length ? `→ ${list.length} set${list.length === 1 ? "" : "s"}: ${list.map(x => x.weight != null ? `${x.weight} × ${x.reps ?? "?"}` : `${x.reps ?? "?"} bw`).join(", ")}` : "";
 function recordRows(p, s, si, r, ri){
   const have = loggedSets(s, r), last = lastTime(r.name, s.id), plan = planText(r), typed = planLine(r);
-  return `<tr class="pg-recrow ${grpClass(r.group)}"><td colspan="2"></td><td colspan="6"><div class="pg-logname"><span class="gchip">${esc(r.group || "·")}</span><b>${esc(r.name)}</b><span class="small muted">${esc(plan)}</span></div><div class="pg-logline">
+  const ed = PG.editRow === r.id;
+  const head = `<button class="pg-logname" data-act="pg-edrow" data-s="${si}" data-r="${ri}" aria-expanded="${ed}" title="Edit this exercise"><span class="gchip">${esc(r.group || "·")}</span><b>${esc(r.name)}</b><span class="small muted">${esc(plan || "no sets written")}</span><span class="pg-pen" aria-hidden="true">✎</span></button>`;
+  const f = (k, ph, extra = "") => `<label><span class="small muted">${ph}</span><input class="pg-in" data-pg="row" data-s="${si}" data-r="${ri}" data-f="${k}" value="${esc(k === "sr" ? fmtSetsReps(r) : r[k])}" placeholder="${k === "sr" ? "3x8" : ""}" ${extra}></label>`;
+  const editor = ed ? `<div class="pg-edit">${f("name", "Exercise", `list="pg-exlist"`)}${f("sr", "Sets × reps", `inputmode="text"`)}${f("weight", "Weight")}${f("note", "Note")}
+      <div class="pg-edit-acts"><button class="btn sm ghost" data-act="pg-delrow" data-s="${si}" data-r="${ri}">Remove</button><button class="btn sm primary" data-act="pg-edrow-done">Done</button></div></div>` : "";
+  return `<tr class="pg-recrow ${grpClass(r.group)}"><td colspan="2"></td><td colspan="6">${head}${editor}<div class="pg-logline">
       <input class="pg-in pg-login ${have.length ? "on" : ""}" data-pg="logline" data-s="${si}" data-r="${ri}" value="${esc(fmtSetLog(have))}" placeholder="${esc(typed || "135x8 135x8 145x6")}" aria-label="${esc(r.name)} sets done, weight x reps, e.g. 215x5 215x5 225x4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next">
       ${have.length ? `<span class="pg-logok" aria-label="${have.length} sets logged">✓ ${have.length}</span>` : plan ? `<button class="btn sm" data-act="pg-asplanned" data-s="${si}" data-r="${ri}" title="Log every set as written: ${esc(plan)}">✓ As planned</button>` : ""}
     </div><div class="small muted pg-logprev" id="pg-lp-${esc(r.id)}">${last ? "Last time " + esc(last) : ""}</div></td></tr>`;
@@ -750,7 +765,12 @@ async function onClick(el, e){
     case "pg-link": mutate(p => { const rows = p.weeks[wi].sessions[si].rows, on = letterOf(rows[ri].group) === letterOf(rows[ri - 1].group); if (on) splitAt(rows, ri); else linkUp(rows, ri); }); break;
     case "pg-ss": { const sid = p.weeks[wi].sessions[si].id; PG.ss[sid] = !PG.ss[sid]; redraw(); const q = document.querySelector(`#main input[data-pg="qa"][data-s="${si}"]`); if (q) q.focus(); break; }
     case "pg-qa-pick": { const i = +el.getAttribute("data-i"), sess = p.weeks[wi].sessions[si]; if (PG.qa && PG.qa.si === si) qaAdd(si, PG.qa.items[i], !!PG.ss[sess.id]); break; }
-    case "pg-mode": PG.mode = el.getAttribute("data-v"); try { localStorage.setItem("tt.pg.mode", PG.mode); } catch (x){} if (PG.mode === "plan" && VOICE) VOICE.cancel(); PG.vres = null; redraw(); break;
+    case "pg-edrow": { const r = p.weeks[wi].sessions[si].rows[ri]; PG.editRow = PG.editRow === r.id ? null : r.id; redraw();
+      if (PG.editRow){ const n = document.querySelector(`#main .pg-edit input[data-f="sr"][data-s="${si}"][data-r="${ri}"]`); if (n){ n.focus(); try { n.select(); } catch (x){} } } break; }
+    case "pg-edrow-done": PG.editRow = null; redraw(); break;
+    case "pg-editsess": { PG.mode = "plan"; try { localStorage.setItem("tt.pg.mode", "plan"); } catch (x){} PG.editRow = null; const sid = p.weeks[wi].sessions[si].id; redraw();
+      const el = document.getElementById("pg-s-" + sid); if (el) el.scrollIntoView({ block: "start", behavior: "smooth" }); break; }
+    case "pg-mode": PG.editRow = null; PG.mode = el.getAttribute("data-v"); try { localStorage.setItem("tt.pg.mode", PG.mode); } catch (x){} if (PG.mode === "plan" && VOICE) VOICE.cancel(); PG.vres = null; redraw(); break;
     case "pg-mic": {
       if (!VOICE) break;
       if (VOICE.state === "listening"){ VOICE.stop(); break; }
@@ -986,7 +1006,16 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-sess.rec .pg-recrow td:first-child{display:none}
 .pg-sess.rec .pg-recrow td{padding:12px 0 4px 12px!important;box-shadow:inset 3px 0 0 var(--g,var(--line))}
 .pg-sess.rec .tablewrap{overflow:visible}
-.pg-sess.rec .pg-logname{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;margin-bottom:6px}
+.pg-sess.rec .pg-logname{all:unset;box-sizing:border-box;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;width:100%;margin-bottom:6px;cursor:pointer;border-radius:8px;padding:2px 4px;margin-left:-4px}
+.pg-sess.rec .pg-logname:hover,.pg-sess.rec .pg-logname:focus-visible,.pg-sess.rec .pg-logname[aria-expanded="true"]{background:var(--surface2)}
+.pg-sess.rec .pg-logname:focus-visible{outline:2px solid var(--accent)}
+@media (max-width:760px){.pg-sess>.card-h{flex-wrap:wrap}.pg-sess>.card-h>.pg-row{flex:1 1 100%!important}.pg-sess>.card-h .pg-sname{width:100%}}
+.pg-pen{margin-left:auto;color:var(--muted);font-size:14px;padding:0 4px}
+.pg-edit{display:grid;grid-template-columns:2fr 1fr 1fr 2fr;gap:8px;align-items:end;margin:0 0 8px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.pg-edit label{display:flex;flex-direction:column;gap:3px;min-width:0}
+.pg-edit .pg-in{width:100%}
+.pg-edit-acts{grid-column:1/-1;display:flex;gap:8px;justify-content:flex-end}
+@media (max-width:760px){.pg-edit{grid-template-columns:1fr 1fr}.pg-edit label:first-child,.pg-edit label:last-of-type{grid-column:1/-1}}
 .pg-sess.rec .pg-logname .gchip{align-self:center}
 .pg-logline{display:flex;gap:8px;align-items:center;padding:2px 0 2px}
 .pg-login{flex:1;min-width:0;font-size:15px;font-variant-numeric:tabular-nums;letter-spacing:.01em}
