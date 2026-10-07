@@ -317,3 +317,54 @@ export function workoutEmail({ first, trainer, session, weekLabel, when, link })
   <p style="margin:20px 0 0;color:#877f6f;font-size:12px">Sent by ${escH(trainer || "your trainer")}. Reply to this email to reach them.</p></div>`;
   return { subject, text, html };
 }
+
+/* ---------- logging a whole exercise on one line ----------
+ * What a trainer types after a set, read into [{reps, weight}]:
+ *   "8x215 8x215 6x225"   one set per chunk, reps x weight (215x8 works too: the bigger number is the weight)
+ *   "8 215, 8 215, 6 225" commas between sets, space inside one
+ *   "3x8@215" "3x8 @ 215" "3 sets of 8 at 215"   three identical sets
+ *   "3x8"                 three sets of 8 at the planned weight (a lone AxB with a small second number)
+ *   "8 8 6" / "8,8,6"     reps only, weight carried from the plan
+ *   "8 8 6 @ 215"         reps list at one weight
+ *   "bw" / "bodyweight"   no load
+ * plan: {sets, reps(k), weight} from the program row, used to fill anything left out. */
+export function parseSetLog(str, plan = {}){
+  let t = String(str || "").toLowerCase().replace(/×|\*/g, "x").replace(/\b(lbs?|kgs?|kg|lb|reps?)\b/g, " ").replace(/\s+/g, " ").trim();
+  if (!t) return [];
+  const pw = n(plan.weight), planReps = k => (plan.reps ? plan.reps(k) : null);
+  const bw = /\b(bw|bodyweight|body weight)\b/.test(t); t = t.replace(/\b(bw|bodyweight|body weight)\b/g, " ").trim();
+  const fill = (list, w) => list.map((r, k) => ({ reps: r ?? planReps(k), weight: bw ? null : (w ?? pw) }));
+  // N sets of R at W
+  let m = t.match(/^(\d+)\s*(?:x|sets? of)\s*(\d+(?:\.\d+)?)\s*(?:@|at)\s*(\d+(?:\.\d+)?)$/);
+  if (m) return Array.from({ length: Math.min(12, +m[1]) }, () => ({ reps: +m[2], weight: bw ? null : +m[3] }));
+  // reps list @ weight: "8 8 6 @ 215", "8,8,6 at 215"
+  m = t.match(/^([\d\s,]+?)\s*(?:@|at)\s*(\d+(?:\.\d+)?)$/);
+  if (m) return fill(m[1].split(/[\s,]+/).filter(Boolean).map(Number).slice(0, 12), +m[2]);
+  // lone "3x8": sets x reps at the planned weight, unless the second number is clearly a weight
+  m = t.match(/^(\d+)\s*x\s*(\d+(?:\.\d+)?)$/);
+  if (m && +m[1] <= 8 && +m[2] <= 30) return Array.from({ length: +m[1] }, () => ({ reps: +m[2], weight: bw ? null : pw }));
+  // set by set
+  const chunks = t.includes(",") ? t.split(/\s*,\s*/) : (t.match(/\d+(?:\.\d+)?\s*(?:x|@)\s*\d+(?:\.\d+)?|\d+(?:\.\d+)?/g) || []);
+  const out = []; let lastW = null;
+  for (const ch of chunks.slice(0, 12)){
+    const nums = (ch.match(/\d+(?:\.\d+)?/g) || []).map(Number); if (!nums.length) continue;
+    let reps, w;
+    if (nums.length === 1){ reps = nums[0]; w = lastW; }
+    else { const [a, b] = nums, dec = x => !Number.isInteger(x);
+      // reps first unless the first number is plainly the load (215x8, 22.5x10)
+      if (!/@/.test(ch) && ((a > 30 && b <= 30) || (dec(a) && !dec(b)))){ reps = b; w = a; } else { reps = a; w = b; } }
+    if (w != null) lastW = w;
+    out.push({ reps, weight: bw ? null : (w ?? pw) });
+  }
+  return out;
+}
+/* Back to text, compact: identical sets collapse to "3x8@215". */
+export function fmtSetLog(sets){
+  const ok = (sets || []).filter(s => s && (s.reps != null || s.weight != null));
+  if (!ok.length) return "";
+  // Written so parseSetLog reads it back the same: "@" for light loads (5@20 isn't 5 sets of 20), "bw" for no load.
+  const load = w => w == null ? "" : (w > 30 ? "x" : "@") + w;
+  const bw = ok.every(s => s.weight == null) ? " bw" : "";
+  if (ok.length > 2 && ok.every(s => s.reps === ok[0].reps && s.weight === ok[0].weight)) return `${ok.length}x${ok[0].reps ?? "?"}${ok[0].weight != null ? "@" + ok[0].weight : ""}${bw}`;
+  return ok.map(s => `${s.reps ?? "?"}${load(s.weight)}`).join(" ") + bw;
+}
