@@ -406,7 +406,7 @@ function lastTime(name, excludeSid){
   const by = {};
   for (const l of PG.logs[PG.clientId] || []){ if (l.session_id === excludeSid || String(l.ex_name || "").trim().toLowerCase() !== key || (!l.done && l.reps == null && l.weight == null)) continue; const d = String(l.logged_on).slice(0, 10); (by[d] = by[d] || []).push(l); }
   const day = Object.keys(by).sort().pop(); if (!day) return "";
-  return fmtDay(day) + ": " + by[day].sort((a, b) => a.set_no - b.set_no).map(l => `${l.reps ?? "?"}${l.weight != null ? "×" + l.weight : ""}`).join(", ");
+  return fmtDay(day) + ": " + by[day].sort((a, b) => a.set_no - b.set_no).map(l => l.weight != null ? `${l.weight}×${l.reps ?? "?"}` : `${l.reps ?? "?"} bw`).join(", ");
 }
 function recordBar(s){
   let done = 0, total = 0;
@@ -429,24 +429,24 @@ function voiceCard(s){
     ${items ? `<ul>${items}</ul>` : `<p class="small muted">Nothing to log from that.</p>`}${R.note ? `<p class="small muted">${esc(R.note)}</p>` : ""}
     <div class="actions"><button class="btn sm" data-act="pg-voice-x">Discard</button>${items ? `<button class="btn sm primary" data-act="pg-voice-save">Save ${R.sets.length} set${R.sets.length === 1 ? "" : "s"}</button>` : ""}</div></div>`;
 }
-/* One line per exercise while recording: type "8x215 8x215 6x225" (or "3x8@215", "8 8 6"), Enter saves and moves on. */
+/* One line per exercise while recording, weight x reps: "215x5 215x5 225x4" (or "215x5x3", "8 8 6"). Enter saves and moves on. */
 const planOf = r => ({ weight: r.weight, reps: k => repsFor(r, k) });
 const planText = r => { const sr = fmtSetsReps(r); return sr ? sr + (r.weight ? " @ " + r.weight : "") : ""; };
 /* The plan written the way you'd type it: "4x5@215", "3x8". */
 function planLine(r){
   const n = setCount(r) || 0, w = num(r.weight); if (!n) return "";
-  const reps = Array.from({ length: n }, (_, k) => repsFor(r, k));
-  if (reps.some(x => x == null)) return "";
-  return reps.every(x => x === reps[0]) ? `${n}x${reps[0]}${w != null ? "@" + w : ""}` : reps.map(x => `${x}${w != null ? (w > 30 ? "x" : "@") + w : ""}`).join(" ");
+  const sets = Array.from({ length: n }, (_, k) => ({ reps: repsFor(r, k), weight: w }));
+  if (sets.some(x => x.reps == null)) return "";
+  return w == null ? sets.map(x => x.reps).join(" ") : fmtSetLog(sets);
 }
 function loggedSets(s, r){
   return (PG.logs[PG.clientId] || []).filter(l => l.session_id === s.id && l.row_id === r.id && l.done).sort((a, b) => a.set_no - b.set_no).map(l => ({ reps: l.reps == null ? null : +l.reps, weight: l.weight == null ? null : +l.weight }));
 }
-const prevText = list => list.length ? `→ ${list.length} set${list.length === 1 ? "" : "s"}: ${list.map(x => `${x.reps ?? "?"}${x.weight != null ? " × " + x.weight : " bw"}`).join(", ")}` : "";
+const prevText = list => list.length ? `→ ${list.length} set${list.length === 1 ? "" : "s"}: ${list.map(x => x.weight != null ? `${x.weight} × ${x.reps ?? "?"}` : `${x.reps ?? "?"} bw`).join(", ")}` : "";
 function recordRows(p, s, si, r, ri){
   const have = loggedSets(s, r), last = lastTime(r.name, s.id), plan = planText(r), typed = planLine(r);
   return `<tr class="pg-recrow ${grpClass(r.group)}"><td colspan="2"></td><td colspan="6"><div class="pg-logname"><span class="gchip">${esc(r.group || "·")}</span><b>${esc(r.name)}</b><span class="small muted">${esc(plan)}</span></div><div class="pg-logline">
-      <input class="pg-in pg-login ${have.length ? "on" : ""}" data-pg="logline" data-s="${si}" data-r="${ri}" value="${esc(fmtSetLog(have))}" placeholder="${esc(typed || "8x135 8x135 6x145")}" aria-label="What ${esc(r.name)} sets were done, e.g. 8x215 8x215 6x225" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next">
+      <input class="pg-in pg-login ${have.length ? "on" : ""}" data-pg="logline" data-s="${si}" data-r="${ri}" value="${esc(fmtSetLog(have))}" placeholder="${esc(typed || "135x8 135x8 145x6")}" aria-label="${esc(r.name)} sets done, weight x reps, e.g. 215x5 215x5 225x4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next">
       ${have.length ? `<span class="pg-logok" aria-label="${have.length} sets logged">✓ ${have.length}</span>` : plan ? `<button class="btn sm" data-act="pg-asplanned" data-s="${si}" data-r="${ri}" title="Log every set as written: ${esc(plan)}">✓ As planned</button>` : ""}
     </div><div class="small muted pg-logprev" id="pg-lp-${esc(r.id)}">${last ? "Last time " + esc(last) : ""}</div></td></tr>`;
 }
@@ -764,7 +764,7 @@ async function onClick(el, e){
       }
       putSet(si, ri, no, patch, true); redraw(); break; }
     case "pg-asplanned": { const r = p.weeks[wi].sessions[si].rows[ri]; const n = Math.max(1, setCount(r) || 1), w = num(r.weight);
-      commitLine(si, ri, Array.from({ length: n }, (_, k) => `${repsFor(r, k) ?? ""}${w != null ? (w > 30 ? "x" : "@") + w : ""}`).join(", ")); redraw(); break; }
+      commitLine(si, ri, fmtSetLog(Array.from({ length: n }, (_, k) => ({ reps: repsFor(r, k), weight: w })))); redraw(); break; }
     case "pg-layout": PG.layout = el.getAttribute("data-v"); try { localStorage.setItem("tt.pg.layout", PG.layout); } catch (x){} PG.scrollTo = PG.layout === "cal" ? "week" : null; redraw(); break;
     case "pg-cal-go": { PG.layout = "days"; try { localStorage.setItem("tt.pg.layout", "days"); } catch (x){} PG.week = +el.getAttribute("data-w"); PG.scrollTo = el.getAttribute("data-sid") || "top"; PG.repeat = null; redraw(); break; }
     case "pg-log": PG.logFor = { w: wi, s: si }; logSheet(); break;
@@ -850,7 +850,7 @@ function onInput(t){
   if (k === "calc" || k === "who"){ updateBfPreview(); return true; }
   if (k === "qa"){ if (PG.qa && PG.qa.si !== +t.getAttribute("data-s")) PG.qa = null; if (PG.qa) PG.qa.hi = 0; qaRender(+t.getAttribute("data-s")); return true; }
   if (k === "logline"){ const p = P(), r = p && p.weeks[PG.week].sessions[si].rows[ri], el = r && document.getElementById("pg-lp-" + r.id);
-    if (el) el.textContent = t.value.trim() ? prevText(parseSetLog(t.value, planOf(r))) || "Type reps x weight for each set, e.g. 8x215 8x215 6x225" : (lastTime(r.name, p.weeks[PG.week].sessions[si].id) ? "Last time " + lastTime(r.name, p.weeks[PG.week].sessions[si].id) : ""); return true; }
+    if (el) el.textContent = t.value.trim() ? prevText(parseSetLog(t.value, planOf(r))) || "Type weight x reps for each set, e.g. 215x5 215x5 225x4" : (lastTime(r.name, p.weeks[PG.week].sessions[si].id) ? "Last time " + lastTime(r.name, p.weeks[PG.week].sessions[si].id) : ""); return true; }
   if (k === "set"){ const v = t.value === "" ? null : Number(t.value); putSet(+t.getAttribute("data-s"), +t.getAttribute("data-r"), +t.getAttribute("data-n"), { [t.getAttribute("data-f")]: v }); return true; }
   const p = P(); if (!p) return true;
   if (k === "prog"){ p[f] = t.value; saveSoon(p); return true; }
