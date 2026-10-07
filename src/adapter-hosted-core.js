@@ -132,6 +132,7 @@ export const adapter = {
     // Which days each client has anything logged (for the "workout not logged" to-do).
     async logDates(){ const { data, error } = await sb.from("program_logs").select("client_id,logged_on").eq("user_id", session.user.id).gte("logged_on", new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10)); if (error) throw fail(error); return data || []; },
     ai(body){ return api("/api/ai", body); },
+    voice(body){ return api("/api/voice", body); },
     emailWorkout(body){ return api("/api/outbox", { action: "workout", ...body }); },
     sharing: {
       async ready(){ const { error } = await sb.from("program_shares").select("program_id").limit(1); return !error; },

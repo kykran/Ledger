@@ -115,3 +115,11 @@ npm run dev            # app + /api on http://localhost:3000
 ## Monthly sign-off (studio ↔ trainer)
 
 `supabase/signoff.sql`. Linked trainers see the studio's statement next to their own count of studio sessions and tap Confirm or Dispute (with a note). The studio sees only the answer, the trainer's count and the note; a confirmed month is locked until the studio reopens it. Sessions titled with a no-rent word ("Sarah home", "Mike - online") count as sessions but owe no rent, on both sides.
+
+## Voice logging (Programs)
+
+While recording a session, tap **🎙 Say it**, say what the client did ("goblet squat ten at thirty-five", "same again", "three sets of eight at 135"), and tap again. `/api/voice` turns it into sets; they show up as a card to check, and nothing is saved until you tap **Save**. A set number is used only if you say one; otherwise each set goes into the next open set for that exercise. With no exercise named, it means the last one you logged.
+
+- Needs `ANTHROPIC_API_KEY` (the same key as the Programs assistant).
+- Hearing: with `OPENAI_API_KEY` set, the server transcribes the clip with `gpt-4o-mini-transcribe`, primed with today's exercise names. Without it, the browser's own speech recognition is used (free; Chrome and Safari).
+- Cost per session is well under a cent: a few seconds of audio per set plus one small Haiku call.

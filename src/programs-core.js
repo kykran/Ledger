@@ -317,3 +317,43 @@ export function workoutEmail({ first, trainer, session, weekLabel, when, link })
   <p style="margin:20px 0 0;color:#877f6f;font-size:12px">Sent by ${escH(trainer || "your trainer")}. Reply to this email to reach them.</p></div>`;
   return { subject, text, html };
 }
+
+/* ---------- logging a whole exercise on one line ----------
+ * Weight first, then reps — the way it's written on a whiteboard. Read into [{reps, weight}]:
+ *   "215x5 215x5 225x4"   one set per chunk: 215 lb for 5 reps, ...   (commas work too: "215x5, 215x5")
+ *   "30x8"                8 reps at 30
+ *   "215x5x3"             3 sets of 5 at 215
+ *   "8 8 6"               reps only, at the planned weight
+ *   "8 8 6 @ 215"         reps list at one weight
+ *   "bw" / "bodyweight"   no load ("12 12 bw")
+ *   "3x8@215" / "3 sets of 8 at 215"   also understood
+ * plan: {weight, reps(k)} from the program row, used to fill anything left out. */
+export function parseSetLog(str, plan = {}){
+  let t = String(str || "").toLowerCase().replace(/×|\*/g, "x").replace(/\b(lbs?|kgs?|reps?)\b/g, " ").replace(/\s*x\s*/g, "x").replace(/\s+/g, " ").trim();
+  if (!t) return [];
+  const pw = n(plan.weight), planReps = k => (plan.reps ? plan.reps(k) : null);
+  const bw = /\b(bw|bodyweight|body weight)\b/.test(t); t = t.replace(/\b(bw|bodyweight|body weight)\b/g, " ").trim();
+  const W = w => bw ? null : w, N = "(\\d+(?:\\.\\d+)?)";
+  let m = t.match(new RegExp(`^(\\d+)x${N}\\s*(?:@|at)\\s*${N}$`)) || t.match(new RegExp(`^(\\d+) sets? of ${N}\\s*(?:@|at)\\s*${N}$`));
+  if (m) return Array.from({ length: Math.min(12, +m[1]) }, () => ({ reps: +m[2], weight: W(+m[3]) }));
+  m = t.match(new RegExp(`^([\\d\\s,]+?)\\s*(?:@|at)\\s*${N}$`));
+  if (m) return m[1].split(/[\s,]+/).filter(Boolean).slice(0, 12).map(Number).map(r => ({ reps: r, weight: W(+m[2]) }));
+  const out = [];
+  for (const ch of (t.match(/[\d.]+(?:x[\d.]+){0,2}/g) || [])){
+    const [a, b, c] = ch.split("x").map(Number);
+    if (!isFinite(a)) continue;
+    if (b == null) out.push({ reps: a, weight: W(out.length ? out[out.length - 1].weight : pw) }); // bare number = reps
+    else for (let k = 0; k < Math.min(12, c || 1); k++) out.push({ reps: b, weight: W(a) });     // weight x reps (x sets)
+    if (out.length >= 12) break;
+  }
+  return out.slice(0, 12).map((x, k) => ({ reps: x.reps ?? planReps(k), weight: x.weight }));
+}
+/* Back to text the same way: "215x5 215x5 225x4", identical sets as "215x5x3". */
+export function fmtSetLog(sets){
+  const ok = (sets || []).filter(s => s && (s.reps != null || s.weight != null));
+  if (!ok.length) return "";
+  if (ok.every(s => s.weight == null)) return ok.map(s => s.reps ?? "?").join(" ") + " bw";
+  const one = s => s.weight == null ? `${s.reps ?? "?"} bw` : `${s.weight}x${s.reps ?? "?"}`;
+  if (ok.length > 2 && ok.every(s => s.reps === ok[0].reps && s.weight === ok[0].weight)) return `${one(ok[0])}x${ok.length}`;
+  return ok.map(one).join(" ");
+}
