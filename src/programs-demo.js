@@ -52,6 +52,20 @@ export function demoProgramsAdapter(){
     async deleteProgram(id){ P.programs = P.programs.filter(p => p.id !== id); P.logs = P.logs.filter(l => l.program_id !== id); },
     async emailWorkout(){ await new Promise(r => setTimeout(r, 200)); return { status: "sent", mailReady: true }; },
     async logs(clientId){ return c(P.logs.filter(l => l.client_id === clientId)); },
+    // Demo stand-in for voice logging: the browser's speech recognition hears it, a simple matcher reads it.
+    async voice(b){
+      if (b.action === "config") return { serverStt: false };
+      await new Promise(r => setTimeout(r, 300));
+      const t = String(b.text || "").toLowerCase(), rows = b.rows || [];
+      const words = w => w.toLowerCase().split(/[^a-z]+/).filter(x => x.length > 2);
+      const score = r => words(r.name).filter(w => t.includes(w)).length;
+      const best = rows.map(r => [r, score(r)]).sort((a, b) => b[1] - a[1])[0];
+      const row = best && best[1] ? best[0] : rows.find(r => r.id === b.lastRowId);
+      const n = (t.match(/\d+(\.\d+)?/g) || []).map(Number);
+      if (!row || !n.length) return { transcript: b.text || "", sets: [], note: "Say the exercise, then reps and weight." };
+      const done = new Set((row.logged || []).filter(l => l.done).map(l => l.set_no)); let no = 1; while (done.has(no)) no++;
+      return { transcript: b.text, sets: [{ row_id: row.id, set_no: no, reps: n[0], weight: n[1] ?? null }], note: "" };
+    },
     // Demo stand-in for the AI assistant: canned but shaped exactly like the real /api/ai results.
     async ai(b){
       await new Promise(r => setTimeout(r, 400));

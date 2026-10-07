@@ -5,8 +5,10 @@
 import { pid, newRow, newSession, newWeek, newProgram, copySession, copyWeek, repeatSession, repeatWeek, setCount,
   bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos } from "./programs-core.js";
 import { STARTER_EXERCISES } from "./exercise-seed.js";
+import { createVoice, voiceContext, VOICE_CSS } from "./programs-voice.js";
 
 let C = null; // context from app.js
+let VOICE = null; // mic + /api/voice, when the adapter has it
 const PG = { ready: null, loading: false, view: "clients", clientId: null, progId: null, week: 0, sub: "program",
   lib: null, progs: null, logs: {}, meas: {}, clip: null, repeat: null, confirm: null, save: "", libQ: "", lift: "", link: {}, edEx: null, videoUrls: {},
   shared: [], sharedLib: [], sharing: false, shareList: null, ss: {}, qa: null, filled: {} };
@@ -117,7 +119,7 @@ function render(){
     ? `<div class="card"><div class="empty"><b>Programs needs a one-time setup</b><span>The database tables for programs haven't been created yet. Once they are, this tab fills in with your exercise library and client programs.</span><button class="btn" data-act="pg-retry">Check again</button></div></div>`
     : `<div class="card"><div class="empty"><b>Couldn't load programs</b><span>${esc(PG.ready.message || "Check your connection and try again.")}</span><button class="btn" data-act="pg-retry">Try again</button></div></div>`;
   const seg = `<div class="seg" role="group" aria-label="Programs view">${[["clients", "Clients"], ["library", "Exercise library"]].map(([v, l]) => `<button data-act="pg-view" data-v="${v}" aria-pressed="${PG.view === v}">${l}</button>`).join("")}</div>`;
-  const style = `<style>${LINECHART_CSS}${VIDEO_CSS}${GROUP_CSS}${CSS}</style>`;
+  const style = `<style>${LINECHART_CSS}${VIDEO_CSS}${GROUP_CSS}${CSS}${VOICE_CSS}</style>`;
   const own = C.standalone ? "" : `<a class="btn sm ghost" href="/programs${C.A.name === "demo" ? "?demo" : ""}" target="_blank" rel="noopener" style="margin-left:auto">Open on its own ↗</a>`;
   if (PG.view === "library") return style + `<div class="pg-top">${seg}${own}</div>` + renderLibrary();
   if (PG.clientId && client(PG.clientId)) return style + renderClient();
@@ -351,7 +353,22 @@ function recordBar(s){
   let done = 0, total = 0;
   for (const r of s.rows || []){ if (!r.name) continue; const d = setsDone(s, r); done += d.n; total += Math.max(setCount(r), d.total, (PG.rec.extra[r.id] || 0)); }
   return `<div class="pg-recbar"><b>Recording</b><label class="small">Date <input type="date" class="pg-in" data-pg="recdate" value="${esc(PG.rec.date)}" style="width:auto"></label>
-    <span class="small muted" id="pg-recstat">${done}/${total} sets · saves as you go</span><button class="btn sm primary" data-act="pg-rec-done" style="margin-left:auto">Done</button></div>`;
+    <span class="small muted" id="pg-recstat">${done}/${total} sets · saves as you go</span>${micButton()}<button class="btn sm primary" data-act="pg-rec-done" style="margin-left:auto">Done</button></div>${voiceCard(s)}`;
+}
+/* ---------- voice logging ---------- */
+function micButton(){
+  if (!VOICE || !VOICE.supported()) return "";
+  const st = VOICE.state, on = st === "listening";
+  const label = on ? "Stop · log it" : st === "thinking" ? "Reading…" : "Say it";
+  return `<button class="btn sm pg-mic ${on ? "on" : ""}" data-act="pg-mic" aria-pressed="${on}" ${st === "thinking" ? "disabled" : ""} title="Tap, say what they did (“goblet squat ten at thirty-five”), tap again">🎙 ${label}</button>${VOICE.error ? `<span class="small" role="status" style="color:var(--neg,#c0392b)">${esc(VOICE.error)}</span>` : ""}`;
+}
+function voiceCard(s){
+  const R = PG.vres; if (!R || R.sid !== s.id) return "";
+  const names = Object.fromEntries((s.rows || []).map(r => [r.id, r.name]));
+  const items = R.sets.map((x, i) => `<li><span><b>${esc(names[x.row_id] || "?")}</b> · set ${x.set_no} · ${x.reps ?? "?"} reps${x.weight != null ? " × " + x.weight : " · bodyweight"}</span><button class="btn sm ghost" data-act="pg-voice-drop" data-i="${i}" aria-label="Leave out ${esc(names[x.row_id] || "this set")} set ${x.set_no}">✕</button></li>`).join("");
+  return `<div class="pg-voice" role="region" aria-label="Heard">${R.transcript ? `<div class="small"><q>${esc(R.transcript)}</q></div>` : ""}
+    ${items ? `<ul>${items}</ul>` : `<p class="small muted">Nothing to log from that.</p>`}${R.note ? `<p class="small muted">${esc(R.note)}</p>` : ""}
+    <div class="actions"><button class="btn sm" data-act="pg-voice-x">Discard</button>${items ? `<button class="btn sm primary" data-act="pg-voice-save">Save ${R.sets.length} set${R.sets.length === 1 ? "" : "s"}</button>` : ""}</div></div>`;
 }
 function recordRows(p, s, si, r, ri){
   const m = logMap(), d = setsDone(s, r), n = Math.max(setCount(r), d.total, PG.rec.extra[r.id] || 0);
@@ -371,6 +388,7 @@ function putSet(si, ri, no, patch, now){
   let l = list.find(x => x.session_id === s.id && x.row_id === r.id && x.set_no === no);
   if (!l){ l = { program_id: p.id, session_id: s.id, row_id: r.id, set_no: no, client_id: p.clientId, ex_name: r.name, reps: null, weight: null, done: false, logged_on: PG.rec.date, source: "trainer" }; list.push(l); }
   Object.assign(l, patch, { ex_name: r.name, logged_on: PG.rec.date });
+  if (PG.rec) PG.rec.lastRow = r.id;
   const k = logKey(s.id, r.id, no); clearTimeout(setTimers[k]);
   const save = () => { const { source, updated_at, user_id, ...row } = l; C.A.programs.saveLogs([row], p.shared ? p.ownerId : undefined).then(() => { const el = document.getElementById("pg-recstat"); if (el) el.textContent = el.textContent.replace(/ · .*$/, " · saved"); }).catch(() => C.toast("Couldn't save that set. Check your connection.")); };
   if (now) save(); else setTimers[k] = setTimeout(save, 600);
@@ -635,7 +653,25 @@ async function onClick(el, e){
     case "pg-qa-pick": { const i = +el.getAttribute("data-i"), sess = p.weeks[wi].sessions[si]; if (PG.qa && PG.qa.si === si) qaAdd(si, PG.qa.items[i], !!PG.ss[sess.id]); break; }
     case "pg-rec": { const s = p.weeks[wi].sessions[si]; const have = (PG.logs[PG.clientId] || []).find(l => l.session_id === s.id);
       PG.rec = { sid: s.id, date: have ? String(have.logged_on).slice(0, 10) : today(), extra: {} }; redraw(); break; }
-    case "pg-rec-done": PG.rec = null; redraw(); break;
+    case "pg-rec-done": if (VOICE) VOICE.cancel(); PG.rec = null; PG.vres = null; redraw(); break;
+    case "pg-mic": {
+      if (!VOICE || !PG.rec) break;
+      if (VOICE.state === "listening"){ VOICE.stop(); break; }
+      const s = (p.weeks[wi].sessions || []).find(x => x.id === PG.rec.sid); if (!s) break;
+      PG.vres = null; VOICE.start(voiceContext(s, PG.logs[PG.clientId] || [], PG.rec.lastRow)); break; }
+    case "pg-voice-drop": if (PG.vres){ PG.vres.sets.splice(+el.getAttribute("data-i"), 1); redraw(); } break;
+    case "pg-voice-x": PG.vres = null; redraw(); break;
+    case "pg-voice-save": {
+      const R = PG.vres; if (!R || !PG.rec) break;
+      const sess = p.weeks[wi].sessions, sIdx = sess.findIndex(x => x.id === R.sid); if (sIdx < 0) break;
+      let n = 0;
+      for (const x of R.sets){
+        const rIdx = sess[sIdx].rows.findIndex(r => r.id === x.row_id); if (rIdx < 0) continue;
+        const r = sess[sIdx].rows[rIdx];
+        PG.rec.extra[r.id] = Math.max(PG.rec.extra[r.id] || 0, x.set_no);
+        putSet(sIdx, rIdx, x.set_no, { reps: x.reps, weight: x.weight, done: true }, true); n++;
+      }
+      PG.vres = null; redraw(); C.toast(`Logged ${n} set${n === 1 ? "" : "s"}`); break; }
     case "pg-set-add": { const r = p.weeks[wi].sessions[si].rows[ri], s = p.weeks[wi].sessions[si], d = setsDone(s, r); PG.rec.extra[r.id] = Math.max(setCount(r), d.total, PG.rec.extra[r.id] || 0) + 1; redraw(); break; }
     case "pg-set-done": {
       const no = +el.getAttribute("data-n"), s = p.weeks[wi].sessions[si], r = s.rows[ri], cur = logMap()[logKey(s.id, r.id, no)] || {};
@@ -913,6 +949,11 @@ function onDragKey(e){
 
 function attach(ctx){
   C = ctx;
+  if (C.A.programs && C.A.programs.voice){
+    VOICE = createVoice({ api: b => C.A.programs.voice(b), onState: () => redraw(),
+      onResult: r => { if (!PG.rec) return; PG.vres = { sid: PG.rec.sid, transcript: r.transcript || "", sets: r.sets || [], note: r.note || "" };
+        if (r.sets && r.sets.length) PG.rec.lastRow = r.sets[r.sets.length - 1].row_id; redraw(); } });
+  }
   document.addEventListener("pointerdown", e => { if (e.target.closest && e.target.closest(".pg-qa-list")) e.preventDefault(); onPointerDown(e); });
   document.addEventListener("keydown", onDragKey); document.addEventListener("keydown", onBuilderKey);
   document.addEventListener("focusout", e => { const t = e.target; if (t.getAttribute && t.getAttribute("data-pg") === "qa"){ const si = t.getAttribute("data-s"); setTimeout(() => { const b = document.getElementById("pg-qa-list-" + si), a = document.activeElement; if (b && !(a && a.getAttribute && a.getAttribute("data-pg") === "qa" && a.getAttribute("data-s") === si)) b.hidden = true; }, 150); } });
