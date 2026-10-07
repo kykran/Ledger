@@ -11,8 +11,16 @@ let C = null; // context from app.js
 let VOICE = null; // mic + /api/voice, when the adapter has it
 const PG = { ready: null, loading: false, view: "clients", clientId: null, progId: null, week: 0, sub: "program",
   lib: null, progs: null, logs: {}, meas: {}, clip: null, repeat: null, confirm: null, save: "", libQ: "", lift: "", link: {}, edEx: null, videoUrls: {},
-  shared: [], sharedLib: [], sharing: false, shareList: null, ss: {}, qa: null, filled: {}, layout: "days", scrollTo: null };
-try { const v = localStorage.getItem("tt.pg.layout"); if (v === "cal" || v === "days") PG.layout = v; } catch (x){}
+  shared: [], sharedLib: [], sharing: false, shareList: null, ss: {}, qa: null, filled: {}, layout: "days", scrollTo: null, mode: "record", recs: {} };
+try { const v = localStorage.getItem("tt.pg.layout"); if (v === "cal" || v === "days") PG.layout = v; const m = localStorage.getItem("tt.pg.mode"); if (m === "plan" || m === "record") PG.mode = m; } catch (x){}
+/* Record mode is the default: every session shows a line to log each exercise. Plan mode is for writing the program.
+ * Each session keeps its own recording date (the day it was already logged, else today). PG.rec is the session last used. */
+function recOf(s){
+  let R = PG.recs[s.id];
+  if (!R){ const have = (PG.logs[PG.clientId] || []).find(l => l.session_id === s.id); R = PG.recs[s.id] = { sid: s.id, date: have ? String(have.logged_on).slice(0, 10) : today(), extra: {}, lastRow: null }; }
+  return R;
+}
+const recording = s => PG.mode === "record" && (s.rows || []).some(r => r.name);
 const timers = {};
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -196,6 +204,7 @@ function renderProgram(c, progs){
   const clip = PG.clip;
   const progSel = progs.length > 1 ? `<select class="pg-in" data-pg="progsel">${progs.map(x => `<option value="${esc(x.id)}" ${x.id === p.id ? "selected" : ""}>${esc(x.name)}${x.status === "archived" ? " (archived)" : ""}</option>`).join("")}</select>` : "";
   const layoutSeg = `<div class="seg pg-layout" role="group" aria-label="Program view">${[["days", "Days"], ["cal", "Calendar"]].map(([v, l]) => `<button data-act="pg-layout" data-v="${v}" aria-pressed="${PG.layout === v}">${l}</button>`).join("")}</div>`;
+  const modeSeg = `<div class="seg pg-layout" role="group" aria-label="Mode">${[["record", "Record"], ["plan", "Plan"]].map(([v, l]) => `<button data-act="pg-mode" data-v="${v}" aria-pressed="${PG.mode === v}" title="${v === "record" ? "Log what the client did" : "Write and edit the program"}">${l}</button>`).join("")}</div>`;
   const weekChips = `<div class="pg-weeks" role="tablist">${W.map((w, i) => `<button role="tab" aria-selected="${i === wi}" data-act="pg-week" data-i="${i}">${esc(w.label || "Week " + (i + 1))}</button>`).join("")}<button data-act="pg-addweek" title="Add a week">+ Week</button></div>`;
   const weekActs = week ? `<div class="pg-acts">
       <button class="btn sm" data-act="pg-copyweek">Copy week</button>
@@ -212,7 +221,7 @@ function renderProgram(c, progs){
       <button class="btn sm" data-act="pg-newprog">New program</button>
       <button class="btn sm ghost" data-act="pg-archive">${p.status === "archived" ? "Unarchive" : "Archive"}</button>
       ${PG.confirm === "delprog" ? `<button class="btn sm danger" data-act="pg-delprog">Delete program?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="delprog">Delete</button>`}`}</div></div>
-    ${PG.layout === "cal" ? `<div class="pg-row">${layoutSeg}<label class="small muted pg-start">Week 1 starts <input type="date" class="pg-in" data-pg="prog" data-f="startDate" value="${esc(p.startDate || "")}" ${p.shared ? "disabled" : ""}></label></div>` : `<div class="pg-row pg-weekbar">${layoutSeg}${weekChips}</div>
+    ${PG.layout === "cal" ? `<div class="pg-row">${layoutSeg}<label class="small muted pg-start">Week 1 starts <input type="date" class="pg-in" data-pg="prog" data-f="startDate" value="${esc(p.startDate || "")}" ${p.shared ? "disabled" : ""}></label></div>` : `<div class="pg-row pg-weekbar">${layoutSeg}${modeSeg}${weekChips}</div>
     ${week ? `<div class="pg-row"><input class="pg-in" data-pg="week" data-f="label" value="${esc(week.label)}" aria-label="Week name" style="max-width:180px">${weekActs}</div>` : ""}`}
   </section>
   ${PG.layout !== "cal" ? (setTimeout(() => { const ch = document.querySelector('#main .pg-weeks [aria-selected="true"]'), row = ch && ch.parentElement; if (row && row.scrollWidth > row.clientWidth && (ch.offsetLeft < row.scrollLeft || ch.offsetLeft + ch.offsetWidth > row.scrollLeft + row.clientWidth)) row.scrollLeft = ch.offsetLeft - row.offsetLeft - 8; }, 0), "") : ""}
@@ -302,7 +311,7 @@ function renderSession(p, wi, si, s){
   const rows = (s.rows || []).map((r, ri) => {
     const ex = r.exId && lib[r.exId]; const hasVid = ex && (ex.videoUrl || ex.videoPath);
     const f = (k, ph, w) => `<input class="pg-in" data-pg="row" data-s="${si}" data-r="${ri}" data-f="${k}" value="${esc(r[k])}" placeholder="${ph}" ${w ? `style="width:${w}"` : ""} aria-label="${ph}">`;
-    const recOn = PG.rec && PG.rec.sid === s.id;
+    const recOn = recording(s);
     const done = setsDone(s, r), planned = setCount(r);
     const sum = !recOn && done.n ? `<span class="pg-done" title="Sets recorded">✓ ${done.n}/${Math.max(planned, done.total)}${done.top != null ? ` · ${done.top}` : ""}</span>` : "";
     const label = esc(r.name || "exercise");
@@ -314,15 +323,16 @@ function renderSession(p, wi, si, s){
       <td>${sum}<button class="btn sm ghost" data-act="pg-delrow" data-s="${si}" data-r="${ri}" aria-label="Remove row">✕</button></td></tr>${recOn && r.name ? recordRows(p, s, si, r, ri) : ""}`;
   }).join("");
   const cKey = "delsess" + si;
-  return `<section class="card pg-sess ${s.homework ? "hw" : ""} ${PG.rec && PG.rec.sid === s.id ? "rec" : ""}" id="pg-s-${esc(s.id)}">
+  const recS = recording(s);
+  return `<section class="card pg-sess ${s.homework ? "hw" : ""} ${recS ? "rec" : ""}" id="pg-s-${esc(s.id)}">
     <div class="card-h"><div class="pg-row" style="flex:1"><input class="pg-in pg-sname" data-pg="sess" data-s="${si}" data-f="name" value="${esc(s.name)}" aria-label="Session name">
-      <label class="check small"><input type="checkbox" data-pg="sess" data-s="${si}" data-f="homework" ${s.homework ? "checked" : ""}> Homework <span class="muted">(client can log)</span></label></div>
-      <div class="pg-acts">${PG.rec && PG.rec.sid === s.id ? "" : `<button class="btn sm primary" data-act="pg-rec" data-s="${si}">Record sets</button>`}${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress" data-s="${si}">✦ Progress</button>` : ""}${!p.shared && C.A.programs.emailWorkout ? `<button class="btn sm" data-act="pg-mail" data-s="${si}" title="Email this workout to the client now">✉ Email</button>` : ""}<button class="btn sm" data-act="pg-copysess" data-s="${si}">Copy</button>
-        ${rep ? "" : `<button class="btn sm" data-act="pg-repeat" data-s="${si}">Repeat…</button>`}
-        <button class="btn sm ghost" data-act="pg-up" data-s="${si}" aria-label="Move up" ${si ? "" : "disabled"}>↑</button>
-        ${PG.confirm === cKey ? `<button class="btn sm danger" data-act="pg-delsess" data-s="${si}">Delete?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="${cKey}">Delete</button>`}</div></div>
+      <label class="check small pg-planonly"><input type="checkbox" data-pg="sess" data-s="${si}" data-f="homework" ${s.homework ? "checked" : ""}> Homework <span class="muted">(client can log)</span></label></div>
+      <div class="pg-acts">${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress" data-s="${si}">✦ Progress</button>` : ""}${!p.shared && C.A.programs.emailWorkout ? `<button class="btn sm" data-act="pg-mail" data-s="${si}" title="Email this workout to the client now">✉ Email</button>` : ""}<button class="btn sm pg-planonly" data-act="pg-copysess" data-s="${si}">Copy</button>
+        ${rep ? "" : `<button class="btn sm pg-planonly" data-act="pg-repeat" data-s="${si}">Repeat…</button>`}
+        <button class="btn sm ghost pg-planonly" data-act="pg-up" data-s="${si}" aria-label="Move up" ${si ? "" : "disabled"}>↑</button>
+        ${PG.confirm === cKey ? `<button class="btn sm danger" data-act="pg-delsess" data-s="${si}">Delete?</button>` : `<button class="btn sm ghost pg-planonly" data-act="pg-confirm" data-k="${cKey}">Delete</button>`}</div></div>
     ${rep ? `<div class="pg-acts" style="justify-content:flex-start">${repeatForm()}</div>` : ""}
-    ${PG.rec && PG.rec.sid === s.id ? recordBar(s) : ""}
+    ${recS ? recordBar(s, si) : ""}
     ${(s.rows || []).length ? "" : `<div class="pg-emptyhint small muted">No exercises yet. Start typing below.</div>`}
     <div class="tablewrap" ${(s.rows || []).length ? "" : "hidden"}><table class="pg-rows"><thead><tr><th></th><th>Block</th><th>Exercise</th><th title="Type 3x8, 3x8,8,6, 4x8-10, 3x30s or 3x8 each">Sets × Reps</th><th>Weight</th><th>Note</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
     <div class="pg-qa"><div class="pg-qa-box"><input class="pg-in pg-qa-in" data-pg="qa" data-s="${si}" placeholder="+ Add exercise: type to search your library" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pg-qa-list-${si}" aria-label="Add exercise"><div class="pg-qa-list" id="pg-qa-list-${si}" role="listbox" hidden></div></div>
@@ -361,8 +371,13 @@ function qaAdd(si, it, superset){
   if (!row.reps && last) row.reps = last.reps;
   addToBlocks(s.rows, row, superset);
   ensureInLibrary([row]);
-  saveSoon(p); PG.qa = null; redraw();
-  const inp = document.querySelector(`#main input[data-pg="qa"][data-s="${si}"]`); if (inp){ inp.value = ""; inp.focus(); }
+  saveSoon(p); PG.qa = null;
+  const q = document.querySelector(`#main input[data-pg="qa"][data-s="${si}"]`); if (q) q.value = "";
+  redraw();
+  const ri = s.rows.findIndex(x => x.id === row.id);
+  const next = document.querySelector(`#main input[data-pg="${recording(s) ? "logline" : "row"}"][data-s="${si}"][data-r="${ri}"]${recording(s) ? "" : '[data-f="sr"]'}`);
+  if (next){ next.focus(); try { next.select(); } catch (x){} }
+  else { const inp = document.querySelector(`#main input[data-pg="qa"][data-s="${si}"]`); if (inp) inp.focus(); }
 }
 function onBuilderKey(e){
   const t = e.target, k = t.getAttribute && t.getAttribute("data-pg"); if (!k) return;
@@ -408,18 +423,19 @@ function lastTime(name, excludeSid){
   const day = Object.keys(by).sort().pop(); if (!day) return "";
   return fmtDay(day) + ": " + by[day].sort((a, b) => a.set_no - b.set_no).map(l => l.weight != null ? `${l.weight}×${l.reps ?? "?"}` : `${l.reps ?? "?"} bw`).join(", ");
 }
-function recordBar(s){
-  let done = 0, total = 0;
-  for (const r of s.rows || []){ if (!r.name) continue; const d = setsDone(s, r); done += d.n; total += Math.max(setCount(r), d.total, (PG.rec.extra[r.id] || 0)); }
-  return `<div class="pg-recbar"><b>Recording</b><label class="small">Date <input type="date" class="pg-in" data-pg="recdate" value="${esc(PG.rec.date)}" style="width:auto"></label>
-    <span class="small muted" id="pg-recstat">${done}/${total} sets · saves as you go</span>${micButton()}<button class="btn sm primary" data-act="pg-rec-done" style="margin-left:auto">Done</button></div>${voiceCard(s)}`;
+function recordBar(s, si){
+  const R = recOf(s); let done = 0, total = 0;
+  for (const r of s.rows || []){ if (!r.name) continue; const d = setsDone(s, r); done += d.n; total += Math.max(setCount(r), d.total, (R.extra[r.id] || 0)); }
+  return `<div class="pg-recbar"><label class="small">Date <input type="date" class="pg-in" data-pg="recdate" data-s="${si}" value="${esc(R.date)}" style="width:auto"></label>
+    <span class="small muted" id="pg-recstat-${esc(s.id)}">${done}/${total} sets · saves as you go</span>${micButton(si, s)}</div>${voiceCard(s)}`;
 }
 /* ---------- voice logging ---------- */
-function micButton(){
+function micButton(si, s){
   if (!VOICE || !VOICE.supported()) return "";
-  const st = VOICE.state, on = st === "listening";
+  const mine = PG.rec && PG.rec.sid === s.id, st = mine ? VOICE.state : "idle", on = st === "listening";
+  if (!mine && VOICE.state !== "idle") return `<button class="btn sm pg-mic" disabled>🎙 Say it</button>`;
   const label = on ? "Stop · log it" : st === "thinking" ? "Reading…" : "Say it";
-  return `<button class="btn sm pg-mic ${on ? "on" : ""}" data-act="pg-mic" aria-pressed="${on}" ${st === "thinking" ? "disabled" : ""} title="Tap, say what they did (“goblet squat ten at thirty-five”), tap again">🎙 ${label}</button>${VOICE.error ? `<span class="small" role="status" style="color:var(--neg,#c0392b)">${esc(VOICE.error)}</span>` : ""}`;
+  return `<button class="btn sm pg-mic ${on ? "on" : ""}" data-act="pg-mic" data-s="${si}" aria-pressed="${on}" ${st === "thinking" ? "disabled" : ""} title="Tap, say what they did (“goblet squat ten at thirty-five”), tap again">🎙 ${label}</button>${mine && VOICE.error ? `<span class="small" role="status" style="color:var(--neg,#c0392b)">${esc(VOICE.error)}</span>` : ""}`;
 }
 function voiceCard(s){
   const R = PG.vres; if (!R || R.sid !== s.id) return "";
@@ -431,7 +447,9 @@ function voiceCard(s){
 }
 /* One line per exercise while recording, weight x reps: "215x5 215x5 225x4" (or "215x5x3", "8 8 6"). Enter saves and moves on. */
 const planOf = r => ({ weight: r.weight, reps: k => repsFor(r, k) });
-const planText = r => { const sr = fmtSetsReps(r); return sr ? sr + (r.weight ? " @ " + r.weight : "") : ""; };
+/* The plan in words, so it can't be mistaken for the weight x reps you type: "4 sets of 5 @ 215". */
+const planText = r => { const sets = String(r.sets || "").trim(), reps = String(r.reps || "").replace(/^\s*[x×]\s*/i, "").trim();
+  const sr = sets && reps ? `${sets} sets of ${reps}` : reps ? reps + " reps" : sets ? sets + " sets" : ""; return sr ? sr + (r.weight ? " @ " + r.weight : "") : ""; };
 /* The plan written the way you'd type it: "4x5@215", "3x8". */
 function planLine(r){
   const n = setCount(r) || 0, w = num(r.weight); if (!n) return "";
@@ -452,7 +470,7 @@ function recordRows(p, s, si, r, ri){
 }
 /* Save a typed line: sets 1..n done with what was typed; anything logged past n is cleared. */
 function commitLine(si, ri, value){
-  const p = P(); if (!p || !PG.rec) return;
+  const p = P(); if (!p) return;
   const s = p.weeks[PG.week].sessions[si], r = s && s.rows[ri]; if (!r) return;
   const list = parseSetLog(value, planOf(r));
   const before = loggedSets(s, r), same = JSON.stringify(before) === JSON.stringify(list);
@@ -460,18 +478,18 @@ function commitLine(si, ri, value){
   const old = (PG.logs[PG.clientId] || []).filter(l => l.session_id === s.id && l.row_id === r.id).reduce((m, l) => Math.max(m, l.set_no), 0);
   list.forEach((x, k) => putSet(si, ri, k + 1, { reps: x.reps, weight: x.weight, done: true }, true));
   for (let k = list.length + 1; k <= old; k++) putSet(si, ri, k, { reps: null, weight: null, done: false }, true);
-  PG.rec.extra[r.id] = Math.max(list.length, setCount(r));
+  recOf(s).extra[r.id] = Math.max(list.length, setCount(r));
 }
 const setTimers = {};
 /* Update one set locally and save it a moment later (typing doesn't fire a save per keystroke). */
 function putSet(si, ri, no, patch, now){
   const p = P(), s = p.weeks[PG.week].sessions[si], r = s.rows[ri], list = PG.logs[PG.clientId] || (PG.logs[PG.clientId] = []);
   let l = list.find(x => x.session_id === s.id && x.row_id === r.id && x.set_no === no);
-  if (!l){ l = { program_id: p.id, session_id: s.id, row_id: r.id, set_no: no, client_id: p.clientId, ex_name: r.name, reps: null, weight: null, done: false, logged_on: PG.rec.date, source: "trainer" }; list.push(l); }
-  Object.assign(l, patch, { ex_name: r.name, logged_on: PG.rec.date });
-  if (PG.rec) PG.rec.lastRow = r.id;
+  const R = recOf(s); PG.rec = R; R.lastRow = r.id;
+  if (!l){ l = { program_id: p.id, session_id: s.id, row_id: r.id, set_no: no, client_id: p.clientId, ex_name: r.name, reps: null, weight: null, done: false, logged_on: R.date, source: "trainer" }; list.push(l); }
+  Object.assign(l, patch, { ex_name: r.name, logged_on: R.date });
   const k = logKey(s.id, r.id, no); clearTimeout(setTimers[k]);
-  const save = () => { const { source, updated_at, user_id, ...row } = l; C.A.programs.saveLogs([row], p.shared ? p.ownerId : undefined).then(() => { const el = document.getElementById("pg-recstat"); if (el) el.textContent = el.textContent.replace(/ · .*$/, " · saved"); }).catch(() => C.toast("Couldn't save that set. Check your connection.")); };
+  const save = () => { const { source, updated_at, user_id, ...row } = l; C.A.programs.saveLogs([row], p.shared ? p.ownerId : undefined).then(() => { const el = document.getElementById("pg-recstat-" + s.id); if (el) el.textContent = el.textContent.replace(/ · .*$/, " · saved"); }).catch(() => C.toast("Couldn't save that set. Check your connection.")); };
   if (now) save(); else setTimers[k] = setTimeout(save, 600);
 }
 
@@ -732,28 +750,26 @@ async function onClick(el, e){
     case "pg-link": mutate(p => { const rows = p.weeks[wi].sessions[si].rows, on = letterOf(rows[ri].group) === letterOf(rows[ri - 1].group); if (on) splitAt(rows, ri); else linkUp(rows, ri); }); break;
     case "pg-ss": { const sid = p.weeks[wi].sessions[si].id; PG.ss[sid] = !PG.ss[sid]; redraw(); const q = document.querySelector(`#main input[data-pg="qa"][data-s="${si}"]`); if (q) q.focus(); break; }
     case "pg-qa-pick": { const i = +el.getAttribute("data-i"), sess = p.weeks[wi].sessions[si]; if (PG.qa && PG.qa.si === si) qaAdd(si, PG.qa.items[i], !!PG.ss[sess.id]); break; }
-    case "pg-rec": { const s = p.weeks[wi].sessions[si]; const have = (PG.logs[PG.clientId] || []).find(l => l.session_id === s.id);
-      PG.rec = { sid: s.id, date: have ? String(have.logged_on).slice(0, 10) : today(), extra: {} }; redraw(); break; }
-    case "pg-rec-done": if (VOICE) VOICE.cancel(); PG.rec = null; PG.vres = null; redraw(); break;
+    case "pg-mode": PG.mode = el.getAttribute("data-v"); try { localStorage.setItem("tt.pg.mode", PG.mode); } catch (x){} if (PG.mode === "plan" && VOICE) VOICE.cancel(); PG.vres = null; redraw(); break;
     case "pg-mic": {
-      if (!VOICE || !PG.rec) break;
+      if (!VOICE) break;
       if (VOICE.state === "listening"){ VOICE.stop(); break; }
-      const s = (p.weeks[wi].sessions || []).find(x => x.id === PG.rec.sid); if (!s) break;
-      PG.vres = null; VOICE.start(voiceContext(s, PG.logs[PG.clientId] || [], PG.rec.lastRow)); break; }
+      const s = p.weeks[wi].sessions[si]; if (!s) break;
+      PG.rec = recOf(s); PG.vres = null; VOICE.start(voiceContext(s, PG.logs[PG.clientId] || [], PG.rec.lastRow)); break; }
     case "pg-voice-drop": if (PG.vres){ PG.vres.sets.splice(+el.getAttribute("data-i"), 1); redraw(); } break;
     case "pg-voice-x": PG.vres = null; redraw(); break;
     case "pg-voice-save": {
-      const R = PG.vres; if (!R || !PG.rec) break;
+      const R = PG.vres; if (!R) break;
       const sess = p.weeks[wi].sessions, sIdx = sess.findIndex(x => x.id === R.sid); if (sIdx < 0) break;
       let n = 0;
       for (const x of R.sets){
         const rIdx = sess[sIdx].rows.findIndex(r => r.id === x.row_id); if (rIdx < 0) continue;
         const r = sess[sIdx].rows[rIdx];
-        PG.rec.extra[r.id] = Math.max(PG.rec.extra[r.id] || 0, x.set_no);
+        const RR = recOf(sess[sIdx]); RR.extra[r.id] = Math.max(RR.extra[r.id] || 0, x.set_no);
         putSet(sIdx, rIdx, x.set_no, { reps: x.reps, weight: x.weight, done: true }, true); n++;
       }
       PG.vres = null; redraw(); C.toast(`Logged ${n} set${n === 1 ? "" : "s"}`); break; }
-    case "pg-set-add": { const r = p.weeks[wi].sessions[si].rows[ri], s = p.weeks[wi].sessions[si], d = setsDone(s, r); PG.rec.extra[r.id] = Math.max(setCount(r), d.total, PG.rec.extra[r.id] || 0) + 1; redraw(); break; }
+    case "pg-set-add": { const r = p.weeks[wi].sessions[si].rows[ri], s = p.weeks[wi].sessions[si], d = setsDone(s, r); const RR = recOf(s); RR.extra[r.id] = Math.max(setCount(r), d.total, RR.extra[r.id] || 0) + 1; redraw(); break; }
     case "pg-set-done": {
       const no = +el.getAttribute("data-n"), s = p.weeks[wi].sessions[si], r = s.rows[ri], cur = logMap()[logKey(s.id, r.id, no)] || {};
       const on = !cur.done, patch = { done: on };
@@ -864,8 +880,9 @@ function onChange(t){
   const k = t.getAttribute("data-pg"); if (!k) return false;
   const si = +t.getAttribute("data-s"), ri = +t.getAttribute("data-r");
   if (k === "recdate"){ // moving the date moves every set already recorded for this session
-    PG.rec.date = t.value || today(); const p = P(), si = p.weeks[PG.week].sessions.findIndex(x => x.id === PG.rec.sid);
-    if (si >= 0){ const s = p.weeks[PG.week].sessions[si]; for (const l of (PG.logs[PG.clientId] || []).filter(x => x.session_id === s.id)){ const ri = s.rows.findIndex(r => r.id === l.row_id); if (ri >= 0) putSet(si, ri, l.set_no, {}); } }
+    const p = P(), S = p && p.weeks[PG.week].sessions[si]; if (!S) return true;
+    recOf(S).date = t.value || today();
+    { const s = p.weeks[PG.week].sessions[si]; for (const l of (PG.logs[PG.clientId] || []).filter(x => x.session_id === s.id)){ const ri = s.rows.findIndex(r => r.id === l.row_id); if (ri >= 0) putSet(si, ri, l.set_no, {}); } }
     return true; }
   if (k === "logline"){ commitLine(si, ri, t.value); setTimeout(() => redraw(), 0); return true; }
   if (k === "prog" && t.getAttribute("data-f") === "startDate"){ redraw(); return true; }
@@ -963,16 +980,14 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
   .pg-cal-d.has .pg-cal-dn{flex-direction:row;gap:5px;align-items:baseline}
 }
 .pg-logname{display:none}
-@media (max-width:760px){
-  /* Recording on a phone: just the exercise, its plan and the line to type in. */
-  .pg-sess.rec .pg-rows thead,.pg-sess.rec .pg-rows tr.pg-g,.pg-sess.rec .pg-qa,.pg-sess.rec .pg-qa-hint{display:none}
-  .pg-sess.rec .pg-rows,.pg-sess.rec .pg-rows tbody,.pg-sess.rec .pg-recrow,.pg-sess.rec .pg-recrow td{display:block;width:100%}
-  .pg-sess.rec .pg-recrow td:first-child{display:none}
-  .pg-sess.rec .pg-recrow td{padding:10px 0 4px 10px!important;box-shadow:inset 3px 0 0 var(--g,var(--line))}
-  .pg-sess.rec .tablewrap{overflow:visible}
-  .pg-logname{display:flex;gap:7px;align-items:baseline;flex-wrap:wrap;margin-bottom:5px}
-  .pg-logname .gchip{align-self:center}
-}
+/* Record mode: just each exercise, its plan and the line to type in. Plan mode shows the full builder. */
+.pg-sess.rec .pg-rows thead,.pg-sess.rec .pg-rows tr.pg-g,.pg-sess.rec .pg-qa-hint,.pg-sess.rec .pg-planonly{display:none}
+.pg-sess.rec .pg-rows,.pg-sess.rec .pg-rows tbody,.pg-sess.rec .pg-recrow,.pg-sess.rec .pg-recrow td{display:block;width:100%}
+.pg-sess.rec .pg-recrow td:first-child{display:none}
+.pg-sess.rec .pg-recrow td{padding:12px 0 4px 12px!important;box-shadow:inset 3px 0 0 var(--g,var(--line))}
+.pg-sess.rec .tablewrap{overflow:visible}
+.pg-sess.rec .pg-logname{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;margin-bottom:6px}
+.pg-sess.rec .pg-logname .gchip{align-self:center}
 .pg-logline{display:flex;gap:8px;align-items:center;padding:2px 0 2px}
 .pg-login{flex:1;min-width:0;font-size:15px;font-variant-numeric:tabular-nums;letter-spacing:.01em}
 .pg-login.on{border-color:color-mix(in srgb,var(--pos) 55%,var(--line));background:color-mix(in srgb,var(--pos) 7%,var(--bg))}
