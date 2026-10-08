@@ -20,7 +20,17 @@ function recOf(s){
   if (!R){ const have = (PG.logs[PG.clientId] || []).find(l => l.session_id === s.id); R = PG.recs[s.id] = { sid: s.id, date: have ? String(have.logged_on).slice(0, 10) : today(), extra: {}, lastRow: null }; }
   return R;
 }
-const recording = s => PG.mode === "record" && (s.rows || []).some(r => r.name);
+const written = s => (s.rows || []).some(r => r.name);
+/* Record only makes sense once something is written: an empty week shows the Plan board whatever the toggle says. */
+/* Once a week was opened empty, it stays on Plan while you draft it, until you tap Record. */
+function modeFor(week){
+  if (PG.mode !== "record" || !week) return "plan";
+  if (PG.draftWeek === week.id) return "plan";
+  if (!(week.sessions || []).some(written)){ PG.draftWeek = week.id; return "plan"; }
+  return "record";
+}
+let MODE = PG.mode; // the mode in effect for the week on screen (set in renderProgram)
+const recording = s => MODE === "record" && written(s);
 const timers = {};
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -206,7 +216,8 @@ function renderProgram(c, progs){
   const clip = PG.clip;
   const progSel = progs.length > 1 ? `<select class="pg-in" data-pg="progsel">${progs.map(x => `<option value="${esc(x.id)}" ${x.id === p.id ? "selected" : ""}>${esc(x.name)}${x.status === "archived" ? " (archived)" : ""}</option>`).join("")}</select>` : "";
   const layoutSeg = `<div class="seg pg-layout" role="group" aria-label="Program view">${[["days", "Days"], ["cal", "Calendar"]].map(([v, l]) => `<button data-act="pg-layout" data-v="${v}" aria-pressed="${PG.layout === v}">${l}</button>`).join("")}</div>`;
-  const modeSeg = `<div class="seg pg-layout" role="group" aria-label="Mode">${[["record", "Record"], ["plan", "Plan"]].map(([v, l]) => `<button data-act="pg-mode" data-v="${v}" aria-pressed="${PG.mode === v}" title="${v === "record" ? "Log what the client did" : "Write and edit the program"}">${l}</button>`).join("")}</div>`;
+  MODE = modeFor(week);
+  const modeSeg = `<div class="seg pg-layout" role="group" aria-label="Mode">${[["record", "Record"], ["plan", "Plan"]].map(([v, l]) => `<button data-act="pg-mode" data-v="${v}" aria-pressed="${MODE === v}" title="${v === "record" ? "Log what the client did" : "Write and edit the program"}">${l}</button>`).join("")}</div>`;
   const weekChips = `<div class="pg-weeks" role="tablist">${W.map((w, i) => `<button role="tab" aria-selected="${i === wi}" data-act="pg-week" data-i="${i}">${esc(w.label || "Week " + (i + 1))}</button>`).join("")}<button data-act="pg-addweek" title="Add a week">+ Week</button></div>`;
   const weekActs = week ? `<div class="pg-acts">
       <button class="btn sm" data-act="pg-copyweek">Copy week</button>
@@ -228,8 +239,8 @@ function renderProgram(c, progs){
   </section>
   ${PG.layout !== "cal" ? (setTimeout(() => { const ch = document.querySelector('#main .pg-weeks [aria-selected="true"]'), row = ch && ch.parentElement; if (row && row.scrollWidth > row.clientWidth && (ch.offsetLeft < row.scrollLeft || ch.offsetLeft + ch.offsetWidth > row.scrollLeft + row.clientWidth)) row.scrollLeft = ch.offsetLeft - row.offsetLeft - 8; }, 0), "") : ""}
   ${PG.layout !== "cal" && PG.scrollTo ? (() => { const to = PG.scrollTo; PG.scrollTo = null; setTimeout(() => { const el = to === "top" ? document.querySelector("#main .pg-prog") : document.getElementById("pg-s-" + to); if (el) el.scrollIntoView({ block: "start", behavior: "smooth" }); }, 30); return ""; })() : ""}
-  ${PG.layout === "cal" ? renderCalendar(c, p) : week && PG.mode === "plan" ? renderBoard(c, p, wi, week) : week ? (week.sessions || []).map((s, si) => renderSession(p, wi, si, s)).join("") : `<div class="card"><div class="empty">No weeks yet. <button class="btn sm primary" data-act="pg-addweek">Add a week</button></div></div>`}
-  ${week && PG.layout !== "cal" ? `<div class="pg-acts" style="justify-content:flex-start"><button class="btn ${PG.mode === "plan" ? "" : "primary"}" data-act="pg-addsess">+ ${PG.mode === "plan" ? "Workout without a day" : "Session"}</button>${clip && clip.type === "session" ? `<button class="btn" data-act="pg-pastesess">Paste “${esc(clip.data.name)}”</button>` : ""}</div>` : ""}
+  ${PG.layout === "cal" ? renderCalendar(c, p) : week && MODE === "plan" ? renderBoard(c, p, wi, week) : week ? (week.sessions || []).map((s, si) => renderSession(p, wi, si, s)).join("") : `<div class="card"><div class="empty">No weeks yet. <button class="btn sm primary" data-act="pg-addweek">Add a week</button></div></div>`}
+  ${week && PG.layout !== "cal" ? `<div class="pg-acts" style="justify-content:flex-start"><button class="btn" data-act="pg-addsess">+ ${MODE === "plan" ? "Workout without a day" : "Workout"}</button>${clip && clip.type === "session" ? `<button class="btn" data-act="pg-pastesess">Paste “${esc(clip.data.name)}”</button>` : ""}</div>` : ""}
   <datalist id="pg-exlist">${(PG.lib || []).slice().sort((a, b) => a.name.localeCompare(b.name)).map(e => `<option value="${esc(e.name)}"></option>`).join("")}</datalist>`;
 }
 /* ---------- the week board (Plan mode): one compact column per workout, side by side, on the day it's done ---------- */
@@ -350,6 +361,7 @@ function renderSession(p, wi, si, s, dates){
   }).join("");
   const cKey = "delsess" + si;
   const recS = recording(s);
+  if (!board && MODE === "record" && !written(s)) return `<section class="card pg-sess pg-sess-empty" id="pg-s-${esc(s.id)}"><div class="pg-row"><b>${esc(s.name)}</b><span class="small muted">Nothing written yet</span><button class="btn sm" data-act="pg-editsess" data-s="${si}" style="margin-left:auto">✎ Write it in Plan</button></div></section>`;
   return `<section class="card pg-sess ${s.homework ? "hw" : ""} ${recS ? "rec" : ""} ${board ? "pg-mini" : ""}" id="pg-s-${esc(s.id)}">
     ${board ? boardHead(p, si, s, dates, cKey, rep) : `<div class="card-h"><div class="pg-row" style="flex:1"><input class="pg-in pg-sname" data-pg="sess" data-s="${si}" data-f="name" value="${esc(s.name)}" aria-label="Session name">
       <label class="check small pg-planonly"><input type="checkbox" data-pg="sess" data-s="${si}" data-f="homework" ${s.homework ? "checked" : ""}> Homework <span class="muted">(client can log)</span></label></div>
@@ -815,7 +827,8 @@ async function onClick(el, e){
     case "pg-edrow-done": PG.editRow = null; redraw(); break;
     case "pg-editsess": { PG.mode = "plan"; try { localStorage.setItem("tt.pg.mode", "plan"); } catch (x){} PG.editRow = null; const sid = p.weeks[wi].sessions[si].id; redraw();
       const el = document.getElementById("pg-s-" + sid); if (el) el.scrollIntoView({ block: "start", behavior: "smooth" }); break; }
-    case "pg-mode": PG.editRow = null; PG.mode = el.getAttribute("data-v"); try { localStorage.setItem("tt.pg.mode", PG.mode); } catch (x){} if (PG.mode === "plan" && VOICE) VOICE.cancel(); PG.vres = null; redraw(); break;
+    case "pg-mode": if (el.getAttribute("data-v") === "record" && p && modeFor(p.weeks[wi]) === "plan" && !(p.weeks[wi].sessions || []).some(written)){ C.toast("Write a workout first, then record it here"); }
+      PG.draftWeek = null; PG.editRow = null; PG.mode = el.getAttribute("data-v"); try { localStorage.setItem("tt.pg.mode", PG.mode); } catch (x){} if (PG.mode === "plan" && VOICE) VOICE.cancel(); PG.vres = null; redraw(); break;
     case "pg-mic": {
       if (!VOICE) break;
       if (VOICE.state === "listening"){ VOICE.stop(); break; }
@@ -1059,7 +1072,7 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 /* ---------- week board ---------- */
 .pg-board{flex:0 0 auto;display:flex;gap:10px;overflow-x:auto;align-items:flex-start;padding:2px 2px 10px;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch}
 .pg-col{flex:0 0 330px;display:flex;flex-direction:column;gap:8px;min-width:0;scroll-snap-align:start}
-.pg-col.empty{flex-basis:86px}
+.pg-col.empty{flex:1 0 86px}
 .pg-colh{display:flex;align-items:center;gap:6px;min-height:26px;padding:0 2px;font-size:12px;color:var(--muted);white-space:nowrap}
 .pg-colday b{color:var(--ink);font-size:15px;margin-left:2px}
 .pg-colh.today .pg-colday b{color:var(--accent)}
@@ -1067,8 +1080,9 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-booked{font-size:11px;color:var(--accent);font-weight:600;overflow:hidden;text-overflow:ellipsis}
 .pg-colplus{all:unset;cursor:pointer;margin-left:auto;width:24px;height:24px;border-radius:7px;display:grid;place-items:center;color:var(--muted);font-weight:700}
 .pg-colplus:hover,.pg-colplus:focus-visible{background:var(--surface2);color:var(--ink)}
-.pg-col-add{all:unset;box-sizing:border-box;cursor:pointer;min-height:150px;border:1.5px dashed var(--line);border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:var(--muted);font-size:12px}
+.pg-col-add{all:unset;box-sizing:border-box;width:100%;cursor:pointer;min-height:150px;border:1.5px dashed var(--line);border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:var(--muted);font-size:12px}
 .pg-col-add span{font-size:22px;line-height:1}
+.pg-col.empty .pg-col-add{font-size:11px;padding:0 2px}
 .pg-col.booked .pg-col-add{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--ink);background:color-mix(in srgb,var(--accent) 6%,transparent)}
 .pg-col-add:hover,.pg-col-add:focus-visible{border-color:var(--accent);color:var(--ink)}
 .pg-sess.pg-mini{padding:10px;gap:7px;margin:0;font-size:13px}
@@ -1097,7 +1111,7 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-sess.pg-mini .pg-qa{flex-wrap:nowrap;gap:6px}
 .pg-sess.pg-mini .pg-qa-box{flex:1;min-width:0}
 .pg-sess.pg-mini .pg-ss{padding:5px 7px}
-@media (max-width:760px){.pg-col{flex-basis:300px}.pg-col.empty{flex-basis:70px}}
+@media (max-width:760px){.pg-col{flex-basis:300px}.pg-col.empty{flex:0 0 70px}}
 .pg-pen{margin-left:auto;color:var(--muted);font-size:14px;padding:0 4px}
 .pg-edit{display:grid;grid-template-columns:2fr 1fr 1fr 2fr;gap:8px;align-items:end;margin:0 0 8px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
 .pg-edit label{display:flex;flex-direction:column;gap:3px;min-width:0}

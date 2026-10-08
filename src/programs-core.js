@@ -10,7 +10,8 @@ const n = v => { const x = parseFloat(v); return isFinite(x) ? x : null; };
 
 export const newRow = (ex) => ({ id: pid("r"), exId: ex ? ex.id : null, name: ex ? ex.name : "", group: "", sets: ex && ex.sets ? String(ex.sets) : "", reps: ex && ex.reps ? String(ex.reps) : "", weight: "", note: "" });
 export const newSession = (name) => ({ id: pid("s"), name: name || "Day A", homework: false, notes: "", rows: [] });
-export const newWeek = (label) => ({ id: pid("w"), label: label || "Week 1", sessions: [newSession("Day A")] });
+// A new week starts empty: workouts are added on their day from the Plan board.
+export const newWeek = (label) => ({ id: pid("w"), label: label || "Week 1", sessions: [] });
 export function newProgram(clientId, name){
   return { name: name || "Program", clientId, status: "active", startDate: new Date().toISOString().slice(0, 10), weeks: [newWeek("Week 1")] };
 }
