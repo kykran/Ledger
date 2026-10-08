@@ -529,3 +529,49 @@ export function standardLiftHistory(logs){
   }
   return out;
 }
+
+/* ---------- pre-session brief ----------
+ * What to know walking into a session: for each exercise, what they did last time and whether to go up,
+ * plus a few flags (notes, a long gap, the package). Pure: the caller passes logs and billing stats.
+ * Going up: every set hit its reps (bodyweight: add a rep; heavier last set: match it on all sets; else +5 lb, +10 at 200+).
+ * Returns {lines:[{name, last, lastDate, say, dir:"up"|"hold"|"new"|"plan"}], flags:[{text, tone:"warn"|"info"}]}. */
+const fmtW = w => String(Math.round(w * 10) / 10);
+export function sessionBrief({ session, logs = [], notes = "", billing = null, before = new Date() }){
+  const cut = ymdOf(before), lines = [], flags = [];
+  const byEx = {};
+  for (const l of logs){
+    if (!l.ex_name || (!l.done && l.reps == null && l.weight == null)) continue;
+    const d = String(l.logged_on).slice(0, 10); if (d >= cut) continue;
+    const k = l.ex_name.trim().toLowerCase(); ((byEx[k] = byEx[k] || {})[d] = byEx[k][d] || []).push(l);
+  }
+  for (const r of (session && session.rows) || []){
+    if (!r.name) continue;
+    const days = byEx[r.name.trim().toLowerCase()] || {}, lastDate = Object.keys(days).sort().pop();
+    if (!lastDate){ lines.push({ name: r.name, last: "", lastDate: "", say: "First time", dir: "new" }); continue; }
+    const sets = days[lastDate].sort((a, b) => a.set_no - b.set_no).map(l => ({ reps: n(l.reps), weight: n(l.weight) }));
+    const last = fmtSetLog(sets), top = topSet(sets), pw = n(r.weight);
+    const target = k => repsFor(r, k);
+    const hitAll = sets.length >= setCount(r) && sets.every((s, k) => s.reps != null && (target(k) == null || s.reps >= target(k)));
+    let say, dir;
+    if (top.weight != null && pw != null && pw > top.weight){ say = `Plan says ${fmtW(pw)}`; dir = "plan"; }
+    else if (top.weight != null){
+      const step = top.weight >= 200 ? 10 : 5;
+      const across = sets.every(s => s.weight === top.weight);
+      if (hitAll && !across){ say = `${fmtW(top.weight)} for all sets`; dir = "up"; }
+      else if (hitAll){ say = `Try ${fmtW(top.weight + step)}`; dir = "up"; }
+      else { say = `Stay at ${fmtW(top.weight)}, missed reps`; dir = "hold"; }
+    } else { say = hitAll ? "Add a rep" : "Same again, missed reps"; dir = hitAll ? "up" : "hold"; }
+    lines.push({ name: r.name, last, lastDate, say, dir });
+  }
+  const note = String(notes || "").trim();
+  if (note) flags.push({ text: note.length > 140 ? note.slice(0, 140) + "…" : note, tone: "warn", note: true });
+  const allDays = logs.map(l => String(l.logged_on).slice(0, 10)).filter(d => d < cut).sort(), lastSeen = allDays.pop();
+  if (lastSeen){ const gap = Math.round((parseYmd(cut) - parseYmd(lastSeen)) / DAYMS); if (gap >= 10) flags.push({ text: `First session in ${gap} days. Ease back in.`, tone: "warn" }); }
+  if (billing && billing.bill === "package"){
+    const left = billing.remaining;
+    if (billing.status === "owes") flags.push({ text: "Package not marked paid", tone: "warn" });
+    else if (left != null && left <= 0) flags.push({ text: left < 0 ? `${-left} session${left === -1 ? "" : "s"} past the package. Renewal due` : "Last package used up. Renewal due", tone: "warn" });
+    else if (billing.status === "low") flags.push({ text: `${left} session${left === 1 ? "" : "s"} left in the package`, tone: "info" });
+  } else if (billing && billing.status === "owes") flags.push({ text: billing.label || "Owes money", tone: "warn" });
+  return { lines, flags };
+}
