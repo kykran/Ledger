@@ -506,8 +506,14 @@ export function clientView(M, clientId){
     updated: now.toISOString()};
   if (st.bill === "package" && st.current){ v.left = Math.max(0, st.remaining); v.size = st.current.size; v.used = Math.min(st.current.size, st.current.usedIn); v.over = Math.max(0, -st.remaining);
     v.runout = st.runout ? st.runout.toISOString() : null; v.runoutEst = !!st.runoutEst;
-    // Every session in this package (plus any past it), newest first.
-    const inPack = st.past.filter(s => s.pkg === st.current.index || s.over);
+    // Every session in this package, oldest first and numbered, then the ones past it (they count toward the next package).
+    const ci = st.current.index, cp = (c.packages || [])[ci] || {}, pre = ci === 0 ? num(cp.used0) : 0;
+    const carried = pre > 0 ? st.past.filter(s => s.date < new Date(cp.start)).slice(-pre) : [];
+    const done = [...carried, ...st.past.filter(s => s.pkg === ci)].map(s => s.date.toISOString());
+    const slots = Math.max(0, st.current.size - done.length - (pre - carried.length));
+    v.pack = { size: st.current.size, done, booked: st.future.slice(0, slots).map(s => s.date.toISOString()), uncounted: Math.max(0, pre - carried.length) };
+    v.nextPack = { done: st.past.filter(s => s.over).map(s => s.date.toISOString()), booked: st.future.slice(slots, slots + 8).map(s => s.date.toISOString()) };
+    const inPack = st.past.filter(s => s.pkg === ci || s.over);
     if (inPack.length > v.recent.length) v.recent = inPack.slice().reverse().map(s => s.date.toISOString());
     v.packSessions = true; }
   else { const k = M.curM; v.thisMonth = st.past.filter(s => mkey(s.date) === k).length; v.bookedThisMonth = st.future.filter(s => mkey(s.date) === k).length;
