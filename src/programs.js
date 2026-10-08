@@ -193,15 +193,17 @@ function renderClient(){
     <div class="who" style="margin-right:auto">${C.avatar(c)}<b style="font-size:16px">${esc(c.name)}</b></div>
     <div class="seg" role="group" aria-label="Client view">${[["program", "Program"], ["progress", "Progress"]].map(([v, l]) => `<button data-act="pg-sub" data-v="${v}" aria-pressed="${PG.sub === v}">${l}</button>`).join("")}</div>
     ${c.shared ? `<span class="tag">shared by ${esc(c.ownerName || "another trainer")}</span>` : `<button class="btn sm" data-act="pg-share">${link ? "Client link" : "Share with client"}</button>`}</div>`;
-  const notes = c.shared ? "" : `<details class="card pg-notes" ${c.programNotes ? "" : "open"}><summary><b>Programming notes</b> <span class="small muted">${c.programNotes ? esc(c.programNotes.slice(0, 90)) + (c.programNotes.length > 90 ? "…" : "") : "injuries, limitations, goals. The assistant reads these and flags anything risky"}</span></summary>
-    <textarea class="pg-in" data-pg="cnotes" rows="3" placeholder="e.g. Left knee meniscus repair 2024, no deep loaded flexion. Lower back flares with heavy hinging. Goal: hike Kilimanjaro in March.">${esc(c.programNotes || "")}</textarea>
-    <span class="small muted">Private to you. Saved when you click away.</span></details>`;
   const first = esc(c.name.split(" ")[0]), wm = c.workoutEmail || "off";
-  const mail = c.shared || !C.A.programs.emailWorkout ? "" : `<section class="card pg-mail"><div class="pg-row"><b>✉ Workout emails</b>
+  /* Notes and workout emails fold into one line; open it when you need it. */
+  const wmLabel = { off: "off", evening: "evening before", morning: "morning of" }[wm] || wm;
+  const setup = c.shared ? "" : `<details class="card pg-setup" ${PG.setupOpen ? "open" : ""}><summary><span class="pg-sumk">Notes</span><span class="pg-sumv pg-sumnote ${c.programNotes ? "" : "muted"}">${c.programNotes ? esc(c.programNotes.slice(0, 120)) + (c.programNotes.length > 120 ? "…" : "") : "injuries, limitations, goals"}</span>${C.A.programs.emailWorkout ? `<span class="pg-sumk pg-sumx">Emails</span><span class="pg-sumv pg-sumx">${esc(wmLabel)}</span>` : ""}<span class="pg-chev" aria-hidden="true">▾</span></summary>
+    <label class="small muted" for="pg-cnotes">Programming notes · private to you, read by the assistant to flag anything risky. Saved when you click away.</label>
+    <textarea id="pg-cnotes" class="pg-in" data-pg="cnotes" rows="3" placeholder="e.g. Left knee meniscus repair 2024, no deep loaded flexion. Lower back flares with heavy hinging. Goal: hike Kilimanjaro in March.">${esc(c.programNotes || "")}</textarea>
+    ${C.A.programs.emailWorkout ? `<div class="pg-row"><b class="small">✉ Workout emails</b>
       <select class="pg-in" data-pg="wmail" aria-label="When to email ${first} their workout" style="width:auto">${[["off", "Off"], ["evening", "Evening before (7 PM)"], ["morning", "Morning of (6 AM)"]].map(([v, l]) => `<option value="${v}" ${wm === v ? "selected" : ""}>${l}</option>`).join("")}</select>
       <input class="pg-in" data-pg="cemail" type="email" value="${esc(c.email || "")}" placeholder="${first}'s email" aria-label="${first}'s email" style="width:230px"></div>
-    <span class="small muted">${wm === "off" ? `Turn on to email ${first} each workout on days they're on your calendar.` : `Sent on days ${first} is on your calendar, as long as that day's workout is written. Includes a link to their videos and log.`} Use ✉ Email on a session to send one now.</span></section>`;
-  return head + (PG.sub === "progress" ? renderProgress(c) : notes + mail + renderProgram(c, progs));
+    <span class="small muted">${wm === "off" ? `Turn on to email ${first} each workout on days they're on your calendar.` : `Sent on days ${first} is on your calendar, as long as that day's workout is written.`}</span>` : ""}</details>`;
+  return head + (PG.sub === "progress" ? renderProgress(c) : setup + renderProgram(c, progs));
 }
 
 /* ---------- program builder ---------- */
@@ -226,16 +228,21 @@ function renderProgram(c, progs){
       ${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress">✦ Progress week</button><button class="btn sm" data-act="pg-ai" data-mode="critique">✦ Critique program</button>` : ""}
       ${PG.confirm === "delweek" ? `<button class="btn sm danger" data-act="pg-delweek">Delete ${esc(week.label)}?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="delweek">Delete week</button>`}
     </div>` : "";
-  return `<section class="card pg-prog">
-    <div class="card-h"><div class="pg-row">${progSel}<input class="pg-in pg-title" data-pg="prog" data-f="name" value="${esc(p.name)}" aria-label="Program name"></div>
-      <div class="pg-acts"><span class="small muted" id="pg-save">${esc(PG.save)}</span>
-      ${p.shared ? (PG.confirm === "leave" ? `<button class="btn sm danger" data-act="pg-leave">Remove from my list?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="leave">Remove from my list</button>`) : `
+  const progActs = p.shared ? (PG.confirm === "leave" ? `<button class="btn sm danger" data-act="pg-leave">Remove from my list?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="leave">Remove from my list</button>`) : `
       ${PG.sharing ? `<button class="btn sm" data-act="pg-sharetr">Share with a trainer</button>` : ""}
       <button class="btn sm" data-act="pg-newprog">New program</button>
       <button class="btn sm ghost" data-act="pg-archive">${p.status === "archived" ? "Unarchive" : "Archive"}</button>
-      ${PG.confirm === "delprog" ? `<button class="btn sm danger" data-act="pg-delprog">Delete program?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="delprog">Delete</button>`}`}</div></div>
-    ${PG.layout === "cal" ? `<div class="pg-row">${layoutSeg}<label class="small muted pg-start">Week 1 starts <input type="date" class="pg-in" data-pg="prog" data-f="startDate" value="${esc(p.startDate || "")}" ${p.shared ? "disabled" : ""}></label></div>` : `<div class="pg-row pg-weekbar">${layoutSeg}${modeSeg}${weekChips}</div>
-    ${week ? `<div class="pg-row"><input class="pg-in" data-pg="week" data-f="label" value="${esc(week.label)}" aria-label="Week name" style="max-width:180px">${weekActs}</div>` : ""}`}
+      ${PG.confirm === "delprog" ? `<button class="btn sm danger" data-act="pg-delprog">Delete program?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="delprog">Delete program</button>`}`;
+  const tools = PG.tools ? `<div class="pg-tools">
+      ${week && PG.layout !== "cal" ? `<div class="pg-row"><span class="small muted pg-tl">This week</span><input class="pg-in" data-pg="week" data-f="label" value="${esc(week.label)}" aria-label="Week name" style="max-width:150px">${weekActs}</div>` : ""}
+      <div class="pg-row"><span class="small muted pg-tl">Program</span><input class="pg-in pg-title" data-pg="prog" data-f="name" value="${esc(p.name)}" aria-label="Program name" style="max-width:240px">${progSel}
+        <label class="small muted pg-start">Week 1 starts <input type="date" class="pg-in" data-pg="prog" data-f="startDate" value="${esc(p.startDate || "")}" ${p.shared ? "disabled" : ""}></label>
+        <div class="pg-acts">${progActs}</div></div></div>` : "";
+  return `<section class="card pg-prog">
+    <div class="pg-bar"><b class="pg-pname" title="${esc(p.name)}">${esc(p.name)}</b>${layoutSeg}${PG.layout === "cal" ? "" : modeSeg + weekChips}
+      <span class="small muted pg-savest" id="pg-save">${esc(PG.save)}</span>
+      <button class="btn sm ${PG.tools ? "primary" : "ghost"} pg-toolsbtn" data-act="pg-tools" aria-expanded="${!!PG.tools}" title="Week and program tools: rename, copy, repeat, AI, start date, share, archive">⋯ ${PG.tools ? "Close" : "More"}</button></div>
+    ${tools}
   </section>
   ${PG.layout !== "cal" ? (setTimeout(() => { const ch = document.querySelector('#main .pg-weeks [aria-selected="true"]'), row = ch && ch.parentElement; if (row && row.scrollWidth > row.clientWidth && (ch.offsetLeft < row.scrollLeft || ch.offsetLeft + ch.offsetWidth > row.scrollLeft + row.clientWidth)) row.scrollLeft = ch.offsetLeft - row.offsetLeft - 8; }, 0), "") : ""}
   ${PG.layout !== "cal" && PG.scrollTo ? (() => { const to = PG.scrollTo; PG.scrollTo = null; setTimeout(() => { const el = to === "top" ? document.querySelector("#main .pg-prog") : document.getElementById("pg-s-" + to); if (el) el.scrollIntoView({ block: "start", behavior: "smooth" }); }, 30); return ""; })() : ""}
@@ -816,6 +823,7 @@ async function onClick(el, e){
     case "pg-link": mutate(p => { const rows = p.weeks[wi].sessions[si].rows, on = letterOf(rows[ri].group) === letterOf(rows[ri - 1].group); if (on) splitAt(rows, ri); else linkUp(rows, ri); }); break;
     case "pg-ss": { const sid = p.weeks[wi].sessions[si].id; PG.ss[sid] = !PG.ss[sid]; redraw(); const q = document.querySelector(`#main input[data-pg="qa"][data-s="${si}"]`); if (q) q.focus(); break; }
     case "pg-qa-pick": { const i = +el.getAttribute("data-i"), sess = p.weeks[wi].sessions[si]; if (PG.qa && PG.qa.si === si) qaAdd(si, PG.qa.items[i], !!PG.ss[sess.id]); break; }
+    case "pg-tools": PG.tools = !PG.tools; redraw(); break;
     case "pg-more": { const id = el.getAttribute("data-id"); PG.more = PG.more === id ? null : id; PG.confirm = null; redraw(); break; }
     case "pg-addday": {
       const d = +el.getAttribute("data-d"); let sid = null, si2 = 0;
@@ -1069,6 +1077,48 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-sess.rec .pg-logname:hover,.pg-sess.rec .pg-logname:focus-visible,.pg-sess.rec .pg-logname[aria-expanded="true"]{background:var(--surface2)}
 .pg-sess.rec .pg-logname:focus-visible{outline:2px solid var(--accent)}
 @media (max-width:760px){.pg-sess>.card-h{flex-wrap:wrap}.pg-sess>.card-h>.pg-row{flex:1 1 100%!important}.pg-sess>.card-h .pg-sname{width:100%}}
+/* ---------- compact top ---------- */
+.pg-setup{padding:10px 16px;gap:10px}
+.pg-setup summary{display:flex;gap:8px;align-items:baseline;cursor:pointer;list-style:none;min-width:0;font-size:13px}
+.pg-setup summary::-webkit-details-marker{display:none}
+.pg-sumk{font-weight:600;flex:0 0 auto}
+.pg-sumv{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-right:10px}
+.pg-sumnote{flex:1 1 auto}
+.pg-chev{margin-left:auto;color:var(--muted);transition:transform .15s}
+.pg-setup[open] .pg-chev{transform:rotate(180deg)}
+.pg-prog{padding:10px 14px;gap:10px}
+.pg-bar{display:flex;align-items:center;gap:8px;min-width:0}
+.pg-pname{font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;flex:0 1 auto}
+.pg-bar .seg{flex:0 0 auto}
+.pg-bar .pg-weeks{flex:1 1 auto;min-width:0;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+.pg-bar .pg-weeks::-webkit-scrollbar{display:none}
+.pg-bar .pg-weeks>button{flex:0 0 auto}
+.pg-savest{flex:0 0 auto;margin-left:auto}
+.pg-toolsbtn{flex:0 0 auto}
+.pg-tools{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line);padding-top:10px}
+.pg-tools .pg-row{flex-wrap:wrap;align-items:center}
+.pg-tl{width:72px;flex:0 0 auto}
+.pg-tools .pg-acts{justify-content:flex-start}
+@media (max-width:760px){
+  .pg-bar{flex-wrap:wrap}
+  .pg-pname{flex:1 1 0;max-width:none;order:1}
+  .pg-savest{order:2}
+  .pg-toolsbtn{order:3}
+  .pg-bar .seg{order:4}
+  .pg-bar .pg-weeks{flex:1 1 100%;order:5}
+  .pg-tl{width:100%}
+  .pg-setup summary .pg-sumx{display:none}
+}
+/* bigger, easier to read exercises */
+.pg-sess.pg-mini{font-size:14px}
+.pg-sess.pg-mini .pg-in{font-size:14px;padding:6px 8px}
+.pg-sess.pg-mini tr.pg-g td:nth-child(3) .pg-in{font-weight:600}
+.pg-cal-s{font-size:13px;gap:4px;padding:7px 8px}
+.pg-cal-s .pg-cal-ex{display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:6px;row-gap:0;white-space:normal;align-items:start;line-height:1.25}
+.pg-cal-s .pg-cal-ex .gchip{grid-row:span 2;margin-top:1px}
+.pg-cal-s .pg-cal-n{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-overflow:clip}
+.pg-cal-s .pg-cal-ex .muted{padding:0;font-size:12px}
+.pg-cal-d{min-height:110px;padding:7px}
 /* ---------- week board ---------- */
 .pg-board{flex:0 0 auto;display:flex;gap:10px;overflow-x:auto;align-items:flex-start;padding:2px 2px 10px;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch}
 .pg-col{flex:0 0 330px;display:flex;flex-direction:column;gap:8px;min-width:0;scroll-snap-align:start}
@@ -1241,6 +1291,7 @@ function onDragKey(e){
 
 function attach(ctx){
   C = ctx;
+  document.addEventListener("toggle", e => { if (e.target.classList && e.target.classList.contains("pg-setup")) PG.setupOpen = e.target.open; }, true);
   if (C.A.programs && C.A.programs.voice){
     VOICE = createVoice({ api: b => C.A.programs.voice(b), onState: () => redraw(),
       onResult: r => { if (!PG.rec) return; PG.vres = { sid: PG.rec.sid, transcript: r.transcript || "", sets: r.sets || [], note: r.note || "" };
