@@ -4,3 +4,4 @@ dist-artifact
 .env
 .env.local
 .vercel
+vite.log

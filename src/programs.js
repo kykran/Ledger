@@ -3,7 +3,7 @@
  * app.js calls attach(ctx) once and then render()/onClick()/onChange()/onInput() while the Programs tab is open.
  * Data goes through ctx.A.programs (see adapter-hosted.js / programs-demo.js). */
 import { pid, newRow, newSession, newWeek, newProgram, copySession, copyWeek, repeatSession, repeatWeek, setCount,
-  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, sessionForDate } from "./programs-core.js";
+  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, sessionForDate, parseTrueCoach, truecoachToProgram, topSet, liftDelta, STANDARD_LIFTS, standardLiftHistory } from "./programs-core.js";
 import { STARTER_EXERCISES } from "./exercise-seed.js";
 import { createVoice, voiceContext, VOICE_CSS } from "./programs-voice.js";
 
@@ -20,7 +20,17 @@ function recOf(s){
   if (!R){ const have = (PG.logs[PG.clientId] || []).find(l => l.session_id === s.id); R = PG.recs[s.id] = { sid: s.id, date: have ? String(have.logged_on).slice(0, 10) : today(), extra: {}, lastRow: null }; }
   return R;
 }
-const recording = s => PG.mode === "record" && (s.rows || []).some(r => r.name);
+const written = s => (s.rows || []).some(r => r.name);
+/* Record only makes sense once something is written: an empty week shows the Plan board whatever the toggle says. */
+/* Once a week was opened empty, it stays on Plan while you draft it, until you tap Record. */
+function modeFor(week){
+  if (PG.mode !== "record" || !week) return "plan";
+  if (PG.draftWeek === week.id) return "plan";
+  if (!(week.sessions || []).some(written)){ PG.draftWeek = week.id; return "plan"; }
+  return "record";
+}
+let MODE = PG.mode; // the mode in effect for the week on screen (set in renderProgram)
+const recording = s => MODE === "record" && written(s);
 const timers = {};
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -34,6 +44,9 @@ const libByName = () => Object.fromEntries((PG.lib || []).map(e => [e.name.trim(
 const sharedClients = () => { const out = {}; for (const p of PG.shared){ const id = "sh:" + p.ownerId + ":" + p.clientId; out[id] = out[id] || { id, name: p.clientName || "Client", shared: true, ownerId: p.ownerId, ownerName: p.ownerName, realId: p.clientId }; } return Object.values(out); };
 const client = id => C.S.clients.find(c => c.id === id) || sharedClients().find(c => c.id === id);
 const progsOf = c => c.shared ? PG.shared.filter(p => p.ownerId === c.ownerId && p.clientId === c.realId) : (PG.progs || []).filter(p => p.clientId === c.id);
+/* Plan mode can show several weeks at once: lookups prefer the week you're working in (PG.week). */
+const inWk = sel => document.querySelector(`#main [data-wk="${PG.week}"] ${sel}`) || document.querySelector(`#main ${sel}`);
+function wkFrom(el){ const w = el && el.closest && el.closest("[data-wk]"); if (w) PG.week = +w.getAttribute("data-wk"); }
 /* Re-render without losing your place: the field you were typing in keeps focus and cursor position. */
 const FKEYS = ["data-pg", "data-s", "data-r", "data-f", "data-n"];
 function redraw(){
@@ -41,6 +54,7 @@ function redraw(){
   if (a && a.matches && a.matches("input,textarea,select") && a.closest && a.closest("#main")){
     const attrs = FKEYS.filter(k => a.hasAttribute(k)).map(k => `[${k}="${String(a.getAttribute(k)).replace(/"/g, '\\"')}"]`).join("");
     sel = attrs ? a.tagName.toLowerCase() + attrs : a.id ? "#" + a.id : null;
+    const wk = a.closest("[data-wk]"); if (sel && attrs && wk) sel = `[data-wk="${wk.getAttribute("data-wk")}"] ` + sel;
     try { pos = [a.selectionStart, a.selectionEnd]; } catch (x){}
   }
   C.render();
@@ -183,15 +197,17 @@ function renderClient(){
     <div class="who" style="margin-right:auto">${C.avatar(c)}<b style="font-size:16px">${esc(c.name)}</b></div>
     <div class="seg" role="group" aria-label="Client view">${[["program", "Program"], ["progress", "Progress"]].map(([v, l]) => `<button data-act="pg-sub" data-v="${v}" aria-pressed="${PG.sub === v}">${l}</button>`).join("")}</div>
     ${c.shared ? `<span class="tag">shared by ${esc(c.ownerName || "another trainer")}</span>` : `<button class="btn sm" data-act="pg-share">${link ? "Client link" : "Share with client"}</button>`}</div>`;
-  const notes = c.shared ? "" : `<details class="card pg-notes" ${c.programNotes ? "" : "open"}><summary><b>Programming notes</b> <span class="small muted">${c.programNotes ? esc(c.programNotes.slice(0, 90)) + (c.programNotes.length > 90 ? "…" : "") : "injuries, limitations, goals. The assistant reads these and flags anything risky"}</span></summary>
-    <textarea class="pg-in" data-pg="cnotes" rows="3" placeholder="e.g. Left knee meniscus repair 2024, no deep loaded flexion. Lower back flares with heavy hinging. Goal: hike Kilimanjaro in March.">${esc(c.programNotes || "")}</textarea>
-    <span class="small muted">Private to you. Saved when you click away.</span></details>`;
   const first = esc(c.name.split(" ")[0]), wm = c.workoutEmail || "off";
-  const mail = c.shared || !C.A.programs.emailWorkout ? "" : `<section class="card pg-mail"><div class="pg-row"><b>✉ Workout emails</b>
+  /* Notes and workout emails fold into one line; open it when you need it. */
+  const wmLabel = { off: "off", evening: "evening before", morning: "morning of" }[wm] || wm;
+  const setup = c.shared ? "" : `<details class="card pg-setup" ${PG.setupOpen ? "open" : ""}><summary><span class="pg-sumk">Notes</span><span class="pg-sumv pg-sumnote ${c.programNotes ? "" : "muted"}">${c.programNotes ? esc(c.programNotes.slice(0, 120)) + (c.programNotes.length > 120 ? "…" : "") : "injuries, limitations, goals"}</span>${C.A.programs.emailWorkout ? `<span class="pg-sumk pg-sumx">Emails</span><span class="pg-sumv pg-sumx">${esc(wmLabel)}</span>` : ""}<span class="pg-chev" aria-hidden="true">▾</span></summary>
+    <label class="small muted" for="pg-cnotes">Programming notes · private to you, read by the assistant to flag anything risky. Saved when you click away.</label>
+    <textarea id="pg-cnotes" class="pg-in" data-pg="cnotes" rows="3" placeholder="e.g. Left knee meniscus repair 2024, no deep loaded flexion. Lower back flares with heavy hinging. Goal: hike Kilimanjaro in March.">${esc(c.programNotes || "")}</textarea>
+    ${C.A.programs.emailWorkout ? `<div class="pg-row"><b class="small">✉ Workout emails</b>
       <select class="pg-in" data-pg="wmail" aria-label="When to email ${first} their workout" style="width:auto">${[["off", "Off"], ["evening", "Evening before (7 PM)"], ["morning", "Morning of (6 AM)"]].map(([v, l]) => `<option value="${v}" ${wm === v ? "selected" : ""}>${l}</option>`).join("")}</select>
       <input class="pg-in" data-pg="cemail" type="email" value="${esc(c.email || "")}" placeholder="${first}'s email" aria-label="${first}'s email" style="width:230px"></div>
-    <span class="small muted">${wm === "off" ? `Turn on to email ${first} each workout on days they're on your calendar.` : `Sent on days ${first} is on your calendar, as long as that day's workout is written. Includes a link to their videos and log.`} Use ✉ Email on a session to send one now.</span></section>`;
-  return head + (PG.sub === "progress" ? renderProgress(c) : notes + mail + renderProgram(c, progs));
+    <span class="small muted">${wm === "off" ? `Turn on to email ${first} each workout on days they're on your calendar.` : `Sent on days ${first} is on your calendar, as long as that day's workout is written.`}</span>` : ""}</details>`;
+  return head + (PG.sub === "progress" ? renderProgress(c) : setup + renderProgram(c, progs));
 }
 
 /* ---------- program builder ---------- */
@@ -199,14 +215,15 @@ function renderProgram(c, progs){
   const p = P();
   if (!p && c.shared) return `<section class="card"><div class="empty">This program is no longer shared with you.</div></section>`;
   if (!p) return `<section class="card"><div class="empty"><b>No program for ${esc(c.name.split(" ")[0])} yet</b><span>Start one, then add weeks, sessions and exercises.</span>
-    <div class="actions"><input id="pg-newname" class="pg-in" placeholder="Program name" value="${esc(c.name.split(" ")[0])}'s program"><button class="btn primary" data-act="pg-new">Start program</button>${C.A.programs.ai ? `<button class="btn" data-act="pg-ai" data-mode="create">✦ Draft with AI</button>` : ""}</div></div></section>`;
+    <div class="actions"><input id="pg-newname" class="pg-in" placeholder="Program name" value="${esc(c.name.split(" ")[0])}'s program"><button class="btn primary" data-act="pg-new">Start program</button>${C.A.programs.ai ? `<button class="btn" data-act="pg-ai" data-mode="create">✦ Draft with AI</button>` : ""}<button class="btn" data-act="pg-tc">Import from TrueCoach</button></div></div></section>`;
   tidyProgram(p);
   const W = p.weeks || [], wi = Math.min(PG.week, Math.max(0, W.length - 1)); PG.week = wi;
   const week = W[wi];
   const clip = PG.clip;
   const progSel = progs.length > 1 ? `<select class="pg-in" data-pg="progsel">${progs.map(x => `<option value="${esc(x.id)}" ${x.id === p.id ? "selected" : ""}>${esc(x.name)}${x.status === "archived" ? " (archived)" : ""}</option>`).join("")}</select>` : "";
   const layoutSeg = `<div class="seg pg-layout" role="group" aria-label="Program view">${[["days", "Days"], ["cal", "Calendar"]].map(([v, l]) => `<button data-act="pg-layout" data-v="${v}" aria-pressed="${PG.layout === v}">${l}</button>`).join("")}</div>`;
-  const modeSeg = `<div class="seg pg-layout" role="group" aria-label="Mode">${[["record", "Record"], ["plan", "Plan"]].map(([v, l]) => `<button data-act="pg-mode" data-v="${v}" aria-pressed="${PG.mode === v}" title="${v === "record" ? "Log what the client did" : "Write and edit the program"}">${l}</button>`).join("")}</div>`;
+  MODE = modeFor(week);
+  const modeSeg = `<div class="seg pg-layout" role="group" aria-label="Mode">${[["record", "Record"], ["plan", "Plan"]].map(([v, l]) => `<button data-act="pg-mode" data-v="${v}" aria-pressed="${MODE === v}" title="${v === "record" ? "Log what the client did" : "Write and edit the program"}">${l}</button>`).join("")}</div>`;
   const weekChips = `<div class="pg-weeks" role="tablist">${W.map((w, i) => `<button role="tab" aria-selected="${i === wi}" data-act="pg-week" data-i="${i}">${esc(w.label || "Week " + (i + 1))}</button>`).join("")}<button data-act="pg-addweek" title="Add a week">+ Week</button></div>`;
   const weekActs = week ? `<div class="pg-acts">
       <button class="btn sm" data-act="pg-copyweek">Copy week</button>
@@ -215,23 +232,93 @@ function renderProgram(c, progs){
       ${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress">✦ Progress week</button><button class="btn sm" data-act="pg-ai" data-mode="critique">✦ Critique program</button>` : ""}
       ${PG.confirm === "delweek" ? `<button class="btn sm danger" data-act="pg-delweek">Delete ${esc(week.label)}?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="delweek">Delete week</button>`}
     </div>` : "";
-  return `<section class="card pg-prog">
-    <div class="card-h"><div class="pg-row">${progSel}<input class="pg-in pg-title" data-pg="prog" data-f="name" value="${esc(p.name)}" aria-label="Program name"></div>
-      <div class="pg-acts"><span class="small muted" id="pg-save">${esc(PG.save)}</span>
-      ${p.shared ? (PG.confirm === "leave" ? `<button class="btn sm danger" data-act="pg-leave">Remove from my list?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="leave">Remove from my list</button>`) : `
+  const progActs = p.shared ? (PG.confirm === "leave" ? `<button class="btn sm danger" data-act="pg-leave">Remove from my list?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="leave">Remove from my list</button>`) : `
       ${PG.sharing ? `<button class="btn sm" data-act="pg-sharetr">Share with a trainer</button>` : ""}
       <button class="btn sm" data-act="pg-newprog">New program</button>
+      <button class="btn sm" data-act="pg-tc">Import from TrueCoach</button>
       <button class="btn sm ghost" data-act="pg-archive">${p.status === "archived" ? "Unarchive" : "Archive"}</button>
-      ${PG.confirm === "delprog" ? `<button class="btn sm danger" data-act="pg-delprog">Delete program?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="delprog">Delete</button>`}`}</div></div>
-    ${PG.layout === "cal" ? `<div class="pg-row">${layoutSeg}<label class="small muted pg-start">Week 1 starts <input type="date" class="pg-in" data-pg="prog" data-f="startDate" value="${esc(p.startDate || "")}" ${p.shared ? "disabled" : ""}></label></div>` : `<div class="pg-row pg-weekbar">${layoutSeg}${modeSeg}${weekChips}</div>
-    ${week ? `<div class="pg-row"><input class="pg-in" data-pg="week" data-f="label" value="${esc(week.label)}" aria-label="Week name" style="max-width:180px">${weekActs}</div>` : ""}`}
+      ${PG.confirm === "delprog" ? `<button class="btn sm danger" data-act="pg-delprog">Delete program?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="delprog">Delete program</button>`}`;
+  const tools = PG.tools ? `<div class="pg-tools">
+      ${week && PG.layout !== "cal" ? `<div class="pg-row"><span class="small muted pg-tl">This week</span><input class="pg-in" data-pg="week" data-f="label" value="${esc(week.label)}" aria-label="Week name" style="max-width:150px">${weekActs}</div>` : ""}
+      <div class="pg-row"><span class="small muted pg-tl">Program</span><input class="pg-in pg-title" data-pg="prog" data-f="name" value="${esc(p.name)}" aria-label="Program name" style="max-width:240px">${progSel}
+        <label class="small muted pg-start">Week 1 starts <input type="date" class="pg-in" data-pg="prog" data-f="startDate" value="${esc(p.startDate || "")}" ${p.shared ? "disabled" : ""}></label>
+        <div class="pg-acts">${progActs}</div></div></div>` : "";
+  return `<section class="card pg-prog">
+    <div class="pg-bar"><b class="pg-pname" title="${esc(p.name)}">${esc(p.name)}</b>${layoutSeg}${PG.layout === "cal" ? "" : modeSeg + weekChips}
+      <span class="small muted pg-savest" id="pg-save">${esc(PG.save)}</span>
+      <button class="btn sm ${PG.tools ? "primary" : "ghost"} pg-toolsbtn" data-act="pg-tools" aria-expanded="${!!PG.tools}" title="Week and program tools: rename, copy, repeat, AI, start date, share, archive">⋯ ${PG.tools ? "Close" : "More"}</button></div>
+    ${tools}
   </section>
   ${PG.layout !== "cal" ? (setTimeout(() => { const ch = document.querySelector('#main .pg-weeks [aria-selected="true"]'), row = ch && ch.parentElement; if (row && row.scrollWidth > row.clientWidth && (ch.offsetLeft < row.scrollLeft || ch.offsetLeft + ch.offsetWidth > row.scrollLeft + row.clientWidth)) row.scrollLeft = ch.offsetLeft - row.offsetLeft - 8; }, 0), "") : ""}
   ${PG.layout !== "cal" && PG.scrollTo ? (() => { const to = PG.scrollTo; PG.scrollTo = null; setTimeout(() => { const el = to === "top" ? document.querySelector("#main .pg-prog") : document.getElementById("pg-s-" + to); if (el) el.scrollIntoView({ block: "start", behavior: "smooth" }); }, 30); return ""; })() : ""}
-  ${PG.layout === "cal" ? renderCalendar(c, p) : week ? (week.sessions || []).map((s, si) => renderSession(p, wi, si, s)).join("") : `<div class="card"><div class="empty">No weeks yet. <button class="btn sm primary" data-act="pg-addweek">Add a week</button></div></div>`}
-  ${week && PG.layout !== "cal" ? `<div class="pg-acts" style="justify-content:flex-start"><button class="btn primary" data-act="pg-addsess">+ Session</button>${clip && clip.type === "session" ? `<button class="btn" data-act="pg-pastesess">Paste “${esc(clip.data.name)}”</button>` : ""}</div>` : ""}
+  ${PG.layout === "cal" ? renderCalendar(c, p) : week && MODE === "plan" ? renderWeeks(c, p, wi) : week ? (week.sessions || []).map((s, si) => renderSession(p, wi, si, s)).join("") : `<div class="card"><div class="empty">No weeks yet. <button class="btn sm primary" data-act="pg-addweek">Add a week</button></div></div>`}
+  ${week && PG.layout !== "cal" ? `<div class="pg-acts" style="justify-content:flex-start"><button class="btn" data-act="pg-addsess">+ ${MODE === "plan" ? "Workout without a day" : "Workout"}</button>${clip && clip.type === "session" ? `<button class="btn" data-act="pg-pastesess">Paste “${esc(clip.data.name)}”</button>` : ""}</div>` : ""}
   <datalist id="pg-exlist">${(PG.lib || []).slice().sort((a, b) => a.name.localeCompare(b.name)).map(e => `<option value="${esc(e.name)}"></option>`).join("")}</datalist>`;
 }
+/* New workout on weekday d of the current week; with fromId, a copy of that workout (named Day B, C...). */
+function addOnDay(d, fromId){
+  const p = P(); if (!p) return;
+  const wk = p.weeks[PG.week]; if (!wk) return;
+  let src = null; if (fromId) for (const w of p.weeks) for (const x of w.sessions || []) if (x.id === fromId) src = x;
+  const ss = wk.sessions, nm = "Day " + String.fromCharCode(65 + Math.min(ss.filter(x => !x.homework).length, 25));
+  const s = src ? copySession(src) : newSession(nm); s.day = d; if (!src) s.rows = [];
+  if (src && /^Day [A-Z]$/.test(src.name)) s.name = nm; // Day A copied to a new day -> Day B
+  ss.push(s); saveSoon(p); redraw();
+  const si = ss.length - 1, q = inWk(`input[data-pg="qa"][data-s="${si}"]`);
+  if (q){ const col = q.closest(".pg-col"); if (col) col.scrollIntoView({ inline: "nearest", block: "nearest", behavior: "smooth" }); if (!src) q.focus(); }
+  if (src) C.toast(`Copied ${src.name}. Change what you need.`);
+}
+/* The workout to offer as a starting point for day d: the latest one before it (this week, else last week). */
+function copySource(p, wi, d){
+  const order = weekDates(p, wi).map(x => x.getDay()), at = order.indexOf(d);
+  const pick = (w, before) => (w ? (w.sessions || []) : []).filter(x => !x.homework && written(x) && hasDay(x) && (before == null || order.indexOf(+x.day) < before)).sort((a, b) => order.indexOf(+b.day) - order.indexOf(+a.day))[0];
+  return pick(p.weeks[wi], at) || pick(p.weeks[wi - 1]);
+}
+/* ---------- the week board (Plan mode): one compact column per workout, side by side, on the day it's done ---------- */
+const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const hasDay = s => s.day !== null && s.day !== undefined && s.day !== "";
+/* The 7 dates of program week wi, starting on the program's start day. */
+function weekDates(p, wi){
+  const [y, m, d] = String(p.startDate || today()).split("-").map(Number);
+  return Array.from({ length: 7 }, (_, k) => new Date(y, m - 1, d + wi * 7 + k));
+}
+/* Plan shows a run of weeks stacked, so you can scroll up and down to compare. The selected week is in the middle. */
+function renderWeeks(c, p, sel){
+  const W = p.weeks || [], n = W.length;
+  let R = PG.span && PG.span.p === p.id ? PG.span : null;
+  if (!R){ R = PG.span = { p: p.id, from: Math.max(0, sel - (n <= 8 ? n : 2)), to: Math.min(n - 1, sel + (n <= 8 ? n : 2)) }; if (sel > R.from && PG.scrollWk == null) PG.scrollWk = sel; }
+  if (sel < R.from) R.from = sel; if (sel > R.to) R.to = sel;
+  const fmt = d => d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const blocks = [];
+  for (let i = R.from; i <= R.to; i++){
+    const w = W[i], ds = weekDates(p, i);
+    blocks.push(`<section class="pg-wkblock ${i === sel ? "sel" : ""}" data-wk="${i}" id="pg-wk-${i}"><div class="pg-wkh"><b>${esc(w.label || "Week " + (i + 1))}</b><span class="small muted">${fmt(ds[0])} – ${fmt(ds[6])}</span></div>${renderBoard(c, p, i, w)}</section>`);
+  }
+  if (PG.scrollWk != null){ const k = PG.scrollWk; PG.scrollWk = null; setTimeout(() => { const el = document.getElementById("pg-wk-" + k); if (el) el.scrollIntoView({ block: "start", behavior: "smooth" }); }, 30); }
+  return `${R.from > 0 ? `<button class="btn sm ghost pg-more-wk" data-act="pg-span" data-d="-4">↑ Show ${Math.min(4, R.from)} earlier week${Math.min(4, R.from) === 1 ? "" : "s"}</button>` : ""}
+    ${blocks.join("")}
+    ${R.to < n - 1 ? `<button class="btn sm ghost pg-more-wk" data-act="pg-span" data-d="4">↓ Show ${Math.min(4, n - 1 - R.to)} later week${Math.min(4, n - 1 - R.to) === 1 ? "" : "s"}</button>` : ""}`;
+}
+function renderBoard(c, p, wi, week){
+  const dates = weekDates(p, wi), tk = today(), booked = {};
+  // Workouts written before days existed: put them on the day the calendar already gives them (and keep it).
+  if (!p.shared && !p.imported && (week.sessions || []).some(x => !hasDay(x) && !x.homework && written(x))){
+    const appts = apptsOf(c); let moved = false;
+    for (const d of dates){ if (!appts.some(a => ymd(a) === ymd(d))) continue; const hit = sessionForDate(p, d, appts); if (hit && hit.weekIndex === wi && !hasDay(hit.session)){ hit.session.day = d.getDay(); moved = true; } }
+    if (moved) saveSoon(p);
+  }
+  for (const a of apptsOf(c)){ const k = ymd(a); (booked[k] = booked[k] || []).push(a); }
+  const tm = dt => dt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).replace(":00", "").replace(/\s?(AM|PM)/i, (_, x) => x[0].toLowerCase());
+  const all = (week.sessions || []).map((s, si) => ({ s, si }));
+  const cols = all.filter(x => !hasDay(x.s)).map(x => `<div class="pg-col" data-day=""><div class="pg-colh"><span class="pg-colday">No day yet</span></div>${renderSession(p, wi, x.si, x.s, dates)}</div>`);
+  for (const d of dates){
+    const dow = d.getDay(), k = ymd(d), here = all.filter(x => hasDay(x.s) && +x.s.day === dow), bk = booked[k];
+    const head = `<div class="pg-colh ${k === tk ? "today" : ""}"><span class="pg-colday">${DOW[dow]} <b>${d.getDate()}</b></span>${bk ? `<span class="pg-booked" title="${esc(c.name.split(" ")[0])} is booked">📅 ${esc(bk.map(tm).join(", "))}</span>` : ""}${here.length ? `<button class="pg-colplus" data-act="pg-addday" data-d="${dow}" title="Add another workout on ${DOW[dow]}" aria-label="Add another workout on ${DOW[dow]} ${d.getDate()}">+</button>` : ""}</div>`;
+    cols.push(`<div class="pg-col ${here.length ? "" : "empty"} ${bk ? "booked" : ""}" data-day="${dow}">${head}${here.map(x => renderSession(p, wi, x.si, x.s, dates)).join("")}${here.length ? "" : `<button class="pg-col-add" data-act="pg-addday" data-d="${dow}" aria-label="Add a workout on ${DOW[dow]} ${d.getDate()}"><span>+</span>Workout</button>${bk && (() => { const src = copySource(p, wi, dow); return src ? `<button class="pg-col-copy" data-act="pg-copyday" data-d="${dow}" data-from="${esc(src.id)}" title="Start from ${esc(src.name)} and change what you need">⧉ Copy ${esc(src.name)}</button>` : ""; })() || ""}`}</div>`);
+  }
+  return `<div class="pg-board" role="list">${cols.join("")}</div>`;
+}
+
 /* ---------- calendar view: every program week as a row of days, scrolling down through the weeks ----------
  * Which workout lands on which day: logged sets (by their date) first, then the client's calendar sessions
  * mapped to written sessions the same way workout emails are (nth session of the week -> nth in-studio day). */
@@ -259,10 +346,11 @@ function renderCalendar(c, p){
     const days = Array.from({ length: 7 }, (_, k) => {
       const dt = new Date(from.getFullYear(), from.getMonth(), from.getDate() + k), key = ymd(dt), items = [];
       for (const sid of logged[key] || []){ const hit = sess[sid]; if (hit && !used.has(sid)){ used.add(sid); items.push(card(hit.s, hit.wi, true, "")); } }
+      for (const x of w.sessions || []) if (hasDay(x) && +x.day === dt.getDay() && !used.has(x.id) && (x.rows || []).some(r => r.name)){ const a = (byDay[key] || [])[0]; used.add(x.id); items.push(card(x, wi, false, a ? tm(a) : "")); }
       for (const a of byDay[key] || []){
         const hit = sessionForDate(p, dt, appts);
         if (hit && !used.has(hit.session.id)){ used.add(hit.session.id); items.push(card(hit.session, wi, false, tm(a))); }
-        else if (!hit && !items.length) items.push(`<button class="pg-cal-gap" data-act="pg-cal-go" data-w="${wi}" aria-label="Write a workout for ${esc(dt.toDateString())}"><span class="muted">${esc(tm(a))}</span> nothing written</button>`);
+        else if (!hit && !items.length) items.push(`<button class="pg-cal-gap" data-act="pg-cal-write" data-w="${wi}" data-d="${dt.getDay()}" aria-label="Write a workout for ${esc(dt.toDateString())}"><span class="muted">${esc(tm(a))}</span> nothing written</button>`);
       }
       return `<div class="pg-cal-d ${items.length ? "has" : ""} ${key === tk ? "today" : ""} ${key < tk ? "past" : ""}"><div class="pg-cal-dn"><span>${dt.toLocaleDateString(undefined, { weekday: "short" })}</span><b>${dt.getDate()}</b></div>${items.join("")}</div>`;
     }).join("");
@@ -289,7 +377,7 @@ function tidyProgram(p){
   for (const w of p.weeks || []) for (const s of w.sessions || []){
     const before = (s.rows || (s.rows = [])).map(r => r.group + "|" + r.exId).join(",");
     normalizeBlocks(s.rows);
-    if (!p.shared && !PG.filled[p.id]) ensureInLibrary(s.rows);
+    if (!p.shared && !p.imported && !PG.filled[p.id]) ensureInLibrary(s.rows);
     if (before !== s.rows.map(r => r.group + "|" + r.exId).join(",")) changed = true;
   }
   PG.filled[p.id] = 1;
@@ -306,7 +394,8 @@ function ensureInLibrary(rows){
   }
   if (fresh.length){ PG.lib.push(...fresh); C.A.programs.saveExercises(fresh).catch(() => {}); }
 }
-function renderSession(p, wi, si, s){
+function renderSession(p, wi, si, s, dates){
+  const board = !!dates;
   const lib = libById();
   const rep = PG.repeat && !PG.repeat.week && PG.repeat.s === si;
   const segStart = {}; for (const g of segments(s.rows || [])) if (g.L) segStart[g.start] = g.L;
@@ -315,6 +404,7 @@ function renderSession(p, wi, si, s){
     const f = (k, ph, w) => `<input class="pg-in" data-pg="row" data-s="${si}" data-r="${ri}" data-f="${k}" value="${esc(r[k])}" placeholder="${ph}" ${w ? `style="width:${w}"` : ""} aria-label="${ph}">`;
     const recOn = recording(s);
     const done = setsDone(s, r), planned = setCount(r);
+    const dl = !recOn && done.n && dates ? deltaFor(s, r) : null;
     const sum = !recOn && done.n ? `<span class="pg-done" title="Sets recorded">✓ ${done.n}/${Math.max(planned, done.total)}${done.top != null ? ` · ${done.top}` : ""}</span>` : "";
     const label = esc(r.name || "exercise");
     return `<tr class="pg-g ${grpClass(r.group)}" data-r="${ri}"><td class="pg-gripcell"><button class="pg-grip" data-drag="row" data-s="${si}" data-r="${ri}" title="Drag to move this exercise" aria-label="Move ${label}. Drag, or use arrow keys">⠿</button></td>
@@ -322,26 +412,41 @@ function renderSession(p, wi, si, s){
         return `<button class="pg-link ${on ? "on" : ""}" data-act="pg-link" data-s="${si}" data-r="${ri}" aria-pressed="${on}" title="${on ? "Linked as a superset with the exercise above. Click to unlink" : "Superset with the exercise above"}" aria-label="${on ? "Unlink " + label + " from the superset" : "Superset " + label + " with the exercise above"}">${LINK_SVG}</button>`; })() : `<span class="pg-link-sp"></span>`}</div></td>
       <td><div class="pg-exname"><input class="pg-in" list="pg-exlist" data-pg="row" data-s="${si}" data-r="${ri}" data-f="name" value="${esc(r.name)}" placeholder="Exercise" aria-label="Exercise">${hasVid ? `<button class="btn sm ghost" data-act="pg-vid" data-id="${esc(ex.id)}" title="Watch video" aria-label="Watch video">▶</button>` : ""}</div></td>
       <td><input class="pg-in pg-sr" data-pg="row" data-s="${si}" data-r="${ri}" data-f="sr" value="${esc(fmtSetsReps(r))}" placeholder="3x8" style="width:112px" aria-label="Sets x reps, e.g. 3x8 or 3x8,8,6" title="Type 3x8, 3x8,8,6, 4x8-10, 3x30s or 3x8 each"></td><td>${f("weight", "Weight", "72px")}</td><td>${f("note", "Note")}</td>
-      <td>${sum}<button class="btn sm ghost" data-act="pg-delrow" data-s="${si}" data-r="${ri}" aria-label="Remove row">✕</button></td></tr>${recOn && r.name ? recordRows(p, s, si, r, ri) : ""}`;
+      <td>${sum}<button class="btn sm ghost" data-act="pg-delrow" data-s="${si}" data-r="${ri}" aria-label="Remove row">✕</button></td>${dates && done.n ? (() => { const t = topSet((PG.logs[PG.clientId] || []).filter(l => l.session_id === s.id && l.row_id === r.id && l.done)); return `<td class="pg-logged"><span class="pg-loggedtxt">✓ ${done.n} set${done.n === 1 ? "" : "s"}${t ? ` · top ${t.weight != null ? t.weight + "×" : ""}${t.reps ?? "?"}${t.weight == null ? " bw" : ""}` : ""}</span>${deltaBadge(dl)}</td>`; })() : ""}</tr>${recOn && r.name ? recordRows(p, s, si, r, ri) : ""}`;
   }).join("");
   const cKey = "delsess" + si;
   const recS = recording(s);
-  return `<section class="card pg-sess ${s.homework ? "hw" : ""} ${recS ? "rec" : ""}" id="pg-s-${esc(s.id)}">
-    <div class="card-h"><div class="pg-row" style="flex:1"><input class="pg-in pg-sname" data-pg="sess" data-s="${si}" data-f="name" value="${esc(s.name)}" aria-label="Session name">
+  if (!board && MODE === "record" && !written(s)) return `<section class="card pg-sess pg-sess-empty" id="pg-s-${esc(s.id)}"><div class="pg-row"><b>${esc(s.name)}</b><span class="small muted">Nothing written yet</span><button class="btn sm" data-act="pg-editsess" data-s="${si}" style="margin-left:auto">✎ Write it in Plan</button></div></section>`;
+  return `<section class="card pg-sess ${s.homework ? "hw" : ""} ${recS ? "rec" : ""} ${board ? "pg-mini" : ""}" id="pg-s-${esc(s.id)}" data-si="${si}">
+    ${board ? boardHead(p, si, s, dates, cKey, rep) : `<div class="card-h"><div class="pg-row" style="flex:1"><input class="pg-in pg-sname" data-pg="sess" data-s="${si}" data-f="name" value="${esc(s.name)}" aria-label="Session name">
       <label class="check small pg-planonly"><input type="checkbox" data-pg="sess" data-s="${si}" data-f="homework" ${s.homework ? "checked" : ""}> Homework <span class="muted">(client can log)</span></label></div>
       <div class="pg-acts">${recS ? `<button class="btn sm" data-act="pg-editsess" data-s="${si}" title="Switch to Plan to rewrite this workout">✎ Edit workout</button>` : ""}${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress" data-s="${si}">✦ Progress</button>` : ""}${!p.shared && C.A.programs.emailWorkout ? `<button class="btn sm" data-act="pg-mail" data-s="${si}" title="Email this workout to the client now">✉ Email</button>` : ""}<button class="btn sm pg-planonly" data-act="pg-copysess" data-s="${si}">Copy</button>
         ${rep ? "" : `<button class="btn sm pg-planonly" data-act="pg-repeat" data-s="${si}">Repeat…</button>`}
         <button class="btn sm ghost pg-planonly" data-act="pg-up" data-s="${si}" aria-label="Move up" ${si ? "" : "disabled"}>↑</button>
-        ${PG.confirm === cKey ? `<button class="btn sm danger" data-act="pg-delsess" data-s="${si}">Delete?</button>` : `<button class="btn sm ghost pg-planonly" data-act="pg-confirm" data-k="${cKey}">Delete</button>`}</div></div>
+        ${PG.confirm === cKey ? `<button class="btn sm danger" data-act="pg-delsess" data-s="${si}">Delete?</button>` : `<button class="btn sm ghost pg-planonly" data-act="pg-confirm" data-k="${cKey}">Delete</button>`}</div></div>`}
     ${rep ? `<div class="pg-acts" style="justify-content:flex-start">${repeatForm()}</div>` : ""}
     ${recS ? recordBar(s, si) : ""}
     ${(s.rows || []).length ? "" : `<div class="pg-emptyhint small muted">No exercises yet. Start typing below.</div>`}
     <div class="tablewrap" ${(s.rows || []).length ? "" : "hidden"}><table class="pg-rows"><thead><tr><th></th><th>Block</th><th>Exercise</th><th title="Type 3x8, 3x8,8,6, 4x8-10, 3x30s or 3x8 each">Sets × Reps</th><th>Weight</th><th>Note</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
-    <div class="pg-qa"><div class="pg-qa-box"><input class="pg-in pg-qa-in" data-pg="qa" data-s="${si}" placeholder="+ Add exercise: type to search your library" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pg-qa-list-${si}" aria-label="Add exercise"><div class="pg-qa-list" id="pg-qa-list-${si}" role="listbox" hidden></div></div>
-      <button class="btn sm pg-ss ${PG.ss[s.id] ? "on" : ""}" data-act="pg-ss" data-s="${si}" aria-pressed="${!!PG.ss[s.id]}" title="When on, each exercise you add joins the last block as a superset">${LINK_SVG} Superset</button></div>
+    <div class="pg-qa"><div class="pg-qa-box"><input class="pg-in pg-qa-in" data-pg="qa" data-s="${si}" placeholder="${board ? "+ Add exercise" : "+ Add exercise: type to search your library"}" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pg-qa-list-${wi}-${si}" aria-label="Add exercise"><div class="pg-qa-list" id="pg-qa-list-${wi}-${si}" role="listbox" hidden></div></div>
+      <button class="btn sm pg-ss ${PG.ss[s.id] ? "on" : ""}" data-act="pg-ss" data-s="${si}" aria-pressed="${!!PG.ss[s.id]}" title="When on, each exercise you add joins the last block as a superset" aria-label="Superset mode">${LINK_SVG}${board ? "" : " Superset"}</button></div>
     <div class="small muted pg-qa-hint">Enter adds it as its own block. Shift+Enter, or turn on Superset, to link it with the block above. Click the chain on any row to link or unlink.</div>
-    <div class="pg-row"><input class="pg-in" data-pg="sess" data-s="${si}" data-f="notes" value="${esc(s.notes || "")}" placeholder="Session note for the client (optional)" style="flex:1"></div>
+    <div class="pg-row"><input class="pg-in" data-pg="sess" data-s="${si}" data-f="notes" value="${esc(s.notes || "")}" placeholder="${board ? "Note for the client" : "Session note for the client (optional)"}" style="flex:1"></div>
   </section>`;
+}
+
+/* Card header on the board: name, which day, and a small menu for the rest. */
+function boardHead(p, si, s, dates, cKey, rep){
+  const open = PG.more === s.id || PG.confirm === cKey;
+  const day = `<select class="pg-in pg-day" data-pg="sessday" data-s="${si}" aria-label="Day for ${esc(s.name)}"><option value="" ${hasDay(s) ? "" : "selected"}>No day</option>${dates.map(d => `<option value="${d.getDay()}" ${hasDay(s) && +s.day === d.getDay() ? "selected" : ""}>${DOW[d.getDay()]} ${d.getDate()}</option>`).join("")}</select>`;
+  const menu = open ? `<div class="pg-menu" role="menu">
+      ${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress" data-s="${si}">✦ Progress</button>` : ""}
+      ${!p.shared && C.A.programs.emailWorkout ? `<button class="btn sm" data-act="pg-mail" data-s="${si}">✉ Email it</button>` : ""}
+      <button class="btn sm" data-act="pg-copysess" data-s="${si}">Copy</button>${rep ? "" : `<button class="btn sm" data-act="pg-repeat" data-s="${si}">Repeat…</button>`}
+      <label class="check small"><input type="checkbox" data-pg="sess" data-s="${si}" data-f="homework" ${s.homework ? "checked" : ""}> Homework</label>
+      ${PG.confirm === cKey ? `<button class="btn sm danger" data-act="pg-delsess" data-s="${si}">Delete workout?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="${cKey}">Delete</button>`}</div>` : "";
+  return `<div class="pg-mhead"><button class="pg-sgrip" data-drag="sess" data-s="${si}" title="Drag to another day (or focus and use ← →)" aria-label="Move ${esc(s.name)} to another day. Drag, or use the left and right arrow keys">⠿</button><input class="pg-in pg-sname" data-pg="sess" data-s="${si}" data-f="name" value="${esc(s.name)}" aria-label="Workout name">${day}
+    <button class="btn sm ghost pg-dots" data-act="pg-more" data-id="${esc(s.id)}" aria-expanded="${open}" aria-label="More for ${esc(s.name)}">⋯</button></div>${s.homework ? `<span class="tag pg-hwtag">homework</span>` : ""}${menu}`;
 }
 
 /* ---------- quick add ---------- */
@@ -354,16 +459,16 @@ function qaMatches(q){
     .filter(Boolean).sort((a, b) => a.s - b.s || a.e.name.localeCompare(b.e.name)).slice(0, 8).map(x => x.e);
 }
 function qaRender(si){
-  const box = document.getElementById("pg-qa-list-" + si), inp = document.querySelector(`#main input[data-pg="qa"][data-s="${si}"]`); if (!box || !inp) return;
+  const box = document.getElementById("pg-qa-list-" + PG.week + "-" + si), inp = inWk(`input[data-pg="qa"][data-s="${si}"]`); if (!box || !inp) return;
   const q = inp.value.trim(), m = qaMatches(q), exact = m.some(e => e.name.toLowerCase() === q.toLowerCase());
   const items = [...m.map(e => ({ e })), ...(q && !exact ? [{ nu: q }] : [])];
   const hi = PG.qa && PG.qa.si === si ? Math.min(PG.qa.hi, items.length - 1) : 0;
   PG.qa = { si, items, hi: Math.max(0, hi) };
   box.hidden = !items.length; inp.setAttribute("aria-expanded", String(!!items.length));
-  box.innerHTML = items.map((it, i) => `<div class="pg-qa-it ${i === PG.qa.hi ? "on" : ""}" role="option" id="pg-qa-${si}-${i}" aria-selected="${i === PG.qa.hi}" data-act="pg-qa-pick" data-s="${si}" data-i="${i}">${it.e
+  box.innerHTML = items.map((it, i) => `<div class="pg-qa-it ${i === PG.qa.hi ? "on" : ""}" role="option" id="pg-qa-${PG.week}-${si}-${i}" aria-selected="${i === PG.qa.hi}" data-act="pg-qa-pick" data-s="${si}" data-i="${i}">${it.e
     ? `<b>${esc(it.e.name)}</b><span class="small muted">${esc([it.e.muscle, it.e.equipment, it.e.sets && it.e.reps ? it.e.sets + " × " + it.e.reps : ""].filter(Boolean).join(" · "))}</span>`
     : `<span>Add “<b>${esc(it.nu)}</b>” as a new exercise</span>`}</div>`).join("");
-  if (items.length) inp.setAttribute("aria-activedescendant", `pg-qa-${si}-${PG.qa.hi}`);
+  if (items.length) inp.setAttribute("aria-activedescendant", `pg-qa-${PG.week}-${si}-${PG.qa.hi}`);
 }
 function qaAdd(si, it, superset){
   const p = P(); if (!p || !it) return;
@@ -374,22 +479,23 @@ function qaAdd(si, it, superset){
   addToBlocks(s.rows, row, superset);
   ensureInLibrary([row]);
   saveSoon(p); PG.qa = null;
-  const q = document.querySelector(`#main input[data-pg="qa"][data-s="${si}"]`); if (q) q.value = "";
+  const q = inWk(`input[data-pg="qa"][data-s="${si}"]`); if (q) q.value = "";
   redraw();
   const ri = s.rows.findIndex(x => x.id === row.id);
-  const next = document.querySelector(`#main input[data-pg="${recording(s) ? "logline" : "row"}"][data-s="${si}"][data-r="${ri}"]${recording(s) ? "" : '[data-f="sr"]'}`);
+  const next = inWk(`input[data-pg="${recording(s) ? "logline" : "row"}"][data-s="${si}"][data-r="${ri}"]${recording(s) ? "" : '[data-f="sr"]'}`);
   if (next){ next.focus(); try { next.select(); } catch (x){} }
-  else { const inp = document.querySelector(`#main input[data-pg="qa"][data-s="${si}"]`); if (inp) inp.focus(); }
+  else { const inp = inWk(`input[data-pg="qa"][data-s="${si}"]`); if (inp) inp.focus(); }
 }
 function onBuilderKey(e){
   const t = e.target, k = t.getAttribute && t.getAttribute("data-pg"); if (!k) return;
+  wkFrom(t);
   if (k === "qa"){
     const si = +t.getAttribute("data-s"), sess = P() && P().weeks[PG.week].sessions[si];
     if ((e.key === "ArrowDown" || e.key === "ArrowUp") && PG.qa && PG.qa.si === si && PG.qa.items.length){
       e.preventDefault(); const Q = PG.qa; Q.hi = (Q.hi + (e.key === "ArrowDown" ? 1 : -1) + Q.items.length) % Q.items.length; qaRender(si); return; }
     if (e.key === "Enter"){ e.preventDefault(); if (!t.value.trim()) return; if (!PG.qa || PG.qa.si !== si) qaRender(si);
       qaAdd(si, PG.qa.items[PG.qa.hi], e.shiftKey || !!(sess && PG.ss[sess.id])); return; }
-    if (e.key === "Escape"){ const b = document.getElementById("pg-qa-list-" + si); if (b) b.hidden = true; return; }
+    if (e.key === "Escape"){ const b = document.getElementById("pg-qa-list-" + PG.week + "-" + si); if (b) b.hidden = true; return; }
     return;
   }
   if (k === "logline" && e.key === "Enter"){
@@ -406,14 +512,14 @@ function onBuilderKey(e){
     const ins = [...t.closest(".pg-edit").querySelectorAll('input[data-pg="row"]')], i = ins.indexOf(t);
     if (i < ins.length - 1){ ins[i + 1].focus(); try { ins[i + 1].select(); } catch (x){} return; }
     const si = t.getAttribute("data-s"), ri = t.getAttribute("data-r"); t.blur(); PG.editRow = null;
-    setTimeout(() => { redraw(); const l = document.querySelector(`#main input[data-pg="logline"][data-s="${si}"][data-r="${ri}"]`); if (l) l.focus(); }, 0);
+    setTimeout(() => { redraw(); const l = inWk(`input[data-pg="logline"][data-s="${si}"][data-r="${ri}"]`); if (l) l.focus(); }, 0);
     return;
   }
   if (k === "row" && e.key === "Enter" && t.getAttribute("data-f") !== "name"){
     e.preventDefault();
     const ins = [...t.closest("tr").querySelectorAll('input[data-pg="row"]')], i = ins.indexOf(t);
     if (i < ins.length - 1){ ins[i + 1].focus(); try { ins[i + 1].select(); } catch (x){} }
-    else { const q = document.querySelector(`#main input[data-pg="qa"][data-s="${t.getAttribute("data-s")}"]`); if (q) q.focus(); }
+    else { const q = inWk(`input[data-pg="qa"][data-s="${t.getAttribute("data-s")}"]`); if (q) q.focus(); }
   }
 }
 
@@ -425,6 +531,17 @@ function setsDone(s, r){
   for (const l of PG.logs[PG.clientId] || []) if (l.session_id === s.id && l.row_id === r.id){ total = Math.max(total, l.set_no); if (l.done){ n++; if (l.weight != null && (top == null || +l.weight > top)) top = +l.weight; } }
   return { n, total, top };
 }
+/* This session's top set for an exercise vs the most recent earlier day it was done: "+15 lb · +2 reps". */
+function deltaFor(s, r){
+  const all = PG.logs[PG.clientId] || [], key = String(r.name || "").trim().toLowerCase(); if (!key) return null;
+  const mine = all.filter(l => l.session_id === s.id && l.row_id === r.id && (l.done || l.reps != null));
+  if (!mine.length) return null;
+  const day = String(mine[0].logged_on).slice(0, 10), by = {};
+  for (const l of all){ if (l.session_id === s.id || String(l.ex_name || "").trim().toLowerCase() !== key) continue; const d = String(l.logged_on).slice(0, 10); if (d < day) (by[d] = by[d] || []).push(l); }
+  const prevDay = Object.keys(by).sort().pop(); if (!prevDay) return null;
+  return liftDelta(topSet(mine), topSet(by[prevDay]));
+}
+const deltaBadge = d => d ? `<span class="pg-delta ${d.dir}" title="Top set vs last time">${d.dir === "up" ? "▲" : d.dir === "down" ? "▼" : "="} ${esc(d.text)}</span>` : "";
 /* Most recent earlier day this client did an exercise with the same name: "8×70, 8×70, 6×75". */
 function lastTime(name, excludeSid){
   const key = String(name || "").trim().toLowerCase(); if (!key) return "";
@@ -480,7 +597,7 @@ function recordRows(p, s, si, r, ri){
       <div class="pg-edit-acts"><button class="btn sm ghost" data-act="pg-delrow" data-s="${si}" data-r="${ri}">Remove</button><button class="btn sm primary" data-act="pg-edrow-done">Done</button></div></div>` : "";
   return `<tr class="pg-recrow ${grpClass(r.group)}"><td colspan="2"></td><td colspan="6">${head}${editor}<div class="pg-logline">
       <input class="pg-in pg-login ${have.length ? "on" : ""}" data-pg="logline" data-s="${si}" data-r="${ri}" value="${esc(fmtSetLog(have))}" placeholder="${esc(typed || "135x8 135x8 145x6")}" aria-label="${esc(r.name)} sets done, weight x reps, e.g. 215x5 215x5 225x4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next">
-      ${have.length ? `<span class="pg-logok" aria-label="${have.length} sets logged">✓ ${have.length}</span>` : plan ? `<button class="btn sm" data-act="pg-asplanned" data-s="${si}" data-r="${ri}" title="Log every set as written: ${esc(plan)}">✓ As planned</button>` : ""}
+      ${have.length ? `<span class="pg-logok" aria-label="${have.length} sets logged">✓ ${have.length}</span>${deltaBadge(deltaFor(s, r))}` : plan ? `<button class="btn sm" data-act="pg-asplanned" data-s="${si}" data-r="${ri}" title="Log every set as written: ${esc(plan)}">✓ As planned</button>` : ""}
     </div><div class="small muted pg-logprev" id="pg-lp-${esc(r.id)}">${last ? "Last time " + esc(last) : ""}</div></td></tr>`;
 }
 /* Save a typed line: sets 1..n done with what was typed; anything logged past n is cleared. */
@@ -527,7 +644,16 @@ function renderProgress(c){
   for (const l of logs){ const k = String(l.logged_on).slice(0, 10) + "|" + l.session_id; const e = byDay[k] || (byDay[k] = { day: String(l.logged_on).slice(0, 10), session: l.session_id, sets: 0, done: 0, client: false, ex: new Set() }); e.sets++; if (l.done) e.done++; if (l.source === "client") e.client = true; e.ex.add(l.ex_name); }
   const sessName = sid => { for (const p of PG.progs || []) for (const w of p.weeks || []) for (const s of w.sessions || []) if (s.id === sid) return (w.label ? w.label + " · " : "") + s.name; return "Session"; };
   const hist = Object.values(byDay).sort((a, b) => b.day.localeCompare(a.day)).slice(0, 15);
-  return `<div class="grid2">
+  const SL = standardLiftHistory(logs);
+  const fmtTop = x => x ? (x.weight != null ? `${x.weight}` : "bw") + (x.reps != null ? ` × ${x.reps}` : "") : "–";
+  const liftCards = STANDARD_LIFTS.map(L => { const h = SL[L.key], last = h[h.length - 1], prevS = h[h.length - 2];
+    const best = h.reduce((b, x) => !b || x.weight > b.weight || (x.weight === b.weight && (x.reps || 0) >= (b.reps || 0)) ? x : b, null), d = liftDelta(last, prevS);
+    return `<section class="card pg-liftcard"><div class="card-h"><h2>${L.label}</h2>${last ? `<span class="small muted">${fmtDay(last.date)}</span>` : ""}</div>
+      ${last ? `<div class="pg-liftnum"><b>${fmtTop(last)}</b>${d ? `<span class="pg-delta ${d.dir}">${esc(d.text)}</span>` : ""}</div>
+        <div class="small muted">Best ${fmtTop(best)}${best && best.date !== last.date ? " · " + fmtDay(best.date) : ""} · ${h.length} session${h.length === 1 ? "" : "s"}</div>
+        ${h.length > 1 ? lineChart(h.map(x => ({ date: x.date, value: x.weight, label: x.reps ? x.reps + " reps" : "" })), { height: 110 }) : ""}`
+      : `<div class="empty small">No ${L.label.toLowerCase()} logged yet.</div>`}</section>`; }).join("");
+  return `<div class="pg-lifts">${liftCards}</div><div class="grid2">
     <section class="card"><div class="card-h"><h2>Bodyweight</h2><span class="small muted">${wPts.length ? `latest ${wPts[wPts.length - 1].value}` : ""}</span></div>${lineChart(wPts, { unit: "" })}</section>
     <section class="card"><div class="card-h"><h2>Body fat (4-site)</h2><span class="small muted">${bPts.length ? `latest ${bPts[bPts.length - 1].value}%` : ""}</span></div>${lineChart(bPts, { unit: "%" })}
       ${!sex || !by ? `<p class="small muted">Add ${esc(c.name.split(" ")[0])}'s sex and birth year below so body fat can be calculated.</p>` : ""}</section>
@@ -616,6 +742,48 @@ function trainerShareSheet(){
     <div class="pg-row"><input id="pg-tr-email" class="pg-in" type="email" placeholder="their Google email" style="flex:1"><button class="btn primary" data-act="pg-sharetr-add">Share</button></div>
     ${L == null ? `<p class="small muted">Loading…</p>` : L.length ? `<h3>Shared with</h3><div class="list">${L.map(x => `<div><span>${esc(x.shared_email)}</span><button class="btn sm ghost" data-act="pg-sharetr-rm" data-e="${esc(x.shared_email)}">Stop sharing</button></div>`).join("")}</div>` : `<p class="small muted">Not shared with anyone yet.</p>`}`);
 }
+/* ---------- import a client's history from TrueCoach ---------- */
+const fmtD = d => { const [y, m, dd] = d.split("-").map(Number); return new Date(y, m - 1, dd).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }); };
+function tcSheet(){
+  const c = client(PG.clientId), first = c.name.split(" ")[0], T = PG.tc || (PG.tc = {}), st = T.conv && T.conv.stats;
+  const hasActive = (PG.progs || []).some(p => p.clientId === c.id && p.status !== "archived");
+  const norm = x => String(x || "").toLowerCase().replace(/[^a-z]/g, "");
+  const mismatch = T.parsed && T.parsed.client && !norm(T.parsed.client).includes(norm(first));
+  const body = T.busy ? `<div class="empty"><b>Importing…</b><span>${esc(T.busy)}</span></div>`
+    : `<ol class="small pg-tcsteps"><li>In TrueCoach, open ${esc(first)}'s workout calendar and click <b>Export</b> (top right).</li><li>Pick a date range covering everything, send it to yourself, and save the .txt file from the email.</li><li>Choose that file here.</li></ol>
+    <div class="field"><input type="file" accept=".txt,text/plain" data-pg="tcfile" aria-label="TrueCoach workout log (.txt)"></div>
+    ${T.error ? `<div class="banner err"><span>${esc(T.error)}</span></div>` : ""}
+    ${st ? `<div class="pg-tcsum"><b>${esc(T.parsed.client || "Workout log")}</b>
+        <div class="pg-tcgrid"><span><b>${st.workouts}</b> workouts</span><span><b>${st.sets.toLocaleString()}</b> logged sets</span><span><b>${st.exercises}</b> exercises</span><span>${fmtD(st.from)} – ${fmtD(st.to)}</span></div>
+        ${mismatch ? `<div class="banner warn"><span>This file is for <b>${esc(T.parsed.client)}</b>, but you're importing into <b>${esc(c.name)}</b>. Check it's the right client.</span></div>` : ""}
+        <p class="small muted">Goes in as an archived <b>TrueCoach history</b> program: every workout on its date, with your notes and supersets. Logged weights feed ${esc(first)}'s lift charts and the “Last time” line. Nothing already in Trainer Tally is changed.</p>
+        <label class="check small"><input type="checkbox" id="pg-tccont" ${T.cont ?? !hasActive ? "checked" : ""}> Also start a new program from ${esc(first)}'s latest week, beginning this week</label></div>
+      <div class="actions"><button class="btn primary" data-act="pg-tcgo">Import ${st.workouts} workouts</button></div>` : ""}`;
+  sheet("Import from TrueCoach", body);
+}
+async function tcImport(){
+  const c = client(PG.clientId), T = PG.tc; if (!T || !T.conv) return;
+  T.cont = !!(document.getElementById("pg-tccont") || {}).checked;
+  const hist = { id: pid("p"), ...T.conv.program }, logs = T.conv.logs.map(l => ({ ...l, program_id: hist.id }));
+  try {
+    T.busy = "Saving workouts…"; tcSheet();
+    await C.A.programs.saveProgram(hist);
+    for (let i = 0; i < logs.length; i += 400){ T.busy = `Saving logged sets… ${Math.min(i + 400, logs.length)} of ${logs.length}`; tcSheet(); await C.A.programs.saveLogs(logs.slice(i, i + 400)); }
+    PG.progs.push(hist); PG.progId = hist.id; PG.week = hist.weeks.length - 1;
+    if (T.cont){ // carry the latest week forward as Week 1 of a new program, starting this Monday
+      const last = [...hist.weeks].reverse().find(w => (w.sessions || []).length);
+      const wk = copyWeek(last, "Week 1");
+      for (const s of wk.sessions) for (const r of s.rows) r.note = String(r.note || "").split(" · ").filter(x => !/^Logged:/.test(x)).join(" · ");
+      const d = new Date(), mon = new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7));
+      const np = { id: pid("p"), ...newProgram(c.id, c.name.split(" ")[0] + "'s program"), weeks: [wk] };
+      np.startDate = mon.getFullYear() + "-" + String(mon.getMonth() + 1).padStart(2, "0") + "-" + String(mon.getDate()).padStart(2, "0");
+      await C.A.programs.saveProgram(np); PG.progs.push(np); PG.progId = np.id; PG.week = 0; PG.mode = "plan";
+    }
+    const n = T.conv.stats.workouts; PG.tc = null; C.closeModal(); loadClient(c.id);
+    C.toast(`Imported ${n} workouts from TrueCoach`); redraw();
+  } catch (e){ T.busy = null; T.error = "Couldn't save the import: " + (e.message || "try again"); tcSheet(); }
+}
+
 function shareSheet(){
   const c = client(PG.clientId), l = PG.link[c.id];
   sheet("Share with " + c.name.split(" ")[0], `<p class="small">A private page with ${esc(c.name.split(" ")[0])}'s program and exercise videos. No login. They can check off sets and record reps and weight on sessions marked <b>Homework</b>, and log their bodyweight.</p>
@@ -717,8 +885,10 @@ function fillFromLibrary(r){
 }
 
 async function onClick(el, e){
+  wkFrom(el);
   const act = el.getAttribute("data-act"), si = +el.getAttribute("data-s"), ri = +el.getAttribute("data-r");
   if (act !== "pg-confirm" && !["pg-delweek", "pg-delprog", "pg-delsess", "pg-exdel"].includes(act)) PG.confirm = null;
+  if (!["pg-more", "pg-confirm", "pg-repeat"].includes(act)) PG.more = null;
   const p = P(), wi = PG.week;
   switch (act){
     case "pg-retry": PG.ready = null; redraw(); break;
@@ -743,13 +913,13 @@ async function onClick(el, e){
     case "pg-archive": mutate(p => p.status = p.status === "archived" ? "active" : "archived"); break;
     case "pg-confirm": PG.confirm = el.getAttribute("data-k"); PG.edEx ? exSheet() : redraw(); break;
     case "pg-delprog": { const id = PG.progId; PG.progs = PG.progs.filter(x => x.id !== id); PG.progId = null; clearTimeout(timers[id]); redraw(); C.A.programs.deleteProgram(id).then(() => C.toast("Program deleted")).catch(() => C.toast("Couldn't delete")); break; }
-    case "pg-week": PG.week = +el.getAttribute("data-i"); PG.repeat = null; redraw(); break;
-    case "pg-addweek": mutate(p => { p.weeks.push(newWeek("Week " + (p.weeks.length + 1))); PG.week = p.weeks.length - 1; }); break;
+    case "pg-week": PG.week = +el.getAttribute("data-i"); PG.repeat = null; PG.scrollWk = PG.week; redraw(); break;
+    case "pg-addweek": mutate(p => { p.weeks.push(newWeek("Week " + (p.weeks.length + 1))); PG.week = p.weeks.length - 1; PG.scrollWk = PG.week; }); break;
     case "pg-delweek": mutate(p => { p.weeks.splice(wi, 1); PG.week = Math.max(0, wi - 1); }); break;
     case "pg-copyweek": PG.clip = { type: "week", data: JSON.parse(JSON.stringify(p.weeks[wi])) }; C.toast("Week copied. Open any week or client and paste."); redraw(); break;
     case "pg-pasteweek": if (PG.clip && PG.clip.type === "week") mutate(p => { p.weeks[wi] = copyWeek(PG.clip.data, p.weeks[wi].label); }); break;
     case "pg-addsess": { let n = 0; mutate(p => { n = p.weeks[wi].sessions.length; p.weeks[wi].sessions.push(newSession("Day " + String.fromCharCode(65 + Math.min(n, 25)))); });
-      const q = document.querySelector(`#main input[data-pg="qa"][data-s="${n}"]`); if (q){ q.focus(); q.scrollIntoView({ block: "center" }); } break; }
+      const q = inWk(`input[data-pg="qa"][data-s="${n}"]`); if (q){ q.focus(); q.scrollIntoView({ block: "center" }); } break; }
     case "pg-copysess": PG.clip = { type: "session", data: JSON.parse(JSON.stringify(p.weeks[wi].sessions[si])) }; C.toast("Session copied. Paste it into any week."); redraw(); break;
     case "pg-pastesess": if (PG.clip && PG.clip.type === "session") mutate(p => p.weeks[wi].sessions.push(copySession(PG.clip.data))); break;
     case "pg-delsess": mutate(p => p.weeks[wi].sessions.splice(si, 1)); break;
@@ -760,17 +930,25 @@ async function onClick(el, e){
       const n = Math.max(1, Math.min(52, parseInt(valIn("pg-rep-n"), 10) || 1)), R = PG.repeat; PG.repeat = null;
       const next = R.week ? repeatWeek(p, wi, n) : repeatSession(p, wi, R.s, n);
       p.weeks = next.weeks; saveSoon(p); redraw(); C.toast(`Copied into the next ${n} week${n === 1 ? "" : "s"}`); break; }
-    case "pg-addrow": { const q = document.querySelector(`#main input[data-pg="qa"][data-s="${si}"]`); if (q) q.focus(); break; }
+    case "pg-addrow": { const q = inWk(`input[data-pg="qa"][data-s="${si}"]`); if (q) q.focus(); break; }
     case "pg-delrow": mutate(p => { const rows = p.weeks[wi].sessions[si].rows; rows.splice(ri, 1); relabel(rows); }); break;
     case "pg-link": mutate(p => { const rows = p.weeks[wi].sessions[si].rows, on = letterOf(rows[ri].group) === letterOf(rows[ri - 1].group); if (on) splitAt(rows, ri); else linkUp(rows, ri); }); break;
-    case "pg-ss": { const sid = p.weeks[wi].sessions[si].id; PG.ss[sid] = !PG.ss[sid]; redraw(); const q = document.querySelector(`#main input[data-pg="qa"][data-s="${si}"]`); if (q) q.focus(); break; }
+    case "pg-ss": { const sid = p.weeks[wi].sessions[si].id; PG.ss[sid] = !PG.ss[sid]; redraw(); const q = inWk(`input[data-pg="qa"][data-s="${si}"]`); if (q) q.focus(); break; }
     case "pg-qa-pick": { const i = +el.getAttribute("data-i"), sess = p.weeks[wi].sessions[si]; if (PG.qa && PG.qa.si === si) qaAdd(si, PG.qa.items[i], !!PG.ss[sess.id]); break; }
+    case "pg-tc": PG.tc = {}; PG.tools = false; tcSheet(); break;
+    case "pg-tcgo": tcImport(); break;
+    case "pg-span": { const d = +el.getAttribute("data-d"), n = p.weeks.length; if (d < 0) PG.span.from = Math.max(0, PG.span.from + d); else PG.span.to = Math.min(n - 1, PG.span.to + d); redraw(); break; }
+    case "pg-tools": PG.tools = !PG.tools; redraw(); break;
+    case "pg-more": { const id = el.getAttribute("data-id"); PG.more = PG.more === id ? null : id; PG.confirm = null; redraw(); break; }
+    case "pg-addday": addOnDay(+el.getAttribute("data-d")); break;
+    case "pg-copyday": addOnDay(+el.getAttribute("data-d"), el.getAttribute("data-from")); break;
     case "pg-edrow": { const r = p.weeks[wi].sessions[si].rows[ri]; PG.editRow = PG.editRow === r.id ? null : r.id; redraw();
-      if (PG.editRow){ const n = document.querySelector(`#main .pg-edit input[data-f="sr"][data-s="${si}"][data-r="${ri}"]`); if (n){ n.focus(); try { n.select(); } catch (x){} } } break; }
+      if (PG.editRow){ const n = inWk(`.pg-edit input[data-f="sr"][data-s="${si}"][data-r="${ri}"]`); if (n){ n.focus(); try { n.select(); } catch (x){} } } break; }
     case "pg-edrow-done": PG.editRow = null; redraw(); break;
     case "pg-editsess": { PG.mode = "plan"; try { localStorage.setItem("tt.pg.mode", "plan"); } catch (x){} PG.editRow = null; const sid = p.weeks[wi].sessions[si].id; redraw();
       const el = document.getElementById("pg-s-" + sid); if (el) el.scrollIntoView({ block: "start", behavior: "smooth" }); break; }
-    case "pg-mode": PG.editRow = null; PG.mode = el.getAttribute("data-v"); try { localStorage.setItem("tt.pg.mode", PG.mode); } catch (x){} if (PG.mode === "plan" && VOICE) VOICE.cancel(); PG.vres = null; redraw(); break;
+    case "pg-mode": if (el.getAttribute("data-v") === "record" && p && modeFor(p.weeks[wi]) === "plan" && !(p.weeks[wi].sessions || []).some(written)){ C.toast("Write a workout first, then record it here"); }
+      PG.draftWeek = null; PG.editRow = null; PG.mode = el.getAttribute("data-v"); try { localStorage.setItem("tt.pg.mode", PG.mode); } catch (x){} if (PG.mode === "plan" && VOICE) VOICE.cancel(); PG.vres = null; redraw(); break;
     case "pg-mic": {
       if (!VOICE) break;
       if (VOICE.state === "listening"){ VOICE.stop(); break; }
@@ -802,6 +980,10 @@ async function onClick(el, e){
     case "pg-asplanned": { const r = p.weeks[wi].sessions[si].rows[ri]; const n = Math.max(1, setCount(r) || 1), w = num(r.weight);
       commitLine(si, ri, fmtSetLog(Array.from({ length: n }, (_, k) => ({ reps: repsFor(r, k), weight: w })))); redraw(); break; }
     case "pg-layout": PG.layout = el.getAttribute("data-v"); try { localStorage.setItem("tt.pg.layout", PG.layout); } catch (x){} PG.scrollTo = PG.layout === "cal" ? "week" : null; redraw(); break;
+    case "pg-cal-write": { // write a workout for a booked day, beside the rest of that week
+      PG.layout = "days"; PG.mode = "plan"; PG.draftWeek = null; try { localStorage.setItem("tt.pg.layout", "days"); localStorage.setItem("tt.pg.mode", "plan"); } catch (x){}
+      PG.week = +el.getAttribute("data-w"); PG.scrollWk = PG.week; PG.span = null;
+      addOnDay(+el.getAttribute("data-d")); break; }
     case "pg-cal-go": { PG.layout = "days"; try { localStorage.setItem("tt.pg.layout", "days"); } catch (x){} PG.week = +el.getAttribute("data-w"); PG.scrollTo = el.getAttribute("data-sid") || "top"; PG.repeat = null; redraw(); break; }
     case "pg-log": PG.logFor = { w: wi, s: si }; logSheet(); break;
     case "pg-logsave": {
@@ -880,6 +1062,7 @@ async function onClick(el, e){
 }
 
 function onInput(t){
+  wkFrom(t);
   const k = t.getAttribute("data-pg"); if (!k) return false;
   const f = t.getAttribute("data-f"), si = +t.getAttribute("data-s"), ri = +t.getAttribute("data-r");
   if (k === "libq"){ PG.libQ = t.value; const pos = t.selectionStart; redraw(); const n = document.getElementById("pg-libq"); if (n){ n.focus(); try { n.setSelectionRange(pos, pos); } catch (x){} } return true; }
@@ -897,6 +1080,7 @@ function onInput(t){
   return false;
 }
 function onChange(t){
+  wkFrom(t);
   const k = t.getAttribute("data-pg"); if (!k) return false;
   const si = +t.getAttribute("data-s"), ri = +t.getAttribute("data-r");
   if (k === "recdate"){ // moving the date moves every set already recorded for this session
@@ -906,6 +1090,19 @@ function onChange(t){
     return true; }
   if (k === "logline"){ commitLine(si, ri, t.value); setTimeout(() => redraw(), 0); return true; }
   if (k === "prog" && t.getAttribute("data-f") === "startDate"){ redraw(); return true; }
+  if (k === "tcfile"){
+    const f = t.files && t.files[0]; if (!f) return true;
+    f.text().then(txt => {
+      const T = PG.tc = { cont: PG.tc && PG.tc.cont };
+      try {
+        T.parsed = parseTrueCoach(txt);
+        if (!T.parsed.workouts.length){ T.error = "No workouts found. Use the .txt file from TrueCoach's workout Export."; return tcSheet(); }
+        T.conv = truecoachToProgram(T.parsed, { clientId: PG.clientId, name: "TrueCoach history", libByName: libByName() });
+      } catch (e){ T.error = "Couldn't read that file."; }
+      tcSheet();
+    });
+    return true; }
+  if (k === "sessday"){ mutate(p => { const s = p.weeks[PG.week].sessions[si]; if (t.value === "") delete s.day; else s.day = +t.value; }); return true; }
   if (k === "progsel"){ PG.progId = t.value; PG.week = 0; redraw(); return true; }
   if (k === "wmail"){ const c = client(PG.clientId); C.saveClient({ ...c, workoutEmail: t.value }).then(() => { C.toast(t.value === "off" ? "Workout emails off" : c.email ? "Workout emails on" : `On. Add ${c.name.split(" ")[0]}'s email so they can go out.`); redraw(); }).catch(() => {}); return true; }
   if (k === "cemail"){ const c = client(PG.clientId), v = t.value.trim();
@@ -1010,6 +1207,121 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-sess.rec .pg-logname:hover,.pg-sess.rec .pg-logname:focus-visible,.pg-sess.rec .pg-logname[aria-expanded="true"]{background:var(--surface2)}
 .pg-sess.rec .pg-logname:focus-visible{outline:2px solid var(--accent)}
 @media (max-width:760px){.pg-sess>.card-h{flex-wrap:wrap}.pg-sess>.card-h>.pg-row{flex:1 1 100%!important}.pg-sess>.card-h .pg-sname{width:100%}}
+/* ---------- compact top ---------- */
+.pg-setup{padding:10px 16px;gap:10px}
+.pg-setup summary{display:flex;gap:8px;align-items:baseline;cursor:pointer;list-style:none;min-width:0;font-size:13px}
+.pg-setup summary::-webkit-details-marker{display:none}
+.pg-sumk{font-weight:600;flex:0 0 auto}
+.pg-sumv{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-right:10px}
+.pg-sumnote{flex:1 1 auto}
+.pg-chev{margin-left:auto;color:var(--muted);transition:transform .15s}
+.pg-setup[open] .pg-chev{transform:rotate(180deg)}
+.pg-prog{padding:10px 14px;gap:10px}
+.pg-bar{display:flex;align-items:center;gap:8px;min-width:0}
+.pg-pname{font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;flex:0 1 auto}
+.pg-bar .seg{flex:0 0 auto}
+.pg-bar .pg-weeks{flex:1 1 auto;min-width:0;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+.pg-bar .pg-weeks::-webkit-scrollbar{display:none}
+.pg-bar .pg-weeks>button{flex:0 0 auto}
+.pg-savest{flex:0 0 auto;margin-left:auto}
+.pg-toolsbtn{flex:0 0 auto}
+.pg-tools{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line);padding-top:10px}
+.pg-tools .pg-row{flex-wrap:wrap;align-items:center}
+.pg-tl{width:72px;flex:0 0 auto}
+.pg-tools .pg-acts{justify-content:flex-start}
+@media (max-width:760px){
+  .pg-bar{flex-wrap:wrap}
+  .pg-pname{flex:1 1 0;max-width:none;order:1}
+  .pg-savest{order:2}
+  .pg-toolsbtn{order:3}
+  .pg-bar .seg{order:4}
+  .pg-bar .pg-weeks{flex:1 1 100%;order:5}
+  .pg-tl{width:100%}
+  .pg-setup summary .pg-sumx{display:none}
+}
+/* bigger, easier to read exercises */
+.pg-sess.pg-mini{font-size:14px}
+.pg-sess.pg-mini .pg-in{font-size:14px;padding:6px 8px}
+.pg-sess.pg-mini tr.pg-g td:nth-child(3) .pg-in{font-weight:600}
+.pg-cal-s{font-size:13px;gap:4px;padding:7px 8px}
+.pg-cal-s .pg-cal-ex{display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:6px;row-gap:0;white-space:normal;align-items:start;line-height:1.25}
+.pg-cal-s .pg-cal-ex .gchip{grid-row:span 2;margin-top:1px}
+.pg-cal-s .pg-cal-n{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-overflow:clip}
+.pg-cal-s .pg-cal-ex .muted{padding:0;font-size:12px}
+.pg-cal-d{min-height:110px;padding:7px}
+.pg-tcsteps{margin:0 0 6px;padding-left:18px;display:grid;gap:3px}
+.pg-tcsum{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface2)}
+.pg-tcgrid{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px}
+.pg-delta{display:inline-flex;align-items:center;gap:3px;font-size:12px;font-weight:600;padding:1px 7px;border-radius:999px;white-space:nowrap;background:var(--surface2);color:var(--muted)}
+.pg-delta.up{color:var(--pos);background:color-mix(in srgb,var(--pos) 13%,transparent)}
+.pg-delta.down{color:var(--neg,#c0392b);background:color-mix(in srgb,var(--neg,#c0392b) 12%,transparent)}
+.pg-lifts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.pg-liftcard{gap:6px}
+.pg-liftcard h2{font-size:15px}
+.pg-liftnum{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.pg-liftnum b{font-size:26px;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+@media (max-width:900px){.pg-lifts{grid-template-columns:1fr}}
+/* ---------- week board ---------- */
+.pg-wkblock{display:flex;flex-direction:column;gap:6px;scroll-margin-top:64px;padding-top:6px;border-top:1px solid var(--line)}
+.pg-wkblock:first-of-type{border-top:0}
+.pg-wkh{display:flex;gap:10px;align-items:baseline;padding:2px 2px 0}
+.pg-wkh b{font-size:15px}
+.pg-wkblock.sel .pg-wkh b{color:var(--accent)}
+.pg-more-wk{align-self:center}
+.pg-sgrip{touch-action:none;cursor:grab;border:0;background:none;color:var(--muted);font-size:16px;line-height:1;padding:6px 2px;border-radius:6px;flex:0 0 auto;user-select:none;-webkit-user-select:none}
+.pg-sgrip:hover,.pg-sgrip:focus-visible{color:var(--ink);background:var(--surface2)}
+.pg-sdragging{opacity:.4}
+.pg-board.pg-bdrag{scroll-snap-type:none}
+.pg-col.pg-drop .pg-col-add,.pg-col.pg-drop>.pg-sess{border-color:var(--accent)!important;box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 45%,transparent)}
+.pg-col.pg-drop .pg-colh{color:var(--accent)}
+.pg-sess.pg-swap{outline:2px dashed var(--accent);outline-offset:2px}
+.pg-dragtag{position:fixed;left:0;top:0;z-index:1000;pointer-events:none;background:var(--ink);color:var(--bg);font-size:13px;font-weight:600;padding:6px 10px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.25);white-space:nowrap}
+.pg-board{flex:0 0 auto;display:flex;gap:10px;overflow-x:auto;align-items:flex-start;padding:2px 2px 10px;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch}
+.pg-col{flex:0 0 330px;display:flex;flex-direction:column;gap:8px;min-width:0;scroll-snap-align:start}
+.pg-col.empty{flex:1 0 86px}
+.pg-colh{display:flex;align-items:center;gap:6px;min-height:26px;padding:0 2px;font-size:12px;color:var(--muted);white-space:nowrap}
+.pg-colday b{color:var(--ink);font-size:15px;margin-left:2px}
+.pg-colh.today .pg-colday b{color:var(--accent)}
+.pg-col.empty .pg-colh{flex-direction:column;align-items:flex-start;gap:0}
+.pg-booked{font-size:11px;color:var(--accent);font-weight:600;overflow:hidden;text-overflow:ellipsis}
+.pg-colplus{all:unset;cursor:pointer;margin-left:auto;width:24px;height:24px;border-radius:7px;display:grid;place-items:center;color:var(--muted);font-weight:700}
+.pg-colplus:hover,.pg-colplus:focus-visible{background:var(--surface2);color:var(--ink)}
+.pg-col-add{all:unset;box-sizing:border-box;width:100%;cursor:pointer;min-height:150px;border:1.5px dashed var(--line);border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:var(--muted);font-size:12px}
+.pg-col-add span{font-size:22px;line-height:1}
+.pg-col-copy{all:unset;box-sizing:border-box;width:100%;cursor:pointer;text-align:center;font-size:11.5px;color:var(--muted);padding:6px 4px;border-radius:8px;border:1px solid var(--line);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pg-col-copy:hover,.pg-col-copy:focus-visible{color:var(--ink);border-color:var(--accent)}
+.pg-col.booked .pg-col-copy{color:var(--ink)}
+.pg-col.empty .pg-col-add{font-size:11px;padding:0 2px}
+.pg-col.booked .pg-col-add{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--ink);background:color-mix(in srgb,var(--accent) 6%,transparent)}
+.pg-col-add:hover,.pg-col-add:focus-visible{border-color:var(--accent);color:var(--ink)}
+.pg-sess.pg-mini{padding:10px;gap:7px;margin:0;font-size:13px}
+.pg-sess.pg-mini .pg-in{padding:5px 7px;font-size:13px;min-height:0}
+.pg-mhead{display:flex;gap:6px;align-items:center}
+.pg-mhead .pg-sname{flex:1;min-width:0;width:auto!important}
+.pg-day{width:auto!important;flex:0 0 auto;padding-right:4px!important}
+.pg-dots{padding:4px 8px!important;font-weight:700;letter-spacing:1px}
+.pg-hwtag{align-self:flex-start}
+.pg-menu{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--surface2)}
+.pg-sess.pg-mini .pg-qa-hint,.pg-sess.pg-mini .pg-done,.pg-sess.pg-mini .pg-emptyhint{display:none}
+.pg-sess.pg-mini .tablewrap{overflow:visible;margin:0;padding:0}
+.pg-sess.pg-mini .pg-rows,.pg-sess.pg-mini .pg-rows tbody{display:block;width:100%}
+.pg-sess.pg-mini .pg-rows thead{display:none}
+.pg-sess.pg-mini tr.pg-g{display:grid;grid-template-columns:16px 72px 56px minmax(0,1fr) 22px;grid-template-areas:"grip blk name name del" "grip sr wt note del" "grip log log log del";gap:4px 5px;align-items:center;padding:5px 0 5px 6px;border-bottom:1px solid var(--line);box-shadow:inset 3px 0 0 var(--g,transparent)}
+.pg-sess.pg-mini tr.pg-g:last-child{border-bottom:0}
+.pg-sess.pg-mini tr.pg-g>td{padding:0!important;border:0!important;min-width:0!important;box-shadow:none!important}
+.pg-sess.pg-mini tr.pg-g>td:nth-child(1){grid-area:grip}.pg-sess.pg-mini tr.pg-g>td:nth-child(2){grid-area:blk}.pg-sess.pg-mini tr.pg-g>td:nth-child(3){grid-area:name}
+.pg-sess.pg-mini tr.pg-g>td:nth-child(4){grid-area:sr}.pg-sess.pg-mini tr.pg-g>td:nth-child(5){grid-area:wt}.pg-sess.pg-mini tr.pg-g>td:nth-child(6){grid-area:note}.pg-sess.pg-mini tr.pg-g>td:nth-child(7){grid-area:del}
+.pg-sess.pg-mini tr.pg-g .pg-in{width:100%!important}
+.pg-sess.pg-mini tr.pg-g>td.pg-logged{grid-area:log;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12.5px;color:var(--muted)}
+.pg-sess.pg-mini .pg-grip{font-size:15px;padding:4px 2px}
+.pg-sess.pg-mini .pg-bgrip,.pg-sess.pg-mini .pg-bgrip-sp{width:16px;height:24px}
+.pg-sess.pg-mini .pg-link,.pg-sess.pg-mini .pg-link-sp{width:22px;height:22px}
+.pg-sess.pg-mini .gchip{min-width:24px;font-size:11px}
+.pg-sess.pg-mini tr.pg-g td:nth-child(7) .btn{padding:2px 4px}
+.pg-sess.pg-mini .pg-qa{flex-wrap:nowrap;gap:6px}
+.pg-sess.pg-mini .pg-qa-box{flex:1;min-width:0}
+.pg-sess.pg-mini .pg-ss{padding:5px 7px}
+@media (max-width:760px){.pg-col{flex-basis:300px}.pg-col.empty{flex:0 0 70px}}
 .pg-pen{margin-left:auto;color:var(--muted);font-size:14px;padding:0 4px}
 .pg-edit{display:grid;grid-template-columns:2fr 1fr 1fr 2fr;gap:8px;align-items:end;margin:0 0 8px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
 .pg-edit label{display:flex;flex-direction:column;gap:3px;min-width:0}
@@ -1093,8 +1405,55 @@ function applyMove(si, kind, from, to){
   s.rows = kind === "row" ? moveRow(s.rows, from, to) : moveBlock(s.rows, from, to);
   saveSoon(p); redraw(); return true;
 }
+/* ---------- drag a workout to another day (week board) ---------- */
+let SDRAG = null;
+/* Put session si on a day ("" = no day). Dropped on another workout: they swap days. */
+function moveSessionDay(si, day, otherSi){
+  mutate(p => { const ss = p.weeks[PG.week].sessions, s = ss[si], old = hasDay(s) ? +s.day : null;
+    if (day === "" || day == null) delete s.day; else s.day = +day;
+    const o = otherSi != null && otherSi !== si ? ss[otherSi] : null;
+    if (o){ if (old == null) delete o.day; else o.day = old; } });
+}
+function sessDragStart(e, h){
+  e.preventDefault();
+  const card = h.closest(".pg-sess"), board = h.closest(".pg-board"); if (!card || !board) return;
+  const label = document.createElement("div"); label.className = "pg-dragtag"; label.textContent = (card.querySelector(".pg-sname") || {}).value || "Workout";
+  document.body.appendChild(label);
+  SDRAG = { si: +h.getAttribute("data-s"), id: e.pointerId, card, board, label, col: null, onCard: null, x: e.clientX, from: card.closest(".pg-col") };
+  card.classList.add("pg-sdragging"); board.classList.add("pg-bdrag"); document.body.classList.add("pg-is-dragging");
+  try { h.setPointerCapture(e.pointerId); } catch (x){}
+  sessDragMove(e);
+  window.addEventListener("pointermove", sessDragMove); window.addEventListener("pointerup", sessDragEnd); window.addEventListener("pointercancel", sessDragEnd);
+}
+function sessDragMove(e){
+  const D = SDRAG; if (!D || e.pointerId !== D.id) return;
+  D.x = e.clientX; D.label.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 10}px)`;
+  const el = document.elementFromPoint(e.clientX, e.clientY), c0 = el && el.closest && el.closest(".pg-board .pg-col"), col = c0 && c0.closest(".pg-board") === D.board ? c0 : null;
+  const onCard = col && el.closest(".pg-board .pg-sess");
+  if (D.col && D.col !== col) D.col.classList.remove("pg-drop");
+  if (D.onCard && D.onCard !== onCard) D.onCard.classList.remove("pg-swap");
+  D.col = col && col !== D.from ? col : null; D.onCard = onCard && onCard !== D.card && D.col ? onCard : null;
+  if (D.col) D.col.classList.add("pg-drop"); if (D.onCard) D.onCard.classList.add("pg-swap");
+  // scroll the board sideways near its edges
+  const r = D.board.getBoundingClientRect(), v = e.clientX < r.left + 60 ? -16 : e.clientX > r.right - 60 ? 16 : 0;
+  clearInterval(D.timer); if (v) D.timer = setInterval(() => { D.board.scrollLeft += v; }, 30);
+}
+function sessDragEnd(e){
+  const D = SDRAG; if (!D || e.pointerId !== D.id) return; SDRAG = null;
+  clearInterval(D.timer);
+  window.removeEventListener("pointermove", sessDragMove); window.removeEventListener("pointerup", sessDragEnd); window.removeEventListener("pointercancel", sessDragEnd);
+  D.label.remove(); document.body.classList.remove("pg-is-dragging"); D.card.classList.remove("pg-sdragging"); D.board.classList.remove("pg-bdrag");
+  if (D.col) D.col.classList.remove("pg-drop"); if (D.onCard) D.onCard.classList.remove("pg-swap");
+  if (e.type === "pointercancel" || !D.col) return;
+  const day = D.col.getAttribute("data-day");
+  moveSessionDay(D.si, day, D.onCard ? +D.onCard.getAttribute("data-si") : null);
+  const name = (D.card.querySelector(".pg-sname") || {}).value || "Workout";
+  C.toast(D.onCard ? "Swapped days" : day === "" ? `${name}: no day` : `${name} → ${DOW[+day]}`);
+}
 function onPointerDown(e){
   const h = e.target.closest && e.target.closest("[data-drag]"); if (!h || (e.button && e.button !== 0) || !P()) return;
+  wkFrom(h);
+  if (h.getAttribute("data-drag") === "sess") return sessDragStart(e, h);
   e.preventDefault();
   const si = +h.getAttribute("data-s"), ri = +h.getAttribute("data-r"), kind = h.getAttribute("data-drag");
   const s = P().weeks[PG.week].sessions[si];
@@ -1124,6 +1483,16 @@ function onPointerUp(e){
 }
 /* Keyboard: focus a handle and press the up or down arrow. */
 function onDragKey(e){
+  wkFrom(e.target);
+  const hs = e.target.closest && e.target.closest('[data-drag="sess"]');
+  if (hs && (e.key === "ArrowLeft" || e.key === "ArrowRight")){ // move a workout one day earlier / later
+    e.preventDefault();
+    const p = P(), si = +hs.getAttribute("data-s"), s = p.weeks[PG.week].sessions[si], dates = weekDates(p, PG.week).map(d => d.getDay());
+    const at = hasDay(s) ? dates.indexOf(+s.day) : (e.key === "ArrowRight" ? -1 : 7), to = at + (e.key === "ArrowRight" ? 1 : -1);
+    moveSessionDay(si, to < 0 || to > 6 ? "" : dates[to]);
+    const n = inWk(`[data-drag="sess"][data-s="${si}"]`); if (n) n.focus();
+    return;
+  }
   const h = e.target.closest && e.target.closest("[data-drag]"); if (!h || (e.key !== "ArrowUp" && e.key !== "ArrowDown") || !P()) return;
   e.preventDefault();
   const si = +h.getAttribute("data-s"), ri = +h.getAttribute("data-r"), kind = h.getAttribute("data-drag"), s = P().weeks[PG.week].sessions[si];
@@ -1139,6 +1508,7 @@ function onDragKey(e){
 
 function attach(ctx){
   C = ctx;
+  document.addEventListener("toggle", e => { if (e.target.classList && e.target.classList.contains("pg-setup")) PG.setupOpen = e.target.open; }, true);
   if (C.A.programs && C.A.programs.voice){
     VOICE = createVoice({ api: b => C.A.programs.voice(b), onState: () => redraw(),
       onResult: r => { if (!PG.rec) return; PG.vres = { sid: PG.rec.sid, transcript: r.transcript || "", sets: r.sets || [], note: r.note || "" };
@@ -1146,8 +1516,8 @@ function attach(ctx){
   }
   document.addEventListener("pointerdown", e => { if (e.target.closest && e.target.closest(".pg-qa-list")) e.preventDefault(); onPointerDown(e); });
   document.addEventListener("keydown", onDragKey); document.addEventListener("keydown", onBuilderKey);
-  document.addEventListener("focusout", e => { const t = e.target; if (t.getAttribute && t.getAttribute("data-pg") === "qa"){ const si = t.getAttribute("data-s"); setTimeout(() => { const b = document.getElementById("pg-qa-list-" + si), a = document.activeElement; if (b && !(a && a.getAttribute && a.getAttribute("data-pg") === "qa" && a.getAttribute("data-s") === si)) b.hidden = true; }, 150); } });
-  document.addEventListener("focusin", e => { const t = e.target; if (t.getAttribute && t.getAttribute("data-pg") === "qa" && t.value.trim()) qaRender(+t.getAttribute("data-s")); });
+  document.addEventListener("focusout", e => { const t = e.target; if (t.getAttribute && t.getAttribute("data-pg") === "qa"){ wkFrom(t); const si = t.getAttribute("data-s"), wk = PG.week; setTimeout(() => { const b = document.getElementById("pg-qa-list-" + wk + "-" + si), a = document.activeElement; if (b && !(a && a.getAttribute && a.getAttribute("data-pg") === "qa" && a.getAttribute("data-s") === si)) b.hidden = true; }, 150); } });
+  document.addEventListener("focusin", e => { const t = e.target; if (t.getAttribute && t.getAttribute("data-pg") === "qa"){ wkFrom(t); if (t.value.trim()) qaRender(+t.getAttribute("data-s")); } });
 }
 function preload(){ if (!PG.ready && !PG.loading && C && C.A.programs) load(); }
 window.TallyPrograms = { attach, render, onClick, onInput, onChange, state: PG, todos, todoText, preload };

@@ -1,7 +1,7 @@
 /* Programs: pure helpers shared by the trainer app, the client page and the server.
  * Program shape (programs.data):
  *   {name, clientId, status:"active"|"archived", startDate,
- *    weeks:[{id, label, sessions:[{id, name, homework, notes, rows:[{id, exId, name, group, sets, reps, weight, note}]}]}]}
+ *    weeks:[{id, label, sessions:[{id, name, day (0=Sun..6, optional), homework, notes, rows:[{id, exId, name, group, sets, reps, weight, note}]}]}]}
  * A log is one set: {program_id, session_id, row_id, set_no, ex_name, reps, weight, done, logged_on, source}. */
 
 export const pid = (p) => (p || "") + Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
@@ -10,7 +10,8 @@ const n = v => { const x = parseFloat(v); return isFinite(x) ? x : null; };
 
 export const newRow = (ex) => ({ id: pid("r"), exId: ex ? ex.id : null, name: ex ? ex.name : "", group: "", sets: ex && ex.sets ? String(ex.sets) : "", reps: ex && ex.reps ? String(ex.reps) : "", weight: "", note: "" });
 export const newSession = (name) => ({ id: pid("s"), name: name || "Day A", homework: false, notes: "", rows: [] });
-export const newWeek = (label) => ({ id: pid("w"), label: label || "Week 1", sessions: [newSession("Day A")] });
+// A new week starts empty: workouts are added on their day from the Plan board.
+export const newWeek = (label) => ({ id: pid("w"), label: label || "Week 1", sessions: [] });
 export function newProgram(clientId, name){
   return { name: name || "Program", clientId, status: "active", startDate: new Date().toISOString().slice(0, 10), weeks: [newWeek("Week 1")] };
 }
@@ -286,8 +287,13 @@ export function sessionForDate(program, date, sessionDates){
   if (!program || !program.startDate) return null;
   const start = parseYmd(program.startDate), wk = Math.floor((sod(date) - start) / (7 * DAYMS));
   if (wk < 0 || wk >= (program.weeks || []).length) return null;
-  const week = program.weeks[wk], list = (week.sessions || []).filter(s => !s.homework && (s.rows || []).some(r => r.name));
-  const days = [...new Set((sessionDates || []).filter(d => Math.floor((sod(d) - start) / (7 * DAYMS)) === wk).map(d => sod(d).getTime()))].sort((a, b) => a - b);
+  const week = program.weeks[wk], written = (week.sessions || []).filter(s => !s.homework && (s.rows || []).some(r => r.name));
+  // A workout given a day (0 = Sunday) goes on that weekday. The rest fill the other booked days in order.
+  const hasDay = x => x.day !== null && x.day !== undefined && x.day !== "";
+  const onDay = written.find(x => hasDay(x) && +x.day === date.getDay());
+  if (onDay) return { week, weekIndex: wk, session: onDay };
+  const taken = new Set(written.filter(hasDay).map(x => +x.day)), list = written.filter(x => !hasDay(x));
+  const days = [...new Set((sessionDates || []).filter(d => Math.floor((sod(d) - start) / (7 * DAYMS)) === wk && !taken.has(d.getDay())).map(d => sod(d).getTime()))].sort((a, b) => a - b);
   const n = days.indexOf(sod(date).getTime());
   if (n < 0 || n >= list.length) return null;
   return { week, weekIndex: wk, session: list[n] };
@@ -356,4 +362,170 @@ export function fmtSetLog(sets){
   const one = s => s.weight == null ? `${s.reps ?? "?"} bw` : `${s.weight}x${s.reps ?? "?"}`;
   if (ok.length > 2 && ok.every(s => s.reps === ok[0].reps && s.weight === ok[0].weight)) return `${one(ok[0])}x${ok.length}`;
   return ok.map(one).join(" ");
+}
+
+/* ---------- importing a TrueCoach workout log (.txt from TrueCoach's per-client "Export") ----------
+ * The file is a list of dated workouts separated by "-----":
+ *   Thursday June 15, 2023 / Title: Workout 2 / Status: completed / Warmup: ...
+ *   A1) Goblet Squat: 3x10          <- block, exercise, prescription (+ sometimes a note on the same line)
+ *      53x8                          <- logged results start indented, then one per line: weight x reps
+ *   44x10
+ *   (blank line) coaching note       <- text after a blank line belongs to the exercise above
+ * Results are read as weight x reps ("53x8", "50lb dbx10", "53x10x4" = 4 sets), a lone number by context,
+ * and anything else ("7:43.61", "red band x10", "127m") is kept as a note on that exercise. */
+const TC_DAY = /^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s+([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})\s*$/;
+const TC_ROW = /^([A-Za-z][0-9]{0,2})\)\s+(.+?)\s*:\s*(.*)$/;
+const ymdOf = d => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+function tcPrescription(raw){
+  const t = String(raw || "").trim();
+  const m = t.match(/^(\d+\s*[xX×]\s*(?:[\d.,:\-]+[a-z]{0,3}|amrap|as many reps as possible|as long as possible)(?:\s*(?:min|mins|sec|secs|s|m|cals?|lengths?|rounds?)\b)?(?:\s*(?:per side|per leg|per arm|each side|each leg|each|alternating|heavy))?)\s*[-–,.]?\s*(.*)$/i);
+  if (m) return { ...parseSetsReps(m[1].replace(/\s+/g, " ")), note: m[2] || "" };
+  if (/^[\d\s,]+$/.test(t) && t.includes(",")) return { ...parseSetsReps(t), note: "" };   // "300, 250, 200, 150"
+  return t.length <= 24 ? { sets: "", reps: t, note: "" } : { sets: "", reps: "", note: t };
+}
+/* One result line -> [{weight, reps}] or {text}. plannedReps helps read a lone number. */
+function tcResult(line, plannedReps){
+  const t = String(line || "").trim(); if (!t) return null;
+  const two = t.match(/^(\d+(?:\.\d+)?)x(\d{1,2})\1x(\d{1,2})$/i); // "44x1044x10": two sets typed without a line break
+  if (two) return { sets: [{ weight: +two[1], reps: +two[2] }, { weight: +two[1], reps: +two[3] }] };
+  let m = t.match(/^(\d+(?:\.\d+)?)\s*(?:lbs?|kgs?)?\s*(?:[a-z]+\s*)?x\s*(\d+)(?:\s*x\s*(\d+))?\b(.*)$/i);
+  if (m && !/^\s*(?:m|s|sec|min|cal)/i.test(m[4] || "")){
+    const n = Math.min(12, +m[3] || 1), rest = (m[4] || "").trim(), a = +m[1], b = +m[2];
+    // "10x4" on a 3x10 bodyweight move = 10 reps for 4 sets, not 10 lb for 4 reps
+    if (!m[3] && plannedReps && Number.isInteger(a) && Math.abs(a - plannedReps) <= 2 && b <= 6 && b !== plannedReps && !/lb|kg/i.test(t))
+      return { sets: Array.from({ length: b }, () => ({ weight: null, reps: a })), text: rest ? t : "" };
+    return { sets: Array.from({ length: n }, () => ({ weight: a, reps: b })), text: rest ? t : "" };
+  }
+  if (/^bw(\s*x\s*\d+)?$/i.test(t)){ const r = t.match(/x\s*(\d+)/i); return { sets: [{ weight: null, reps: r ? +r[1] : plannedReps }] }; }
+  const ps = t.match(/^(\d+)\s*(?:reps?\s*)?(?:per side|each side|each|per leg|per arm)$/i);
+  if (ps) return { sets: [{ weight: null, reps: +ps[1] }] };
+  if (/^\d+(\.\d+)?$/.test(t)){
+    const v = +t, p = plannedReps || 12;
+    if (!Number.isInteger(v) || p > 30) return { text: t }; // a time ("48.3") or a distance target: keep as a note
+    return { sets: [v <= Math.max(20, p * 1.6) && Number.isInteger(v) ? { weight: null, reps: v } : { weight: v, reps: plannedReps || null }] };
+  }
+  return { text: t };
+}
+export function parseTrueCoach(text){
+  const lines = String(text || "").replace(/\r/g, "").split("\n");
+  const head = (lines.find(l => /^Workout Log:/.test(l)) || "").replace(/^Workout Log:\s*/, "").trim();
+  const workouts = []; let w = null, row = null, mode = "head", sawBlank = false;
+  const finish = () => { if (w) workouts.push(w); w = null; row = null; };
+  for (const raw of lines){
+    const line = raw.replace(/\s+$/, "");
+    if (/^-{5,}$/.test(line.trim())){ finish(); continue; }
+    if (/^This workout log was generated by TrueCoach/i.test(line)) continue;
+    const d = line.match(TC_DAY);
+    if (d){ finish(); const dt = new Date(`${d[2]} ${+d[3]}, ${d[4]}`); if (isNaN(dt)) continue;
+      w = { date: ymdOf(dt), title: "", status: "", notes: [], rows: [] }; mode = "head"; sawBlank = false; continue; }
+    if (!w) continue;
+    if (!line.trim()){ sawBlank = true; if (mode === "result") mode = "after"; continue; }
+    if (mode === "head" && /^Title:/.test(line)){ w.title = line.replace(/^Title:\s*/, "").trim(); continue; }
+    if (mode === "head" && /^Status:/.test(line)){ w.status = line.replace(/^Status:\s*/, "").trim().toLowerCase(); continue; }
+    const r = line.match(TC_ROW);
+    if (r){
+      const pr = tcPrescription(r[3]);
+      row = { group: r[1].toUpperCase(), name: r[2].replace(/\s+/g, " ").replace(/[,\s]+$/, "").trim(), sets: pr.sets, reps: pr.reps, notes: pr.note ? [pr.note] : [], results: [], text: [] };
+      w.rows.push(row); mode = "row"; sawBlank = false; continue;
+    }
+    if (!row){ w.notes.push(line.replace(/^Warmup:\s*/, "Warm-up: ").trim()); continue; }
+    if (mode === "row" && /^ {2,}\S/.test(raw) && !sawBlank) mode = "result";
+    if (mode === "result"){
+      const res = tcResult(line, parseInt(String(row.reps).split(",")[0], 10) || null);
+      if (res && res.sets) row.results.push(...res.sets);
+      if (res && res.text) row.text.push(res.text);
+      continue;
+    }
+    row.notes.push(line.trim()); // coaching note or the parts of a complex
+  }
+  finish();
+  // A missing "x": "7512" next to 75x12, or "268" (= 26x8) among 25-30 lb sets on a set of 8.
+  for (const w of workouts) for (const r of w.rows){
+    const planned = parseInt(String(r.reps).split(",")[0], 10) || null;
+    const others = r.results.filter(x => x.weight != null && x.reps != null && x.weight < 300).map(x => x.weight).sort((a, b) => a - b);
+    const med = others.length ? others[others.length >> 1] : null;
+    r.results = r.results.map(x => {
+      if (x.weight == null || !Number.isInteger(x.weight) || x.weight < 100 || (med != null && x.weight < med * 2 && x.weight < 300)) return x;
+      const sx = String(x.weight);
+      for (const k of [1, 2]){
+        const W = +sx.slice(0, -k), R = +sx.slice(-k);
+        if (!W || !R || R > 30) continue;
+        const fitsW = med != null ? W >= med * 0.5 && W <= med * 1.5 : true, fitsR = planned ? Math.abs(R - planned) <= 4 : R <= 15;
+        if (fitsW && fitsR && (med != null || others.some(o => sx.startsWith(String(o))))) return { weight: W, reps: R };
+      }
+      return x;
+    });
+  }
+  workouts.sort((a, b) => a.date.localeCompare(b.date));
+  return { client: head, workouts };
+}
+/* Turn a parsed log into a Trainer Tally program (weeks Monday-Sunday from the first workout) plus set logs.
+ * libByName: {lowercase name: exercise} so rows link to the trainer's existing exercises (and their videos). */
+export function truecoachToProgram(parsed, { clientId, name, libByName = {} }){
+  const ws = parsed.workouts || []; if (!ws.length) return null;
+  const parse = s => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
+  const first = parse(ws[0].date), start = new Date(first.getFullYear(), first.getMonth(), first.getDate() - ((first.getDay() + 6) % 7));
+  const nWeeks = Math.floor((parse(ws[ws.length - 1].date) - start) / (7 * DAYMS)) + 1;
+  const label = d => d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " '" + String(d.getFullYear()).slice(2);
+  const weeks = Array.from({ length: nWeeks }, (_, i) => ({ id: pid("w"), label: label(new Date(start.getTime() + i * 7 * DAYMS + 3600000)), sessions: [] }));
+  const program = { name: name || "TrueCoach history", clientId, status: "archived", startDate: ymdOf(start), imported: "truecoach", weeks };
+  const logs = [], key = n => n.toLowerCase().replace(/\s+/g, " ").trim(), count = {};
+  for (const w of ws) for (const r of w.rows){ const k = key(r.name); (count[k] = count[k] || {})[r.name] = (count[k][r.name] || 0) + 1; }
+  const canon = Object.fromEntries(Object.entries(count).map(([k, v]) => [k, Object.entries(v).sort((a, b) => b[1] - a[1])[0][0]]));
+  for (const w of ws){
+    const dt = parse(w.date), wi = Math.round((dt - start) / DAYMS) >> 0, week = weeks[Math.floor(wi / 7)];
+    const s = { id: pid("s"), name: w.title || "Workout", day: dt.getDay(), homework: false, notes: w.notes.join("\n"), rows: [] };
+    for (const r of w.rows){
+      const nm = canon[key(r.name)] || r.name, ex = libByName[nm.toLowerCase()];
+      const note = [...r.notes, ...(r.text.length ? ["Logged: " + r.text.join(", ")] : [])].join(" · ");
+      const row = { id: pid("r"), exId: ex ? ex.id : null, name: ex ? ex.name : nm, group: r.group, sets: r.sets, reps: r.reps, weight: "", note };
+      s.rows.push(row);
+      r.results.forEach((x, k) => logs.push({ program_id: null, session_id: s.id, row_id: row.id, set_no: k + 1, client_id: clientId, ex_name: row.name, reps: x.reps ?? null, weight: x.weight ?? null, done: true, logged_on: w.date }));
+    }
+    week.sessions.push(s);
+  }
+  return { program, logs, stats: { workouts: ws.length, from: ws[0].date, to: ws[ws.length - 1].date, sets: logs.length,
+    logged: ws.filter(w => w.rows.some(r => r.results.length || r.text.length)).length, exercises: Object.keys(canon).length, weeks: nWeeks } };
+}
+
+/* ---------- progress between sessions ----------
+ * Top set of a day = heaviest weight, most reps at that weight (bodyweight work: most reps). */
+export function topSet(logs){
+  let best = null;
+  for (const l of logs || []){
+    if (!l.done && l.reps == null && l.weight == null) continue;
+    const w = n(l.weight), r = n(l.reps);
+    if (!best || (w ?? -1) > (best.weight ?? -1) || ((w ?? -1) === (best.weight ?? -1) && (r ?? 0) > (best.reps ?? 0))) best = { weight: w, reps: r };
+  }
+  return best;
+}
+/* This time vs last time for one exercise: {dw, dr, text, dir: "up"|"down"|"same"} or null. */
+export function liftDelta(cur, prev){
+  if (!cur || !prev) return null;
+  const dw = cur.weight != null && prev.weight != null ? Math.round((cur.weight - prev.weight) * 10) / 10 : 0;
+  const dr = cur.reps != null && prev.reps != null ? cur.reps - prev.reps : 0;
+  const part = (v, u) => (v > 0 ? "+" : "−") + Math.abs(v) + u;
+  const bits = []; if (dw) bits.push(part(dw, " lb")); if (dr) bits.push(part(dr, dr === 1 || dr === -1 ? " rep" : " reps"));
+  const dir = dw > 0 || (dw === 0 && dr > 0) ? "up" : dw < 0 || (dw === 0 && dr < 0) ? "down" : "same";
+  return { dw, dr, dir, text: bits.length ? bits.join(" · ") : "same as last time" };
+}
+/* The big three, matched by name. Dumbbell, incline, Romanian, sumo etc. don't count. */
+export const STANDARD_LIFTS = [
+  { key: "bench", label: "Bench press", test: n => /bench press/.test(n) && !/\b(db|dumbbell|incline|decline|kb|close|floor|single|sa)\b/.test(n) },
+  { key: "squat", label: "Back squat", test: n => /back squat/.test(n) && !/\b(db|dumbbell|kb|goblet|box|pause|single|split)\b/.test(n) },
+  { key: "dead", label: "Deadlift", test: n => /dead\s?lift/.test(n) && !/\b(romanian|rdl|sumo|kb|kettlebell|db|dumbbell|single|sl|trap|hex|stiff|deficit|defecit|depth|glute)\b/.test(n) }
+];
+/* Per standard lift: [{date, weight, reps}] heaviest set per day, across every name that matches. */
+export function standardLiftHistory(logs){
+  const out = {};
+  for (const L of STANDARD_LIFTS){
+    const days = {};
+    for (const l of logs || []){
+      const w = n(l.weight); if (w == null || !l.ex_name || !L.test(l.ex_name.toLowerCase())) continue;
+      const d = String(l.logged_on).slice(0, 10);
+      if (!days[d] || w > days[d].weight || (w === days[d].weight && (n(l.reps) || 0) > (days[d].reps || 0))) days[d] = { date: d, weight: w, reps: n(l.reps), name: l.ex_name };
+    }
+    out[L.key] = Object.values(days).sort((a, b) => a.date.localeCompare(b.date));
+  }
+  return out;
 }
