@@ -263,11 +263,11 @@ function renderBoard(c, p, wi, week){
   for (const a of apptsOf(c)){ const k = ymd(a); (booked[k] = booked[k] || []).push(a); }
   const tm = dt => dt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).replace(":00", "").replace(/\s?(AM|PM)/i, (_, x) => x[0].toLowerCase());
   const all = (week.sessions || []).map((s, si) => ({ s, si }));
-  const cols = all.filter(x => !hasDay(x.s)).map(x => `<div class="pg-col"><div class="pg-colh"><span class="pg-colday">No day yet</span></div>${renderSession(p, wi, x.si, x.s, dates)}</div>`);
+  const cols = all.filter(x => !hasDay(x.s)).map(x => `<div class="pg-col" data-day=""><div class="pg-colh"><span class="pg-colday">No day yet</span></div>${renderSession(p, wi, x.si, x.s, dates)}</div>`);
   for (const d of dates){
     const dow = d.getDay(), k = ymd(d), here = all.filter(x => hasDay(x.s) && +x.s.day === dow), bk = booked[k];
     const head = `<div class="pg-colh ${k === tk ? "today" : ""}"><span class="pg-colday">${DOW[dow]} <b>${d.getDate()}</b></span>${bk ? `<span class="pg-booked" title="${esc(c.name.split(" ")[0])} is booked">📅 ${esc(bk.map(tm).join(", "))}</span>` : ""}${here.length ? `<button class="pg-colplus" data-act="pg-addday" data-d="${dow}" title="Add another workout on ${DOW[dow]}" aria-label="Add another workout on ${DOW[dow]} ${d.getDate()}">+</button>` : ""}</div>`;
-    cols.push(`<div class="pg-col ${here.length ? "" : "empty"} ${bk ? "booked" : ""}">${head}${here.map(x => renderSession(p, wi, x.si, x.s, dates)).join("")}${here.length ? "" : `<button class="pg-col-add" data-act="pg-addday" data-d="${dow}" aria-label="Add a workout on ${DOW[dow]} ${d.getDate()}"><span>+</span>Workout</button>`}</div>`);
+    cols.push(`<div class="pg-col ${here.length ? "" : "empty"} ${bk ? "booked" : ""}" data-day="${dow}">${head}${here.map(x => renderSession(p, wi, x.si, x.s, dates)).join("")}${here.length ? "" : `<button class="pg-col-add" data-act="pg-addday" data-d="${dow}" aria-label="Add a workout on ${DOW[dow]} ${d.getDate()}"><span>+</span>Workout</button>`}</div>`);
   }
   return `<div class="pg-board" role="list">${cols.join("")}</div>`;
 }
@@ -369,7 +369,7 @@ function renderSession(p, wi, si, s, dates){
   const cKey = "delsess" + si;
   const recS = recording(s);
   if (!board && MODE === "record" && !written(s)) return `<section class="card pg-sess pg-sess-empty" id="pg-s-${esc(s.id)}"><div class="pg-row"><b>${esc(s.name)}</b><span class="small muted">Nothing written yet</span><button class="btn sm" data-act="pg-editsess" data-s="${si}" style="margin-left:auto">✎ Write it in Plan</button></div></section>`;
-  return `<section class="card pg-sess ${s.homework ? "hw" : ""} ${recS ? "rec" : ""} ${board ? "pg-mini" : ""}" id="pg-s-${esc(s.id)}">
+  return `<section class="card pg-sess ${s.homework ? "hw" : ""} ${recS ? "rec" : ""} ${board ? "pg-mini" : ""}" id="pg-s-${esc(s.id)}" data-si="${si}">
     ${board ? boardHead(p, si, s, dates, cKey, rep) : `<div class="card-h"><div class="pg-row" style="flex:1"><input class="pg-in pg-sname" data-pg="sess" data-s="${si}" data-f="name" value="${esc(s.name)}" aria-label="Session name">
       <label class="check small pg-planonly"><input type="checkbox" data-pg="sess" data-s="${si}" data-f="homework" ${s.homework ? "checked" : ""}> Homework <span class="muted">(client can log)</span></label></div>
       <div class="pg-acts">${recS ? `<button class="btn sm" data-act="pg-editsess" data-s="${si}" title="Switch to Plan to rewrite this workout">✎ Edit workout</button>` : ""}${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress" data-s="${si}">✦ Progress</button>` : ""}${!p.shared && C.A.programs.emailWorkout ? `<button class="btn sm" data-act="pg-mail" data-s="${si}" title="Email this workout to the client now">✉ Email</button>` : ""}<button class="btn sm pg-planonly" data-act="pg-copysess" data-s="${si}">Copy</button>
@@ -397,7 +397,7 @@ function boardHead(p, si, s, dates, cKey, rep){
       <button class="btn sm" data-act="pg-copysess" data-s="${si}">Copy</button>${rep ? "" : `<button class="btn sm" data-act="pg-repeat" data-s="${si}">Repeat…</button>`}
       <label class="check small"><input type="checkbox" data-pg="sess" data-s="${si}" data-f="homework" ${s.homework ? "checked" : ""}> Homework</label>
       ${PG.confirm === cKey ? `<button class="btn sm danger" data-act="pg-delsess" data-s="${si}">Delete workout?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="${cKey}">Delete</button>`}</div>` : "";
-  return `<div class="pg-mhead"><input class="pg-in pg-sname" data-pg="sess" data-s="${si}" data-f="name" value="${esc(s.name)}" aria-label="Workout name">${day}
+  return `<div class="pg-mhead"><button class="pg-sgrip" data-drag="sess" data-s="${si}" title="Drag to another day (or focus and use ← →)" aria-label="Move ${esc(s.name)} to another day. Drag, or use the left and right arrow keys">⠿</button><input class="pg-in pg-sname" data-pg="sess" data-s="${si}" data-f="name" value="${esc(s.name)}" aria-label="Workout name">${day}
     <button class="btn sm ghost pg-dots" data-act="pg-more" data-id="${esc(s.id)}" aria-expanded="${open}" aria-label="More for ${esc(s.name)}">⋯</button></div>${s.homework ? `<span class="tag pg-hwtag">homework</span>` : ""}${menu}`;
 }
 
@@ -1120,6 +1120,14 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-cal-s .pg-cal-ex .muted{padding:0;font-size:12px}
 .pg-cal-d{min-height:110px;padding:7px}
 /* ---------- week board ---------- */
+.pg-sgrip{touch-action:none;cursor:grab;border:0;background:none;color:var(--muted);font-size:16px;line-height:1;padding:6px 2px;border-radius:6px;flex:0 0 auto;user-select:none;-webkit-user-select:none}
+.pg-sgrip:hover,.pg-sgrip:focus-visible{color:var(--ink);background:var(--surface2)}
+.pg-sdragging{opacity:.4}
+.pg-board.pg-bdrag{scroll-snap-type:none}
+.pg-col.pg-drop .pg-col-add,.pg-col.pg-drop>.pg-sess{border-color:var(--accent)!important;box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 45%,transparent)}
+.pg-col.pg-drop .pg-colh{color:var(--accent)}
+.pg-sess.pg-swap{outline:2px dashed var(--accent);outline-offset:2px}
+.pg-dragtag{position:fixed;left:0;top:0;z-index:1000;pointer-events:none;background:var(--ink);color:var(--bg);font-size:13px;font-weight:600;padding:6px 10px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.25);white-space:nowrap}
 .pg-board{flex:0 0 auto;display:flex;gap:10px;overflow-x:auto;align-items:flex-start;padding:2px 2px 10px;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch}
 .pg-col{flex:0 0 330px;display:flex;flex-direction:column;gap:8px;min-width:0;scroll-snap-align:start}
 .pg-col.empty{flex:1 0 86px}
@@ -1245,8 +1253,54 @@ function applyMove(si, kind, from, to){
   s.rows = kind === "row" ? moveRow(s.rows, from, to) : moveBlock(s.rows, from, to);
   saveSoon(p); redraw(); return true;
 }
+/* ---------- drag a workout to another day (week board) ---------- */
+let SDRAG = null;
+/* Put session si on a day ("" = no day). Dropped on another workout: they swap days. */
+function moveSessionDay(si, day, otherSi){
+  mutate(p => { const ss = p.weeks[PG.week].sessions, s = ss[si], old = hasDay(s) ? +s.day : null;
+    if (day === "" || day == null) delete s.day; else s.day = +day;
+    const o = otherSi != null && otherSi !== si ? ss[otherSi] : null;
+    if (o){ if (old == null) delete o.day; else o.day = old; } });
+}
+function sessDragStart(e, h){
+  e.preventDefault();
+  const card = h.closest(".pg-sess"), board = h.closest(".pg-board"); if (!card || !board) return;
+  const label = document.createElement("div"); label.className = "pg-dragtag"; label.textContent = (card.querySelector(".pg-sname") || {}).value || "Workout";
+  document.body.appendChild(label);
+  SDRAG = { si: +h.getAttribute("data-s"), id: e.pointerId, card, board, label, col: null, onCard: null, x: e.clientX, from: card.closest(".pg-col") };
+  card.classList.add("pg-sdragging"); board.classList.add("pg-bdrag"); document.body.classList.add("pg-is-dragging");
+  try { h.setPointerCapture(e.pointerId); } catch (x){}
+  sessDragMove(e);
+  window.addEventListener("pointermove", sessDragMove); window.addEventListener("pointerup", sessDragEnd); window.addEventListener("pointercancel", sessDragEnd);
+}
+function sessDragMove(e){
+  const D = SDRAG; if (!D || e.pointerId !== D.id) return;
+  D.x = e.clientX; D.label.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 10}px)`;
+  const el = document.elementFromPoint(e.clientX, e.clientY), col = el && el.closest && el.closest(".pg-board .pg-col");
+  const onCard = el && el.closest && el.closest(".pg-board .pg-sess");
+  if (D.col && D.col !== col) D.col.classList.remove("pg-drop");
+  if (D.onCard && D.onCard !== onCard) D.onCard.classList.remove("pg-swap");
+  D.col = col && col !== D.from ? col : null; D.onCard = onCard && onCard !== D.card && D.col ? onCard : null;
+  if (D.col) D.col.classList.add("pg-drop"); if (D.onCard) D.onCard.classList.add("pg-swap");
+  // scroll the board sideways near its edges
+  const r = D.board.getBoundingClientRect(), v = e.clientX < r.left + 60 ? -16 : e.clientX > r.right - 60 ? 16 : 0;
+  clearInterval(D.timer); if (v) D.timer = setInterval(() => { D.board.scrollLeft += v; }, 30);
+}
+function sessDragEnd(e){
+  const D = SDRAG; if (!D || e.pointerId !== D.id) return; SDRAG = null;
+  clearInterval(D.timer);
+  window.removeEventListener("pointermove", sessDragMove); window.removeEventListener("pointerup", sessDragEnd); window.removeEventListener("pointercancel", sessDragEnd);
+  D.label.remove(); document.body.classList.remove("pg-is-dragging"); D.card.classList.remove("pg-sdragging"); D.board.classList.remove("pg-bdrag");
+  if (D.col) D.col.classList.remove("pg-drop"); if (D.onCard) D.onCard.classList.remove("pg-swap");
+  if (e.type === "pointercancel" || !D.col) return;
+  const day = D.col.getAttribute("data-day");
+  moveSessionDay(D.si, day, D.onCard ? +D.onCard.getAttribute("data-si") : null);
+  const name = (D.card.querySelector(".pg-sname") || {}).value || "Workout";
+  C.toast(D.onCard ? "Swapped days" : day === "" ? `${name}: no day` : `${name} → ${DOW[+day]}`);
+}
 function onPointerDown(e){
   const h = e.target.closest && e.target.closest("[data-drag]"); if (!h || (e.button && e.button !== 0) || !P()) return;
+  if (h.getAttribute("data-drag") === "sess") return sessDragStart(e, h);
   e.preventDefault();
   const si = +h.getAttribute("data-s"), ri = +h.getAttribute("data-r"), kind = h.getAttribute("data-drag");
   const s = P().weeks[PG.week].sessions[si];
@@ -1276,6 +1330,15 @@ function onPointerUp(e){
 }
 /* Keyboard: focus a handle and press the up or down arrow. */
 function onDragKey(e){
+  const hs = e.target.closest && e.target.closest('[data-drag="sess"]');
+  if (hs && (e.key === "ArrowLeft" || e.key === "ArrowRight")){ // move a workout one day earlier / later
+    e.preventDefault();
+    const p = P(), si = +hs.getAttribute("data-s"), s = p.weeks[PG.week].sessions[si], dates = weekDates(p, PG.week).map(d => d.getDay());
+    const at = hasDay(s) ? dates.indexOf(+s.day) : (e.key === "ArrowRight" ? -1 : 7), to = at + (e.key === "ArrowRight" ? 1 : -1);
+    moveSessionDay(si, to < 0 || to > 6 ? "" : dates[to]);
+    const n = document.querySelector(`#main [data-drag="sess"][data-s="${si}"]`); if (n) n.focus();
+    return;
+  }
   const h = e.target.closest && e.target.closest("[data-drag]"); if (!h || (e.key !== "ArrowUp" && e.key !== "ArrowDown") || !P()) return;
   e.preventDefault();
   const si = +h.getAttribute("data-s"), ri = +h.getAttribute("data-r"), kind = h.getAttribute("data-drag"), s = P().weeks[PG.week].sessions[si];

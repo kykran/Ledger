@@ -1,8 +1,6 @@
 
-  VITE v5.4.21  ready in 209 ms
+  VITE v5.4.21  ready in 216 ms
 
   ➜  Local:   http://localhost:5179/
   ➜  Network: use --host to expose
-8:48:13 PM [vite] page reload src/programs-core.js
-8:48:13 PM [vite] page reload src/programs.js
-8:49:01 PM [vite] page reload src/programs.js
+9:08:06 PM [vite] page reload src/programs.js
