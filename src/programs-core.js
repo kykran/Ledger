@@ -487,3 +487,45 @@ export function truecoachToProgram(parsed, { clientId, name, libByName = {} }){
   return { program, logs, stats: { workouts: ws.length, from: ws[0].date, to: ws[ws.length - 1].date, sets: logs.length,
     logged: ws.filter(w => w.rows.some(r => r.results.length || r.text.length)).length, exercises: Object.keys(canon).length, weeks: nWeeks } };
 }
+
+/* ---------- progress between sessions ----------
+ * Top set of a day = heaviest weight, most reps at that weight (bodyweight work: most reps). */
+export function topSet(logs){
+  let best = null;
+  for (const l of logs || []){
+    if (!l.done && l.reps == null && l.weight == null) continue;
+    const w = n(l.weight), r = n(l.reps);
+    if (!best || (w ?? -1) > (best.weight ?? -1) || ((w ?? -1) === (best.weight ?? -1) && (r ?? 0) > (best.reps ?? 0))) best = { weight: w, reps: r };
+  }
+  return best;
+}
+/* This time vs last time for one exercise: {dw, dr, text, dir: "up"|"down"|"same"} or null. */
+export function liftDelta(cur, prev){
+  if (!cur || !prev) return null;
+  const dw = cur.weight != null && prev.weight != null ? Math.round((cur.weight - prev.weight) * 10) / 10 : 0;
+  const dr = cur.reps != null && prev.reps != null ? cur.reps - prev.reps : 0;
+  const part = (v, u) => (v > 0 ? "+" : "−") + Math.abs(v) + u;
+  const bits = []; if (dw) bits.push(part(dw, " lb")); if (dr) bits.push(part(dr, dr === 1 || dr === -1 ? " rep" : " reps"));
+  const dir = dw > 0 || (dw === 0 && dr > 0) ? "up" : dw < 0 || (dw === 0 && dr < 0) ? "down" : "same";
+  return { dw, dr, dir, text: bits.length ? bits.join(" · ") : "same as last time" };
+}
+/* The big three, matched by name. Dumbbell, incline, Romanian, sumo etc. don't count. */
+export const STANDARD_LIFTS = [
+  { key: "bench", label: "Bench press", test: n => /bench press/.test(n) && !/\b(db|dumbbell|incline|decline|kb|close|floor|single|sa)\b/.test(n) },
+  { key: "squat", label: "Back squat", test: n => /back squat/.test(n) && !/\b(db|dumbbell|kb|goblet|box|pause|single|split)\b/.test(n) },
+  { key: "dead", label: "Deadlift", test: n => /dead\s?lift/.test(n) && !/\b(romanian|rdl|sumo|kb|kettlebell|db|dumbbell|single|sl|trap|hex|stiff|deficit|defecit|depth|glute)\b/.test(n) }
+];
+/* Per standard lift: [{date, weight, reps}] heaviest set per day, across every name that matches. */
+export function standardLiftHistory(logs){
+  const out = {};
+  for (const L of STANDARD_LIFTS){
+    const days = {};
+    for (const l of logs || []){
+      const w = n(l.weight); if (w == null || !l.ex_name || !L.test(l.ex_name.toLowerCase())) continue;
+      const d = String(l.logged_on).slice(0, 10);
+      if (!days[d] || w > days[d].weight || (w === days[d].weight && (n(l.reps) || 0) > (days[d].reps || 0))) days[d] = { date: d, weight: w, reps: n(l.reps), name: l.ex_name };
+    }
+    out[L.key] = Object.values(days).sort((a, b) => a.date.localeCompare(b.date));
+  }
+  return out;
+}

@@ -3,7 +3,7 @@
  * app.js calls attach(ctx) once and then render()/onClick()/onChange()/onInput() while the Programs tab is open.
  * Data goes through ctx.A.programs (see adapter-hosted.js / programs-demo.js). */
 import { pid, newRow, newSession, newWeek, newProgram, copySession, copyWeek, repeatSession, repeatWeek, setCount,
-  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, sessionForDate, parseTrueCoach, truecoachToProgram } from "./programs-core.js";
+  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, sessionForDate, parseTrueCoach, truecoachToProgram, topSet, liftDelta, STANDARD_LIFTS, standardLiftHistory } from "./programs-core.js";
 import { STARTER_EXERCISES } from "./exercise-seed.js";
 import { createVoice, voiceContext, VOICE_CSS } from "./programs-voice.js";
 
@@ -44,6 +44,9 @@ const libByName = () => Object.fromEntries((PG.lib || []).map(e => [e.name.trim(
 const sharedClients = () => { const out = {}; for (const p of PG.shared){ const id = "sh:" + p.ownerId + ":" + p.clientId; out[id] = out[id] || { id, name: p.clientName || "Client", shared: true, ownerId: p.ownerId, ownerName: p.ownerName, realId: p.clientId }; } return Object.values(out); };
 const client = id => C.S.clients.find(c => c.id === id) || sharedClients().find(c => c.id === id);
 const progsOf = c => c.shared ? PG.shared.filter(p => p.ownerId === c.ownerId && p.clientId === c.realId) : (PG.progs || []).filter(p => p.clientId === c.id);
+/* Plan mode can show several weeks at once: lookups prefer the week you're working in (PG.week). */
+const inWk = sel => document.querySelector(`#main [data-wk="${PG.week}"] ${sel}`) || document.querySelector(`#main ${sel}`);
+function wkFrom(el){ const w = el && el.closest && el.closest("[data-wk]"); if (w) PG.week = +w.getAttribute("data-wk"); }
 /* Re-render without losing your place: the field you were typing in keeps focus and cursor position. */
 const FKEYS = ["data-pg", "data-s", "data-r", "data-f", "data-n"];
 function redraw(){
@@ -51,6 +54,7 @@ function redraw(){
   if (a && a.matches && a.matches("input,textarea,select") && a.closest && a.closest("#main")){
     const attrs = FKEYS.filter(k => a.hasAttribute(k)).map(k => `[${k}="${String(a.getAttribute(k)).replace(/"/g, '\\"')}"]`).join("");
     sel = attrs ? a.tagName.toLowerCase() + attrs : a.id ? "#" + a.id : null;
+    const wk = a.closest("[data-wk]"); if (sel && attrs && wk) sel = `[data-wk="${wk.getAttribute("data-wk")}"] ` + sel;
     try { pos = [a.selectionStart, a.selectionEnd]; } catch (x){}
   }
   C.render();
@@ -247,7 +251,7 @@ function renderProgram(c, progs){
   </section>
   ${PG.layout !== "cal" ? (setTimeout(() => { const ch = document.querySelector('#main .pg-weeks [aria-selected="true"]'), row = ch && ch.parentElement; if (row && row.scrollWidth > row.clientWidth && (ch.offsetLeft < row.scrollLeft || ch.offsetLeft + ch.offsetWidth > row.scrollLeft + row.clientWidth)) row.scrollLeft = ch.offsetLeft - row.offsetLeft - 8; }, 0), "") : ""}
   ${PG.layout !== "cal" && PG.scrollTo ? (() => { const to = PG.scrollTo; PG.scrollTo = null; setTimeout(() => { const el = to === "top" ? document.querySelector("#main .pg-prog") : document.getElementById("pg-s-" + to); if (el) el.scrollIntoView({ block: "start", behavior: "smooth" }); }, 30); return ""; })() : ""}
-  ${PG.layout === "cal" ? renderCalendar(c, p) : week && MODE === "plan" ? renderBoard(c, p, wi, week) : week ? (week.sessions || []).map((s, si) => renderSession(p, wi, si, s)).join("") : `<div class="card"><div class="empty">No weeks yet. <button class="btn sm primary" data-act="pg-addweek">Add a week</button></div></div>`}
+  ${PG.layout === "cal" ? renderCalendar(c, p) : week && MODE === "plan" ? renderWeeks(c, p, wi) : week ? (week.sessions || []).map((s, si) => renderSession(p, wi, si, s)).join("") : `<div class="card"><div class="empty">No weeks yet. <button class="btn sm primary" data-act="pg-addweek">Add a week</button></div></div>`}
   ${week && PG.layout !== "cal" ? `<div class="pg-acts" style="justify-content:flex-start"><button class="btn" data-act="pg-addsess">+ ${MODE === "plan" ? "Workout without a day" : "Workout"}</button>${clip && clip.type === "session" ? `<button class="btn" data-act="pg-pastesess">Paste “${esc(clip.data.name)}”</button>` : ""}</div>` : ""}
   <datalist id="pg-exlist">${(PG.lib || []).slice().sort((a, b) => a.name.localeCompare(b.name)).map(e => `<option value="${esc(e.name)}"></option>`).join("")}</datalist>`;
 }
@@ -258,6 +262,23 @@ const hasDay = s => s.day !== null && s.day !== undefined && s.day !== "";
 function weekDates(p, wi){
   const [y, m, d] = String(p.startDate || today()).split("-").map(Number);
   return Array.from({ length: 7 }, (_, k) => new Date(y, m - 1, d + wi * 7 + k));
+}
+/* Plan shows a run of weeks stacked, so you can scroll up and down to compare. The selected week is in the middle. */
+function renderWeeks(c, p, sel){
+  const W = p.weeks || [], n = W.length;
+  let R = PG.span && PG.span.p === p.id ? PG.span : null;
+  if (!R){ R = PG.span = { p: p.id, from: Math.max(0, sel - (n <= 8 ? n : 2)), to: Math.min(n - 1, sel + (n <= 8 ? n : 2)) }; if (sel > R.from && PG.scrollWk == null) PG.scrollWk = sel; }
+  if (sel < R.from) R.from = sel; if (sel > R.to) R.to = sel;
+  const fmt = d => d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const blocks = [];
+  for (let i = R.from; i <= R.to; i++){
+    const w = W[i], ds = weekDates(p, i);
+    blocks.push(`<section class="pg-wkblock ${i === sel ? "sel" : ""}" data-wk="${i}" id="pg-wk-${i}"><div class="pg-wkh"><b>${esc(w.label || "Week " + (i + 1))}</b><span class="small muted">${fmt(ds[0])} – ${fmt(ds[6])}</span></div>${renderBoard(c, p, i, w)}</section>`);
+  }
+  if (PG.scrollWk != null){ const k = PG.scrollWk; PG.scrollWk = null; setTimeout(() => { const el = document.getElementById("pg-wk-" + k); if (el) el.scrollIntoView({ block: "start", behavior: "smooth" }); }, 30); }
+  return `${R.from > 0 ? `<button class="btn sm ghost pg-more-wk" data-act="pg-span" data-d="-4">↑ Show ${Math.min(4, R.from)} earlier week${Math.min(4, R.from) === 1 ? "" : "s"}</button>` : ""}
+    ${blocks.join("")}
+    ${R.to < n - 1 ? `<button class="btn sm ghost pg-more-wk" data-act="pg-span" data-d="4">↓ Show ${Math.min(4, n - 1 - R.to)} later week${Math.min(4, n - 1 - R.to) === 1 ? "" : "s"}</button>` : ""}`;
 }
 function renderBoard(c, p, wi, week){
   const dates = weekDates(p, wi), tk = today(), booked = {};
@@ -358,6 +379,7 @@ function renderSession(p, wi, si, s, dates){
     const f = (k, ph, w) => `<input class="pg-in" data-pg="row" data-s="${si}" data-r="${ri}" data-f="${k}" value="${esc(r[k])}" placeholder="${ph}" ${w ? `style="width:${w}"` : ""} aria-label="${ph}">`;
     const recOn = recording(s);
     const done = setsDone(s, r), planned = setCount(r);
+    const dl = !recOn && done.n && dates ? deltaFor(s, r) : null;
     const sum = !recOn && done.n ? `<span class="pg-done" title="Sets recorded">✓ ${done.n}/${Math.max(planned, done.total)}${done.top != null ? ` · ${done.top}` : ""}</span>` : "";
     const label = esc(r.name || "exercise");
     return `<tr class="pg-g ${grpClass(r.group)}" data-r="${ri}"><td class="pg-gripcell"><button class="pg-grip" data-drag="row" data-s="${si}" data-r="${ri}" title="Drag to move this exercise" aria-label="Move ${label}. Drag, or use arrow keys">⠿</button></td>
@@ -365,7 +387,7 @@ function renderSession(p, wi, si, s, dates){
         return `<button class="pg-link ${on ? "on" : ""}" data-act="pg-link" data-s="${si}" data-r="${ri}" aria-pressed="${on}" title="${on ? "Linked as a superset with the exercise above. Click to unlink" : "Superset with the exercise above"}" aria-label="${on ? "Unlink " + label + " from the superset" : "Superset " + label + " with the exercise above"}">${LINK_SVG}</button>`; })() : `<span class="pg-link-sp"></span>`}</div></td>
       <td><div class="pg-exname"><input class="pg-in" list="pg-exlist" data-pg="row" data-s="${si}" data-r="${ri}" data-f="name" value="${esc(r.name)}" placeholder="Exercise" aria-label="Exercise">${hasVid ? `<button class="btn sm ghost" data-act="pg-vid" data-id="${esc(ex.id)}" title="Watch video" aria-label="Watch video">▶</button>` : ""}</div></td>
       <td><input class="pg-in pg-sr" data-pg="row" data-s="${si}" data-r="${ri}" data-f="sr" value="${esc(fmtSetsReps(r))}" placeholder="3x8" style="width:112px" aria-label="Sets x reps, e.g. 3x8 or 3x8,8,6" title="Type 3x8, 3x8,8,6, 4x8-10, 3x30s or 3x8 each"></td><td>${f("weight", "Weight", "72px")}</td><td>${f("note", "Note")}</td>
-      <td>${sum}<button class="btn sm ghost" data-act="pg-delrow" data-s="${si}" data-r="${ri}" aria-label="Remove row">✕</button></td></tr>${recOn && r.name ? recordRows(p, s, si, r, ri) : ""}`;
+      <td>${sum}<button class="btn sm ghost" data-act="pg-delrow" data-s="${si}" data-r="${ri}" aria-label="Remove row">✕</button></td>${dates && done.n ? (() => { const t = topSet((PG.logs[PG.clientId] || []).filter(l => l.session_id === s.id && l.row_id === r.id && l.done)); return `<td class="pg-logged"><span class="pg-loggedtxt">✓ ${done.n} set${done.n === 1 ? "" : "s"}${t ? ` · top ${t.weight != null ? t.weight + "×" : ""}${t.reps ?? "?"}${t.weight == null ? " bw" : ""}` : ""}</span>${deltaBadge(dl)}</td>`; })() : ""}</tr>${recOn && r.name ? recordRows(p, s, si, r, ri) : ""}`;
   }).join("");
   const cKey = "delsess" + si;
   const recS = recording(s);
@@ -381,7 +403,7 @@ function renderSession(p, wi, si, s, dates){
     ${recS ? recordBar(s, si) : ""}
     ${(s.rows || []).length ? "" : `<div class="pg-emptyhint small muted">No exercises yet. Start typing below.</div>`}
     <div class="tablewrap" ${(s.rows || []).length ? "" : "hidden"}><table class="pg-rows"><thead><tr><th></th><th>Block</th><th>Exercise</th><th title="Type 3x8, 3x8,8,6, 4x8-10, 3x30s or 3x8 each">Sets × Reps</th><th>Weight</th><th>Note</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
-    <div class="pg-qa"><div class="pg-qa-box"><input class="pg-in pg-qa-in" data-pg="qa" data-s="${si}" placeholder="${board ? "+ Add exercise" : "+ Add exercise: type to search your library"}" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pg-qa-list-${si}" aria-label="Add exercise"><div class="pg-qa-list" id="pg-qa-list-${si}" role="listbox" hidden></div></div>
+    <div class="pg-qa"><div class="pg-qa-box"><input class="pg-in pg-qa-in" data-pg="qa" data-s="${si}" placeholder="${board ? "+ Add exercise" : "+ Add exercise: type to search your library"}" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pg-qa-list-${wi}-${si}" aria-label="Add exercise"><div class="pg-qa-list" id="pg-qa-list-${wi}-${si}" role="listbox" hidden></div></div>
       <button class="btn sm pg-ss ${PG.ss[s.id] ? "on" : ""}" data-act="pg-ss" data-s="${si}" aria-pressed="${!!PG.ss[s.id]}" title="When on, each exercise you add joins the last block as a superset" aria-label="Superset mode">${LINK_SVG}${board ? "" : " Superset"}</button></div>
     <div class="small muted pg-qa-hint">Enter adds it as its own block. Shift+Enter, or turn on Superset, to link it with the block above. Click the chain on any row to link or unlink.</div>
     <div class="pg-row"><input class="pg-in" data-pg="sess" data-s="${si}" data-f="notes" value="${esc(s.notes || "")}" placeholder="${board ? "Note for the client" : "Session note for the client (optional)"}" style="flex:1"></div>
@@ -412,16 +434,16 @@ function qaMatches(q){
     .filter(Boolean).sort((a, b) => a.s - b.s || a.e.name.localeCompare(b.e.name)).slice(0, 8).map(x => x.e);
 }
 function qaRender(si){
-  const box = document.getElementById("pg-qa-list-" + si), inp = document.querySelector(`#main input[data-pg="qa"][data-s="${si}"]`); if (!box || !inp) return;
+  const box = document.getElementById("pg-qa-list-" + PG.week + "-" + si), inp = inWk(`input[data-pg="qa"][data-s="${si}"]`); if (!box || !inp) return;
   const q = inp.value.trim(), m = qaMatches(q), exact = m.some(e => e.name.toLowerCase() === q.toLowerCase());
   const items = [...m.map(e => ({ e })), ...(q && !exact ? [{ nu: q }] : [])];
   const hi = PG.qa && PG.qa.si === si ? Math.min(PG.qa.hi, items.length - 1) : 0;
   PG.qa = { si, items, hi: Math.max(0, hi) };
   box.hidden = !items.length; inp.setAttribute("aria-expanded", String(!!items.length));
-  box.innerHTML = items.map((it, i) => `<div class="pg-qa-it ${i === PG.qa.hi ? "on" : ""}" role="option" id="pg-qa-${si}-${i}" aria-selected="${i === PG.qa.hi}" data-act="pg-qa-pick" data-s="${si}" data-i="${i}">${it.e
+  box.innerHTML = items.map((it, i) => `<div class="pg-qa-it ${i === PG.qa.hi ? "on" : ""}" role="option" id="pg-qa-${PG.week}-${si}-${i}" aria-selected="${i === PG.qa.hi}" data-act="pg-qa-pick" data-s="${si}" data-i="${i}">${it.e
     ? `<b>${esc(it.e.name)}</b><span class="small muted">${esc([it.e.muscle, it.e.equipment, it.e.sets && it.e.reps ? it.e.sets + " × " + it.e.reps : ""].filter(Boolean).join(" · "))}</span>`
     : `<span>Add “<b>${esc(it.nu)}</b>” as a new exercise</span>`}</div>`).join("");
-  if (items.length) inp.setAttribute("aria-activedescendant", `pg-qa-${si}-${PG.qa.hi}`);
+  if (items.length) inp.setAttribute("aria-activedescendant", `pg-qa-${PG.week}-${si}-${PG.qa.hi}`);
 }
 function qaAdd(si, it, superset){
   const p = P(); if (!p || !it) return;
@@ -432,22 +454,23 @@ function qaAdd(si, it, superset){
   addToBlocks(s.rows, row, superset);
   ensureInLibrary([row]);
   saveSoon(p); PG.qa = null;
-  const q = document.querySelector(`#main input[data-pg="qa"][data-s="${si}"]`); if (q) q.value = "";
+  const q = inWk(`input[data-pg="qa"][data-s="${si}"]`); if (q) q.value = "";
   redraw();
   const ri = s.rows.findIndex(x => x.id === row.id);
-  const next = document.querySelector(`#main input[data-pg="${recording(s) ? "logline" : "row"}"][data-s="${si}"][data-r="${ri}"]${recording(s) ? "" : '[data-f="sr"]'}`);
+  const next = inWk(`input[data-pg="${recording(s) ? "logline" : "row"}"][data-s="${si}"][data-r="${ri}"]${recording(s) ? "" : '[data-f="sr"]'}`);
   if (next){ next.focus(); try { next.select(); } catch (x){} }
-  else { const inp = document.querySelector(`#main input[data-pg="qa"][data-s="${si}"]`); if (inp) inp.focus(); }
+  else { const inp = inWk(`input[data-pg="qa"][data-s="${si}"]`); if (inp) inp.focus(); }
 }
 function onBuilderKey(e){
   const t = e.target, k = t.getAttribute && t.getAttribute("data-pg"); if (!k) return;
+  wkFrom(t);
   if (k === "qa"){
     const si = +t.getAttribute("data-s"), sess = P() && P().weeks[PG.week].sessions[si];
     if ((e.key === "ArrowDown" || e.key === "ArrowUp") && PG.qa && PG.qa.si === si && PG.qa.items.length){
       e.preventDefault(); const Q = PG.qa; Q.hi = (Q.hi + (e.key === "ArrowDown" ? 1 : -1) + Q.items.length) % Q.items.length; qaRender(si); return; }
     if (e.key === "Enter"){ e.preventDefault(); if (!t.value.trim()) return; if (!PG.qa || PG.qa.si !== si) qaRender(si);
       qaAdd(si, PG.qa.items[PG.qa.hi], e.shiftKey || !!(sess && PG.ss[sess.id])); return; }
-    if (e.key === "Escape"){ const b = document.getElementById("pg-qa-list-" + si); if (b) b.hidden = true; return; }
+    if (e.key === "Escape"){ const b = document.getElementById("pg-qa-list-" + PG.week + "-" + si); if (b) b.hidden = true; return; }
     return;
   }
   if (k === "logline" && e.key === "Enter"){
@@ -464,14 +487,14 @@ function onBuilderKey(e){
     const ins = [...t.closest(".pg-edit").querySelectorAll('input[data-pg="row"]')], i = ins.indexOf(t);
     if (i < ins.length - 1){ ins[i + 1].focus(); try { ins[i + 1].select(); } catch (x){} return; }
     const si = t.getAttribute("data-s"), ri = t.getAttribute("data-r"); t.blur(); PG.editRow = null;
-    setTimeout(() => { redraw(); const l = document.querySelector(`#main input[data-pg="logline"][data-s="${si}"][data-r="${ri}"]`); if (l) l.focus(); }, 0);
+    setTimeout(() => { redraw(); const l = inWk(`input[data-pg="logline"][data-s="${si}"][data-r="${ri}"]`); if (l) l.focus(); }, 0);
     return;
   }
   if (k === "row" && e.key === "Enter" && t.getAttribute("data-f") !== "name"){
     e.preventDefault();
     const ins = [...t.closest("tr").querySelectorAll('input[data-pg="row"]')], i = ins.indexOf(t);
     if (i < ins.length - 1){ ins[i + 1].focus(); try { ins[i + 1].select(); } catch (x){} }
-    else { const q = document.querySelector(`#main input[data-pg="qa"][data-s="${t.getAttribute("data-s")}"]`); if (q) q.focus(); }
+    else { const q = inWk(`input[data-pg="qa"][data-s="${t.getAttribute("data-s")}"]`); if (q) q.focus(); }
   }
 }
 
@@ -483,6 +506,17 @@ function setsDone(s, r){
   for (const l of PG.logs[PG.clientId] || []) if (l.session_id === s.id && l.row_id === r.id){ total = Math.max(total, l.set_no); if (l.done){ n++; if (l.weight != null && (top == null || +l.weight > top)) top = +l.weight; } }
   return { n, total, top };
 }
+/* This session's top set for an exercise vs the most recent earlier day it was done: "+15 lb · +2 reps". */
+function deltaFor(s, r){
+  const all = PG.logs[PG.clientId] || [], key = String(r.name || "").trim().toLowerCase(); if (!key) return null;
+  const mine = all.filter(l => l.session_id === s.id && l.row_id === r.id && (l.done || l.reps != null));
+  if (!mine.length) return null;
+  const day = String(mine[0].logged_on).slice(0, 10), by = {};
+  for (const l of all){ if (l.session_id === s.id || String(l.ex_name || "").trim().toLowerCase() !== key) continue; const d = String(l.logged_on).slice(0, 10); if (d < day) (by[d] = by[d] || []).push(l); }
+  const prevDay = Object.keys(by).sort().pop(); if (!prevDay) return null;
+  return liftDelta(topSet(mine), topSet(by[prevDay]));
+}
+const deltaBadge = d => d ? `<span class="pg-delta ${d.dir}" title="Top set vs last time">${d.dir === "up" ? "▲" : d.dir === "down" ? "▼" : "="} ${esc(d.text)}</span>` : "";
 /* Most recent earlier day this client did an exercise with the same name: "8×70, 8×70, 6×75". */
 function lastTime(name, excludeSid){
   const key = String(name || "").trim().toLowerCase(); if (!key) return "";
@@ -538,7 +572,7 @@ function recordRows(p, s, si, r, ri){
       <div class="pg-edit-acts"><button class="btn sm ghost" data-act="pg-delrow" data-s="${si}" data-r="${ri}">Remove</button><button class="btn sm primary" data-act="pg-edrow-done">Done</button></div></div>` : "";
   return `<tr class="pg-recrow ${grpClass(r.group)}"><td colspan="2"></td><td colspan="6">${head}${editor}<div class="pg-logline">
       <input class="pg-in pg-login ${have.length ? "on" : ""}" data-pg="logline" data-s="${si}" data-r="${ri}" value="${esc(fmtSetLog(have))}" placeholder="${esc(typed || "135x8 135x8 145x6")}" aria-label="${esc(r.name)} sets done, weight x reps, e.g. 215x5 215x5 225x4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next">
-      ${have.length ? `<span class="pg-logok" aria-label="${have.length} sets logged">✓ ${have.length}</span>` : plan ? `<button class="btn sm" data-act="pg-asplanned" data-s="${si}" data-r="${ri}" title="Log every set as written: ${esc(plan)}">✓ As planned</button>` : ""}
+      ${have.length ? `<span class="pg-logok" aria-label="${have.length} sets logged">✓ ${have.length}</span>${deltaBadge(deltaFor(s, r))}` : plan ? `<button class="btn sm" data-act="pg-asplanned" data-s="${si}" data-r="${ri}" title="Log every set as written: ${esc(plan)}">✓ As planned</button>` : ""}
     </div><div class="small muted pg-logprev" id="pg-lp-${esc(r.id)}">${last ? "Last time " + esc(last) : ""}</div></td></tr>`;
 }
 /* Save a typed line: sets 1..n done with what was typed; anything logged past n is cleared. */
@@ -585,7 +619,16 @@ function renderProgress(c){
   for (const l of logs){ const k = String(l.logged_on).slice(0, 10) + "|" + l.session_id; const e = byDay[k] || (byDay[k] = { day: String(l.logged_on).slice(0, 10), session: l.session_id, sets: 0, done: 0, client: false, ex: new Set() }); e.sets++; if (l.done) e.done++; if (l.source === "client") e.client = true; e.ex.add(l.ex_name); }
   const sessName = sid => { for (const p of PG.progs || []) for (const w of p.weeks || []) for (const s of w.sessions || []) if (s.id === sid) return (w.label ? w.label + " · " : "") + s.name; return "Session"; };
   const hist = Object.values(byDay).sort((a, b) => b.day.localeCompare(a.day)).slice(0, 15);
-  return `<div class="grid2">
+  const SL = standardLiftHistory(logs);
+  const fmtTop = x => x ? (x.weight != null ? `${x.weight}` : "bw") + (x.reps != null ? ` × ${x.reps}` : "") : "–";
+  const liftCards = STANDARD_LIFTS.map(L => { const h = SL[L.key], last = h[h.length - 1], prevS = h[h.length - 2];
+    const best = h.reduce((b, x) => !b || x.weight > b.weight || (x.weight === b.weight && (x.reps || 0) >= (b.reps || 0)) ? x : b, null), d = liftDelta(last, prevS);
+    return `<section class="card pg-liftcard"><div class="card-h"><h2>${L.label}</h2>${last ? `<span class="small muted">${fmtDay(last.date)}</span>` : ""}</div>
+      ${last ? `<div class="pg-liftnum"><b>${fmtTop(last)}</b>${d ? `<span class="pg-delta ${d.dir}">${esc(d.text)}</span>` : ""}</div>
+        <div class="small muted">Best ${fmtTop(best)}${best && best.date !== last.date ? " · " + fmtDay(best.date) : ""} · ${h.length} session${h.length === 1 ? "" : "s"}</div>
+        ${h.length > 1 ? lineChart(h.map(x => ({ date: x.date, value: x.weight, label: x.reps ? x.reps + " reps" : "" })), { height: 110 }) : ""}`
+      : `<div class="empty small">No ${L.label.toLowerCase()} logged yet.</div>`}</section>`; }).join("");
+  return `<div class="pg-lifts">${liftCards}</div><div class="grid2">
     <section class="card"><div class="card-h"><h2>Bodyweight</h2><span class="small muted">${wPts.length ? `latest ${wPts[wPts.length - 1].value}` : ""}</span></div>${lineChart(wPts, { unit: "" })}</section>
     <section class="card"><div class="card-h"><h2>Body fat (4-site)</h2><span class="small muted">${bPts.length ? `latest ${bPts[bPts.length - 1].value}%` : ""}</span></div>${lineChart(bPts, { unit: "%" })}
       ${!sex || !by ? `<p class="small muted">Add ${esc(c.name.split(" ")[0])}'s sex and birth year below so body fat can be calculated.</p>` : ""}</section>
@@ -817,6 +860,7 @@ function fillFromLibrary(r){
 }
 
 async function onClick(el, e){
+  wkFrom(el);
   const act = el.getAttribute("data-act"), si = +el.getAttribute("data-s"), ri = +el.getAttribute("data-r");
   if (act !== "pg-confirm" && !["pg-delweek", "pg-delprog", "pg-delsess", "pg-exdel"].includes(act)) PG.confirm = null;
   if (!["pg-more", "pg-confirm", "pg-repeat"].includes(act)) PG.more = null;
@@ -844,13 +888,13 @@ async function onClick(el, e){
     case "pg-archive": mutate(p => p.status = p.status === "archived" ? "active" : "archived"); break;
     case "pg-confirm": PG.confirm = el.getAttribute("data-k"); PG.edEx ? exSheet() : redraw(); break;
     case "pg-delprog": { const id = PG.progId; PG.progs = PG.progs.filter(x => x.id !== id); PG.progId = null; clearTimeout(timers[id]); redraw(); C.A.programs.deleteProgram(id).then(() => C.toast("Program deleted")).catch(() => C.toast("Couldn't delete")); break; }
-    case "pg-week": PG.week = +el.getAttribute("data-i"); PG.repeat = null; redraw(); break;
-    case "pg-addweek": mutate(p => { p.weeks.push(newWeek("Week " + (p.weeks.length + 1))); PG.week = p.weeks.length - 1; }); break;
+    case "pg-week": PG.week = +el.getAttribute("data-i"); PG.repeat = null; PG.scrollWk = PG.week; redraw(); break;
+    case "pg-addweek": mutate(p => { p.weeks.push(newWeek("Week " + (p.weeks.length + 1))); PG.week = p.weeks.length - 1; PG.scrollWk = PG.week; }); break;
     case "pg-delweek": mutate(p => { p.weeks.splice(wi, 1); PG.week = Math.max(0, wi - 1); }); break;
     case "pg-copyweek": PG.clip = { type: "week", data: JSON.parse(JSON.stringify(p.weeks[wi])) }; C.toast("Week copied. Open any week or client and paste."); redraw(); break;
     case "pg-pasteweek": if (PG.clip && PG.clip.type === "week") mutate(p => { p.weeks[wi] = copyWeek(PG.clip.data, p.weeks[wi].label); }); break;
     case "pg-addsess": { let n = 0; mutate(p => { n = p.weeks[wi].sessions.length; p.weeks[wi].sessions.push(newSession("Day " + String.fromCharCode(65 + Math.min(n, 25)))); });
-      const q = document.querySelector(`#main input[data-pg="qa"][data-s="${n}"]`); if (q){ q.focus(); q.scrollIntoView({ block: "center" }); } break; }
+      const q = inWk(`input[data-pg="qa"][data-s="${n}"]`); if (q){ q.focus(); q.scrollIntoView({ block: "center" }); } break; }
     case "pg-copysess": PG.clip = { type: "session", data: JSON.parse(JSON.stringify(p.weeks[wi].sessions[si])) }; C.toast("Session copied. Paste it into any week."); redraw(); break;
     case "pg-pastesess": if (PG.clip && PG.clip.type === "session") mutate(p => p.weeks[wi].sessions.push(copySession(PG.clip.data))); break;
     case "pg-delsess": mutate(p => p.weeks[wi].sessions.splice(si, 1)); break;
@@ -861,22 +905,23 @@ async function onClick(el, e){
       const n = Math.max(1, Math.min(52, parseInt(valIn("pg-rep-n"), 10) || 1)), R = PG.repeat; PG.repeat = null;
       const next = R.week ? repeatWeek(p, wi, n) : repeatSession(p, wi, R.s, n);
       p.weeks = next.weeks; saveSoon(p); redraw(); C.toast(`Copied into the next ${n} week${n === 1 ? "" : "s"}`); break; }
-    case "pg-addrow": { const q = document.querySelector(`#main input[data-pg="qa"][data-s="${si}"]`); if (q) q.focus(); break; }
+    case "pg-addrow": { const q = inWk(`input[data-pg="qa"][data-s="${si}"]`); if (q) q.focus(); break; }
     case "pg-delrow": mutate(p => { const rows = p.weeks[wi].sessions[si].rows; rows.splice(ri, 1); relabel(rows); }); break;
     case "pg-link": mutate(p => { const rows = p.weeks[wi].sessions[si].rows, on = letterOf(rows[ri].group) === letterOf(rows[ri - 1].group); if (on) splitAt(rows, ri); else linkUp(rows, ri); }); break;
-    case "pg-ss": { const sid = p.weeks[wi].sessions[si].id; PG.ss[sid] = !PG.ss[sid]; redraw(); const q = document.querySelector(`#main input[data-pg="qa"][data-s="${si}"]`); if (q) q.focus(); break; }
+    case "pg-ss": { const sid = p.weeks[wi].sessions[si].id; PG.ss[sid] = !PG.ss[sid]; redraw(); const q = inWk(`input[data-pg="qa"][data-s="${si}"]`); if (q) q.focus(); break; }
     case "pg-qa-pick": { const i = +el.getAttribute("data-i"), sess = p.weeks[wi].sessions[si]; if (PG.qa && PG.qa.si === si) qaAdd(si, PG.qa.items[i], !!PG.ss[sess.id]); break; }
     case "pg-tc": PG.tc = {}; PG.tools = false; tcSheet(); break;
     case "pg-tcgo": tcImport(); break;
+    case "pg-span": { const d = +el.getAttribute("data-d"), n = p.weeks.length; if (d < 0) PG.span.from = Math.max(0, PG.span.from + d); else PG.span.to = Math.min(n - 1, PG.span.to + d); redraw(); break; }
     case "pg-tools": PG.tools = !PG.tools; redraw(); break;
     case "pg-more": { const id = el.getAttribute("data-id"); PG.more = PG.more === id ? null : id; PG.confirm = null; redraw(); break; }
     case "pg-addday": {
       const d = +el.getAttribute("data-d"); let sid = null, si2 = 0;
       mutate(p => { const ss = p.weeks[wi].sessions, s = newSession("Day " + String.fromCharCode(65 + Math.min(ss.length, 25))); s.day = d; s.rows = []; ss.push(s); sid = s.id; si2 = ss.length - 1; });
-      const q = document.querySelector(`#main input[data-pg="qa"][data-s="${si2}"]`); if (q){ q.focus(); q.closest(".pg-col") && q.closest(".pg-col").scrollIntoView({ inline: "nearest", block: "nearest", behavior: "smooth" }); }
+      const q = inWk(`input[data-pg="qa"][data-s="${si2}"]`); if (q){ q.focus(); q.closest(".pg-col") && q.closest(".pg-col").scrollIntoView({ inline: "nearest", block: "nearest", behavior: "smooth" }); }
       break; }
     case "pg-edrow": { const r = p.weeks[wi].sessions[si].rows[ri]; PG.editRow = PG.editRow === r.id ? null : r.id; redraw();
-      if (PG.editRow){ const n = document.querySelector(`#main .pg-edit input[data-f="sr"][data-s="${si}"][data-r="${ri}"]`); if (n){ n.focus(); try { n.select(); } catch (x){} } } break; }
+      if (PG.editRow){ const n = inWk(`.pg-edit input[data-f="sr"][data-s="${si}"][data-r="${ri}"]`); if (n){ n.focus(); try { n.select(); } catch (x){} } } break; }
     case "pg-edrow-done": PG.editRow = null; redraw(); break;
     case "pg-editsess": { PG.mode = "plan"; try { localStorage.setItem("tt.pg.mode", "plan"); } catch (x){} PG.editRow = null; const sid = p.weeks[wi].sessions[si].id; redraw();
       const el = document.getElementById("pg-s-" + sid); if (el) el.scrollIntoView({ block: "start", behavior: "smooth" }); break; }
@@ -991,6 +1036,7 @@ async function onClick(el, e){
 }
 
 function onInput(t){
+  wkFrom(t);
   const k = t.getAttribute("data-pg"); if (!k) return false;
   const f = t.getAttribute("data-f"), si = +t.getAttribute("data-s"), ri = +t.getAttribute("data-r");
   if (k === "libq"){ PG.libQ = t.value; const pos = t.selectionStart; redraw(); const n = document.getElementById("pg-libq"); if (n){ n.focus(); try { n.setSelectionRange(pos, pos); } catch (x){} } return true; }
@@ -1008,6 +1054,7 @@ function onInput(t){
   return false;
 }
 function onChange(t){
+  wkFrom(t);
   const k = t.getAttribute("data-pg"); if (!k) return false;
   const si = +t.getAttribute("data-s"), ri = +t.getAttribute("data-r");
   if (k === "recdate"){ // moving the date moves every set already recorded for this session
@@ -1179,7 +1226,22 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-tcsteps{margin:0 0 6px;padding-left:18px;display:grid;gap:3px}
 .pg-tcsum{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface2)}
 .pg-tcgrid{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px}
+.pg-delta{display:inline-flex;align-items:center;gap:3px;font-size:12px;font-weight:600;padding:1px 7px;border-radius:999px;white-space:nowrap;background:var(--surface2);color:var(--muted)}
+.pg-delta.up{color:var(--pos);background:color-mix(in srgb,var(--pos) 13%,transparent)}
+.pg-delta.down{color:var(--neg,#c0392b);background:color-mix(in srgb,var(--neg,#c0392b) 12%,transparent)}
+.pg-lifts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.pg-liftcard{gap:6px}
+.pg-liftcard h2{font-size:15px}
+.pg-liftnum{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.pg-liftnum b{font-size:26px;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+@media (max-width:900px){.pg-lifts{grid-template-columns:1fr}}
 /* ---------- week board ---------- */
+.pg-wkblock{display:flex;flex-direction:column;gap:6px;scroll-margin-top:64px;padding-top:6px;border-top:1px solid var(--line)}
+.pg-wkblock:first-of-type{border-top:0}
+.pg-wkh{display:flex;gap:10px;align-items:baseline;padding:2px 2px 0}
+.pg-wkh b{font-size:15px}
+.pg-wkblock.sel .pg-wkh b{color:var(--accent)}
+.pg-more-wk{align-self:center}
 .pg-sgrip{touch-action:none;cursor:grab;border:0;background:none;color:var(--muted);font-size:16px;line-height:1;padding:6px 2px;border-radius:6px;flex:0 0 auto;user-select:none;-webkit-user-select:none}
 .pg-sgrip:hover,.pg-sgrip:focus-visible{color:var(--ink);background:var(--surface2)}
 .pg-sdragging{opacity:.4}
@@ -1215,12 +1277,13 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-sess.pg-mini .tablewrap{overflow:visible;margin:0;padding:0}
 .pg-sess.pg-mini .pg-rows,.pg-sess.pg-mini .pg-rows tbody{display:block;width:100%}
 .pg-sess.pg-mini .pg-rows thead{display:none}
-.pg-sess.pg-mini tr.pg-g{display:grid;grid-template-columns:16px 72px 56px minmax(0,1fr) 22px;grid-template-areas:"grip blk name name del" "grip sr wt note del";gap:4px 5px;align-items:center;padding:5px 0 5px 6px;border-bottom:1px solid var(--line);box-shadow:inset 3px 0 0 var(--g,transparent)}
+.pg-sess.pg-mini tr.pg-g{display:grid;grid-template-columns:16px 72px 56px minmax(0,1fr) 22px;grid-template-areas:"grip blk name name del" "grip sr wt note del" "grip log log log del";gap:4px 5px;align-items:center;padding:5px 0 5px 6px;border-bottom:1px solid var(--line);box-shadow:inset 3px 0 0 var(--g,transparent)}
 .pg-sess.pg-mini tr.pg-g:last-child{border-bottom:0}
 .pg-sess.pg-mini tr.pg-g>td{padding:0!important;border:0!important;min-width:0!important;box-shadow:none!important}
 .pg-sess.pg-mini tr.pg-g>td:nth-child(1){grid-area:grip}.pg-sess.pg-mini tr.pg-g>td:nth-child(2){grid-area:blk}.pg-sess.pg-mini tr.pg-g>td:nth-child(3){grid-area:name}
 .pg-sess.pg-mini tr.pg-g>td:nth-child(4){grid-area:sr}.pg-sess.pg-mini tr.pg-g>td:nth-child(5){grid-area:wt}.pg-sess.pg-mini tr.pg-g>td:nth-child(6){grid-area:note}.pg-sess.pg-mini tr.pg-g>td:nth-child(7){grid-area:del}
 .pg-sess.pg-mini tr.pg-g .pg-in{width:100%!important}
+.pg-sess.pg-mini tr.pg-g>td.pg-logged{grid-area:log;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12.5px;color:var(--muted)}
 .pg-sess.pg-mini .pg-grip{font-size:15px;padding:4px 2px}
 .pg-sess.pg-mini .pg-bgrip,.pg-sess.pg-mini .pg-bgrip-sp{width:16px;height:24px}
 .pg-sess.pg-mini .pg-link,.pg-sess.pg-mini .pg-link-sp{width:22px;height:22px}
@@ -1336,8 +1399,8 @@ function sessDragStart(e, h){
 function sessDragMove(e){
   const D = SDRAG; if (!D || e.pointerId !== D.id) return;
   D.x = e.clientX; D.label.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 10}px)`;
-  const el = document.elementFromPoint(e.clientX, e.clientY), col = el && el.closest && el.closest(".pg-board .pg-col");
-  const onCard = el && el.closest && el.closest(".pg-board .pg-sess");
+  const el = document.elementFromPoint(e.clientX, e.clientY), c0 = el && el.closest && el.closest(".pg-board .pg-col"), col = c0 && c0.closest(".pg-board") === D.board ? c0 : null;
+  const onCard = col && el.closest(".pg-board .pg-sess");
   if (D.col && D.col !== col) D.col.classList.remove("pg-drop");
   if (D.onCard && D.onCard !== onCard) D.onCard.classList.remove("pg-swap");
   D.col = col && col !== D.from ? col : null; D.onCard = onCard && onCard !== D.card && D.col ? onCard : null;
@@ -1360,6 +1423,7 @@ function sessDragEnd(e){
 }
 function onPointerDown(e){
   const h = e.target.closest && e.target.closest("[data-drag]"); if (!h || (e.button && e.button !== 0) || !P()) return;
+  wkFrom(h);
   if (h.getAttribute("data-drag") === "sess") return sessDragStart(e, h);
   e.preventDefault();
   const si = +h.getAttribute("data-s"), ri = +h.getAttribute("data-r"), kind = h.getAttribute("data-drag");
@@ -1390,13 +1454,14 @@ function onPointerUp(e){
 }
 /* Keyboard: focus a handle and press the up or down arrow. */
 function onDragKey(e){
+  wkFrom(e.target);
   const hs = e.target.closest && e.target.closest('[data-drag="sess"]');
   if (hs && (e.key === "ArrowLeft" || e.key === "ArrowRight")){ // move a workout one day earlier / later
     e.preventDefault();
     const p = P(), si = +hs.getAttribute("data-s"), s = p.weeks[PG.week].sessions[si], dates = weekDates(p, PG.week).map(d => d.getDay());
     const at = hasDay(s) ? dates.indexOf(+s.day) : (e.key === "ArrowRight" ? -1 : 7), to = at + (e.key === "ArrowRight" ? 1 : -1);
     moveSessionDay(si, to < 0 || to > 6 ? "" : dates[to]);
-    const n = document.querySelector(`#main [data-drag="sess"][data-s="${si}"]`); if (n) n.focus();
+    const n = inWk(`[data-drag="sess"][data-s="${si}"]`); if (n) n.focus();
     return;
   }
   const h = e.target.closest && e.target.closest("[data-drag]"); if (!h || (e.key !== "ArrowUp" && e.key !== "ArrowDown") || !P()) return;
@@ -1422,8 +1487,8 @@ function attach(ctx){
   }
   document.addEventListener("pointerdown", e => { if (e.target.closest && e.target.closest(".pg-qa-list")) e.preventDefault(); onPointerDown(e); });
   document.addEventListener("keydown", onDragKey); document.addEventListener("keydown", onBuilderKey);
-  document.addEventListener("focusout", e => { const t = e.target; if (t.getAttribute && t.getAttribute("data-pg") === "qa"){ const si = t.getAttribute("data-s"); setTimeout(() => { const b = document.getElementById("pg-qa-list-" + si), a = document.activeElement; if (b && !(a && a.getAttribute && a.getAttribute("data-pg") === "qa" && a.getAttribute("data-s") === si)) b.hidden = true; }, 150); } });
-  document.addEventListener("focusin", e => { const t = e.target; if (t.getAttribute && t.getAttribute("data-pg") === "qa" && t.value.trim()) qaRender(+t.getAttribute("data-s")); });
+  document.addEventListener("focusout", e => { const t = e.target; if (t.getAttribute && t.getAttribute("data-pg") === "qa"){ wkFrom(t); const si = t.getAttribute("data-s"), wk = PG.week; setTimeout(() => { const b = document.getElementById("pg-qa-list-" + wk + "-" + si), a = document.activeElement; if (b && !(a && a.getAttribute && a.getAttribute("data-pg") === "qa" && a.getAttribute("data-s") === si)) b.hidden = true; }, 150); } });
+  document.addEventListener("focusin", e => { const t = e.target; if (t.getAttribute && t.getAttribute("data-pg") === "qa"){ wkFrom(t); if (t.value.trim()) qaRender(+t.getAttribute("data-s")); } });
 }
 function preload(){ if (!PG.ready && !PG.loading && C && C.A.programs) load(); }
 window.TallyPrograms = { attach, render, onClick, onInput, onChange, state: PG, todos, todoText, preload };
