@@ -1,7 +1,7 @@
 /* Programs: pure helpers shared by the trainer app, the client page and the server.
  * Program shape (programs.data):
  *   {name, clientId, status:"active"|"archived", startDate,
- *    weeks:[{id, label, sessions:[{id, name, homework, notes, rows:[{id, exId, name, group, sets, reps, weight, note}]}]}]}
+ *    weeks:[{id, label, sessions:[{id, name, day (0=Sun..6, optional), homework, notes, rows:[{id, exId, name, group, sets, reps, weight, note}]}]}]}
  * A log is one set: {program_id, session_id, row_id, set_no, ex_name, reps, weight, done, logged_on, source}. */
 
 export const pid = (p) => (p || "") + Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
@@ -286,8 +286,13 @@ export function sessionForDate(program, date, sessionDates){
   if (!program || !program.startDate) return null;
   const start = parseYmd(program.startDate), wk = Math.floor((sod(date) - start) / (7 * DAYMS));
   if (wk < 0 || wk >= (program.weeks || []).length) return null;
-  const week = program.weeks[wk], list = (week.sessions || []).filter(s => !s.homework && (s.rows || []).some(r => r.name));
-  const days = [...new Set((sessionDates || []).filter(d => Math.floor((sod(d) - start) / (7 * DAYMS)) === wk).map(d => sod(d).getTime()))].sort((a, b) => a - b);
+  const week = program.weeks[wk], written = (week.sessions || []).filter(s => !s.homework && (s.rows || []).some(r => r.name));
+  // A workout given a day (0 = Sunday) goes on that weekday. The rest fill the other booked days in order.
+  const hasDay = x => x.day !== null && x.day !== undefined && x.day !== "";
+  const onDay = written.find(x => hasDay(x) && +x.day === date.getDay());
+  if (onDay) return { week, weekIndex: wk, session: onDay };
+  const taken = new Set(written.filter(hasDay).map(x => +x.day)), list = written.filter(x => !hasDay(x));
+  const days = [...new Set((sessionDates || []).filter(d => Math.floor((sod(d) - start) / (7 * DAYMS)) === wk && !taken.has(d.getDay())).map(d => sod(d).getTime()))].sort((a, b) => a - b);
   const n = days.indexOf(sod(date).getTime());
   if (n < 0 || n >= list.length) return null;
   return { week, weekIndex: wk, session: list[n] };
