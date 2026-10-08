@@ -3,7 +3,7 @@
  * app.js calls attach(ctx) once and then render()/onClick()/onChange()/onInput() while the Programs tab is open.
  * Data goes through ctx.A.programs (see adapter-hosted.js / programs-demo.js). */
 import { pid, newRow, newSession, newWeek, newProgram, copySession, copyWeek, repeatSession, repeatWeek, setCount,
-  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, sessionForDate } from "./programs-core.js";
+  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, sessionForDate, parseTrueCoach, truecoachToProgram } from "./programs-core.js";
 import { STARTER_EXERCISES } from "./exercise-seed.js";
 import { createVoice, voiceContext, VOICE_CSS } from "./programs-voice.js";
 
@@ -211,7 +211,7 @@ function renderProgram(c, progs){
   const p = P();
   if (!p && c.shared) return `<section class="card"><div class="empty">This program is no longer shared with you.</div></section>`;
   if (!p) return `<section class="card"><div class="empty"><b>No program for ${esc(c.name.split(" ")[0])} yet</b><span>Start one, then add weeks, sessions and exercises.</span>
-    <div class="actions"><input id="pg-newname" class="pg-in" placeholder="Program name" value="${esc(c.name.split(" ")[0])}'s program"><button class="btn primary" data-act="pg-new">Start program</button>${C.A.programs.ai ? `<button class="btn" data-act="pg-ai" data-mode="create">✦ Draft with AI</button>` : ""}</div></div></section>`;
+    <div class="actions"><input id="pg-newname" class="pg-in" placeholder="Program name" value="${esc(c.name.split(" ")[0])}'s program"><button class="btn primary" data-act="pg-new">Start program</button>${C.A.programs.ai ? `<button class="btn" data-act="pg-ai" data-mode="create">✦ Draft with AI</button>` : ""}<button class="btn" data-act="pg-tc">Import from TrueCoach</button></div></div></section>`;
   tidyProgram(p);
   const W = p.weeks || [], wi = Math.min(PG.week, Math.max(0, W.length - 1)); PG.week = wi;
   const week = W[wi];
@@ -231,6 +231,7 @@ function renderProgram(c, progs){
   const progActs = p.shared ? (PG.confirm === "leave" ? `<button class="btn sm danger" data-act="pg-leave">Remove from my list?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="leave">Remove from my list</button>`) : `
       ${PG.sharing ? `<button class="btn sm" data-act="pg-sharetr">Share with a trainer</button>` : ""}
       <button class="btn sm" data-act="pg-newprog">New program</button>
+      <button class="btn sm" data-act="pg-tc">Import from TrueCoach</button>
       <button class="btn sm ghost" data-act="pg-archive">${p.status === "archived" ? "Unarchive" : "Archive"}</button>
       ${PG.confirm === "delprog" ? `<button class="btn sm danger" data-act="pg-delprog">Delete program?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="delprog">Delete program</button>`}`;
   const tools = PG.tools ? `<div class="pg-tools">
@@ -330,7 +331,7 @@ function tidyProgram(p){
   for (const w of p.weeks || []) for (const s of w.sessions || []){
     const before = (s.rows || (s.rows = [])).map(r => r.group + "|" + r.exId).join(",");
     normalizeBlocks(s.rows);
-    if (!p.shared && !PG.filled[p.id]) ensureInLibrary(s.rows);
+    if (!p.shared && !p.imported && !PG.filled[p.id]) ensureInLibrary(s.rows);
     if (before !== s.rows.map(r => r.group + "|" + r.exId).join(",")) changed = true;
   }
   PG.filled[p.id] = 1;
@@ -673,6 +674,48 @@ function trainerShareSheet(){
     <div class="pg-row"><input id="pg-tr-email" class="pg-in" type="email" placeholder="their Google email" style="flex:1"><button class="btn primary" data-act="pg-sharetr-add">Share</button></div>
     ${L == null ? `<p class="small muted">Loading…</p>` : L.length ? `<h3>Shared with</h3><div class="list">${L.map(x => `<div><span>${esc(x.shared_email)}</span><button class="btn sm ghost" data-act="pg-sharetr-rm" data-e="${esc(x.shared_email)}">Stop sharing</button></div>`).join("")}</div>` : `<p class="small muted">Not shared with anyone yet.</p>`}`);
 }
+/* ---------- import a client's history from TrueCoach ---------- */
+const fmtD = d => { const [y, m, dd] = d.split("-").map(Number); return new Date(y, m - 1, dd).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }); };
+function tcSheet(){
+  const c = client(PG.clientId), first = c.name.split(" ")[0], T = PG.tc || (PG.tc = {}), st = T.conv && T.conv.stats;
+  const hasActive = (PG.progs || []).some(p => p.clientId === c.id && p.status !== "archived");
+  const norm = x => String(x || "").toLowerCase().replace(/[^a-z]/g, "");
+  const mismatch = T.parsed && T.parsed.client && !norm(T.parsed.client).includes(norm(first));
+  const body = T.busy ? `<div class="empty"><b>Importing…</b><span>${esc(T.busy)}</span></div>`
+    : `<ol class="small pg-tcsteps"><li>In TrueCoach, open ${esc(first)}'s workout calendar and click <b>Export</b> (top right).</li><li>Pick a date range covering everything, send it to yourself, and save the .txt file from the email.</li><li>Choose that file here.</li></ol>
+    <div class="field"><input type="file" accept=".txt,text/plain" data-pg="tcfile" aria-label="TrueCoach workout log (.txt)"></div>
+    ${T.error ? `<div class="banner err"><span>${esc(T.error)}</span></div>` : ""}
+    ${st ? `<div class="pg-tcsum"><b>${esc(T.parsed.client || "Workout log")}</b>
+        <div class="pg-tcgrid"><span><b>${st.workouts}</b> workouts</span><span><b>${st.sets.toLocaleString()}</b> logged sets</span><span><b>${st.exercises}</b> exercises</span><span>${fmtD(st.from)} – ${fmtD(st.to)}</span></div>
+        ${mismatch ? `<div class="banner warn"><span>This file is for <b>${esc(T.parsed.client)}</b>, but you're importing into <b>${esc(c.name)}</b>. Check it's the right client.</span></div>` : ""}
+        <p class="small muted">Goes in as an archived <b>TrueCoach history</b> program: every workout on its date, with your notes and supersets. Logged weights feed ${esc(first)}'s lift charts and the “Last time” line. Nothing already in Trainer Tally is changed.</p>
+        <label class="check small"><input type="checkbox" id="pg-tccont" ${T.cont ?? !hasActive ? "checked" : ""}> Also start a new program from ${esc(first)}'s latest week, beginning this week</label></div>
+      <div class="actions"><button class="btn primary" data-act="pg-tcgo">Import ${st.workouts} workouts</button></div>` : ""}`;
+  sheet("Import from TrueCoach", body);
+}
+async function tcImport(){
+  const c = client(PG.clientId), T = PG.tc; if (!T || !T.conv) return;
+  T.cont = !!(document.getElementById("pg-tccont") || {}).checked;
+  const hist = { id: pid("p"), ...T.conv.program }, logs = T.conv.logs.map(l => ({ ...l, program_id: hist.id }));
+  try {
+    T.busy = "Saving workouts…"; tcSheet();
+    await C.A.programs.saveProgram(hist);
+    for (let i = 0; i < logs.length; i += 400){ T.busy = `Saving logged sets… ${Math.min(i + 400, logs.length)} of ${logs.length}`; tcSheet(); await C.A.programs.saveLogs(logs.slice(i, i + 400)); }
+    PG.progs.push(hist); PG.progId = hist.id; PG.week = hist.weeks.length - 1;
+    if (T.cont){ // carry the latest week forward as Week 1 of a new program, starting this Monday
+      const last = [...hist.weeks].reverse().find(w => (w.sessions || []).length);
+      const wk = copyWeek(last, "Week 1");
+      for (const s of wk.sessions) for (const r of s.rows) r.note = String(r.note || "").split(" · ").filter(x => !/^Logged:/.test(x)).join(" · ");
+      const d = new Date(), mon = new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7));
+      const np = { id: pid("p"), ...newProgram(c.id, c.name.split(" ")[0] + "'s program"), weeks: [wk] };
+      np.startDate = mon.getFullYear() + "-" + String(mon.getMonth() + 1).padStart(2, "0") + "-" + String(mon.getDate()).padStart(2, "0");
+      await C.A.programs.saveProgram(np); PG.progs.push(np); PG.progId = np.id; PG.week = 0; PG.mode = "plan";
+    }
+    const n = T.conv.stats.workouts; PG.tc = null; C.closeModal(); loadClient(c.id);
+    C.toast(`Imported ${n} workouts from TrueCoach`); redraw();
+  } catch (e){ T.busy = null; T.error = "Couldn't save the import: " + (e.message || "try again"); tcSheet(); }
+}
+
 function shareSheet(){
   const c = client(PG.clientId), l = PG.link[c.id];
   sheet("Share with " + c.name.split(" ")[0], `<p class="small">A private page with ${esc(c.name.split(" ")[0])}'s program and exercise videos. No login. They can check off sets and record reps and weight on sessions marked <b>Homework</b>, and log their bodyweight.</p>
@@ -823,6 +866,8 @@ async function onClick(el, e){
     case "pg-link": mutate(p => { const rows = p.weeks[wi].sessions[si].rows, on = letterOf(rows[ri].group) === letterOf(rows[ri - 1].group); if (on) splitAt(rows, ri); else linkUp(rows, ri); }); break;
     case "pg-ss": { const sid = p.weeks[wi].sessions[si].id; PG.ss[sid] = !PG.ss[sid]; redraw(); const q = document.querySelector(`#main input[data-pg="qa"][data-s="${si}"]`); if (q) q.focus(); break; }
     case "pg-qa-pick": { const i = +el.getAttribute("data-i"), sess = p.weeks[wi].sessions[si]; if (PG.qa && PG.qa.si === si) qaAdd(si, PG.qa.items[i], !!PG.ss[sess.id]); break; }
+    case "pg-tc": PG.tc = {}; PG.tools = false; tcSheet(); break;
+    case "pg-tcgo": tcImport(); break;
     case "pg-tools": PG.tools = !PG.tools; redraw(); break;
     case "pg-more": { const id = el.getAttribute("data-id"); PG.more = PG.more === id ? null : id; PG.confirm = null; redraw(); break; }
     case "pg-addday": {
@@ -972,6 +1017,18 @@ function onChange(t){
     return true; }
   if (k === "logline"){ commitLine(si, ri, t.value); setTimeout(() => redraw(), 0); return true; }
   if (k === "prog" && t.getAttribute("data-f") === "startDate"){ redraw(); return true; }
+  if (k === "tcfile"){
+    const f = t.files && t.files[0]; if (!f) return true;
+    f.text().then(txt => {
+      const T = PG.tc = { cont: PG.tc && PG.tc.cont };
+      try {
+        T.parsed = parseTrueCoach(txt);
+        if (!T.parsed.workouts.length){ T.error = "No workouts found. Use the .txt file from TrueCoach's workout Export."; return tcSheet(); }
+        T.conv = truecoachToProgram(T.parsed, { clientId: PG.clientId, name: "TrueCoach history", libByName: libByName() });
+      } catch (e){ T.error = "Couldn't read that file."; }
+      tcSheet();
+    });
+    return true; }
   if (k === "sessday"){ mutate(p => { const s = p.weeks[PG.week].sessions[si]; if (t.value === "") delete s.day; else s.day = +t.value; }); return true; }
   if (k === "progsel"){ PG.progId = t.value; PG.week = 0; redraw(); return true; }
   if (k === "wmail"){ const c = client(PG.clientId); C.saveClient({ ...c, workoutEmail: t.value }).then(() => { C.toast(t.value === "off" ? "Workout emails off" : c.email ? "Workout emails on" : `On. Add ${c.name.split(" ")[0]}'s email so they can go out.`); redraw(); }).catch(() => {}); return true; }
@@ -1119,6 +1176,9 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-cal-s .pg-cal-n{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-overflow:clip}
 .pg-cal-s .pg-cal-ex .muted{padding:0;font-size:12px}
 .pg-cal-d{min-height:110px;padding:7px}
+.pg-tcsteps{margin:0 0 6px;padding-left:18px;display:grid;gap:3px}
+.pg-tcsum{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface2)}
+.pg-tcgrid{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px}
 /* ---------- week board ---------- */
 .pg-sgrip{touch-action:none;cursor:grab;border:0;background:none;color:var(--muted);font-size:16px;line-height:1;padding:6px 2px;border-radius:6px;flex:0 0 auto;user-select:none;-webkit-user-select:none}
 .pg-sgrip:hover,.pg-sgrip:focus-visible{color:var(--ink);background:var(--surface2)}
