@@ -255,6 +255,25 @@ function renderProgram(c, progs){
   ${week && PG.layout !== "cal" ? `<div class="pg-acts" style="justify-content:flex-start"><button class="btn" data-act="pg-addsess">+ ${MODE === "plan" ? "Workout without a day" : "Workout"}</button>${clip && clip.type === "session" ? `<button class="btn" data-act="pg-pastesess">Paste “${esc(clip.data.name)}”</button>` : ""}</div>` : ""}
   <datalist id="pg-exlist">${(PG.lib || []).slice().sort((a, b) => a.name.localeCompare(b.name)).map(e => `<option value="${esc(e.name)}"></option>`).join("")}</datalist>`;
 }
+/* New workout on weekday d of the current week; with fromId, a copy of that workout (named Day B, C...). */
+function addOnDay(d, fromId){
+  const p = P(); if (!p) return;
+  const wk = p.weeks[PG.week]; if (!wk) return;
+  let src = null; if (fromId) for (const w of p.weeks) for (const x of w.sessions || []) if (x.id === fromId) src = x;
+  const ss = wk.sessions, nm = "Day " + String.fromCharCode(65 + Math.min(ss.filter(x => !x.homework).length, 25));
+  const s = src ? copySession(src) : newSession(nm); s.day = d; if (!src) s.rows = [];
+  if (src && /^Day [A-Z]$/.test(src.name)) s.name = nm; // Day A copied to a new day -> Day B
+  ss.push(s); saveSoon(p); redraw();
+  const si = ss.length - 1, q = inWk(`input[data-pg="qa"][data-s="${si}"]`);
+  if (q){ const col = q.closest(".pg-col"); if (col) col.scrollIntoView({ inline: "nearest", block: "nearest", behavior: "smooth" }); if (!src) q.focus(); }
+  if (src) C.toast(`Copied ${src.name}. Change what you need.`);
+}
+/* The workout to offer as a starting point for day d: the latest one before it (this week, else last week). */
+function copySource(p, wi, d){
+  const order = weekDates(p, wi).map(x => x.getDay()), at = order.indexOf(d);
+  const pick = (w, before) => (w ? (w.sessions || []) : []).filter(x => !x.homework && written(x) && hasDay(x) && (before == null || order.indexOf(+x.day) < before)).sort((a, b) => order.indexOf(+b.day) - order.indexOf(+a.day))[0];
+  return pick(p.weeks[wi], at) || pick(p.weeks[wi - 1]);
+}
 /* ---------- the week board (Plan mode): one compact column per workout, side by side, on the day it's done ---------- */
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const hasDay = s => s.day !== null && s.day !== undefined && s.day !== "";
@@ -282,6 +301,12 @@ function renderWeeks(c, p, sel){
 }
 function renderBoard(c, p, wi, week){
   const dates = weekDates(p, wi), tk = today(), booked = {};
+  // Workouts written before days existed: put them on the day the calendar already gives them (and keep it).
+  if (!p.shared && !p.imported && (week.sessions || []).some(x => !hasDay(x) && !x.homework && written(x))){
+    const appts = apptsOf(c); let moved = false;
+    for (const d of dates){ if (!appts.some(a => ymd(a) === ymd(d))) continue; const hit = sessionForDate(p, d, appts); if (hit && hit.weekIndex === wi && !hasDay(hit.session)){ hit.session.day = d.getDay(); moved = true; } }
+    if (moved) saveSoon(p);
+  }
   for (const a of apptsOf(c)){ const k = ymd(a); (booked[k] = booked[k] || []).push(a); }
   const tm = dt => dt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).replace(":00", "").replace(/\s?(AM|PM)/i, (_, x) => x[0].toLowerCase());
   const all = (week.sessions || []).map((s, si) => ({ s, si }));
@@ -289,7 +314,7 @@ function renderBoard(c, p, wi, week){
   for (const d of dates){
     const dow = d.getDay(), k = ymd(d), here = all.filter(x => hasDay(x.s) && +x.s.day === dow), bk = booked[k];
     const head = `<div class="pg-colh ${k === tk ? "today" : ""}"><span class="pg-colday">${DOW[dow]} <b>${d.getDate()}</b></span>${bk ? `<span class="pg-booked" title="${esc(c.name.split(" ")[0])} is booked">📅 ${esc(bk.map(tm).join(", "))}</span>` : ""}${here.length ? `<button class="pg-colplus" data-act="pg-addday" data-d="${dow}" title="Add another workout on ${DOW[dow]}" aria-label="Add another workout on ${DOW[dow]} ${d.getDate()}">+</button>` : ""}</div>`;
-    cols.push(`<div class="pg-col ${here.length ? "" : "empty"} ${bk ? "booked" : ""}" data-day="${dow}">${head}${here.map(x => renderSession(p, wi, x.si, x.s, dates)).join("")}${here.length ? "" : `<button class="pg-col-add" data-act="pg-addday" data-d="${dow}" aria-label="Add a workout on ${DOW[dow]} ${d.getDate()}"><span>+</span>Workout</button>`}</div>`);
+    cols.push(`<div class="pg-col ${here.length ? "" : "empty"} ${bk ? "booked" : ""}" data-day="${dow}">${head}${here.map(x => renderSession(p, wi, x.si, x.s, dates)).join("")}${here.length ? "" : `<button class="pg-col-add" data-act="pg-addday" data-d="${dow}" aria-label="Add a workout on ${DOW[dow]} ${d.getDate()}"><span>+</span>Workout</button>${bk && (() => { const src = copySource(p, wi, dow); return src ? `<button class="pg-col-copy" data-act="pg-copyday" data-d="${dow}" data-from="${esc(src.id)}" title="Start from ${esc(src.name)} and change what you need">⧉ Copy ${esc(src.name)}</button>` : ""; })() || ""}`}</div>`);
   }
   return `<div class="pg-board" role="list">${cols.join("")}</div>`;
 }
@@ -325,7 +350,7 @@ function renderCalendar(c, p){
       for (const a of byDay[key] || []){
         const hit = sessionForDate(p, dt, appts);
         if (hit && !used.has(hit.session.id)){ used.add(hit.session.id); items.push(card(hit.session, wi, false, tm(a))); }
-        else if (!hit && !items.length) items.push(`<button class="pg-cal-gap" data-act="pg-cal-go" data-w="${wi}" aria-label="Write a workout for ${esc(dt.toDateString())}"><span class="muted">${esc(tm(a))}</span> nothing written</button>`);
+        else if (!hit && !items.length) items.push(`<button class="pg-cal-gap" data-act="pg-cal-write" data-w="${wi}" data-d="${dt.getDay()}" aria-label="Write a workout for ${esc(dt.toDateString())}"><span class="muted">${esc(tm(a))}</span> nothing written</button>`);
       }
       return `<div class="pg-cal-d ${items.length ? "has" : ""} ${key === tk ? "today" : ""} ${key < tk ? "past" : ""}"><div class="pg-cal-dn"><span>${dt.toLocaleDateString(undefined, { weekday: "short" })}</span><b>${dt.getDate()}</b></div>${items.join("")}</div>`;
     }).join("");
@@ -915,11 +940,8 @@ async function onClick(el, e){
     case "pg-span": { const d = +el.getAttribute("data-d"), n = p.weeks.length; if (d < 0) PG.span.from = Math.max(0, PG.span.from + d); else PG.span.to = Math.min(n - 1, PG.span.to + d); redraw(); break; }
     case "pg-tools": PG.tools = !PG.tools; redraw(); break;
     case "pg-more": { const id = el.getAttribute("data-id"); PG.more = PG.more === id ? null : id; PG.confirm = null; redraw(); break; }
-    case "pg-addday": {
-      const d = +el.getAttribute("data-d"); let sid = null, si2 = 0;
-      mutate(p => { const ss = p.weeks[wi].sessions, s = newSession("Day " + String.fromCharCode(65 + Math.min(ss.length, 25))); s.day = d; s.rows = []; ss.push(s); sid = s.id; si2 = ss.length - 1; });
-      const q = inWk(`input[data-pg="qa"][data-s="${si2}"]`); if (q){ q.focus(); q.closest(".pg-col") && q.closest(".pg-col").scrollIntoView({ inline: "nearest", block: "nearest", behavior: "smooth" }); }
-      break; }
+    case "pg-addday": addOnDay(+el.getAttribute("data-d")); break;
+    case "pg-copyday": addOnDay(+el.getAttribute("data-d"), el.getAttribute("data-from")); break;
     case "pg-edrow": { const r = p.weeks[wi].sessions[si].rows[ri]; PG.editRow = PG.editRow === r.id ? null : r.id; redraw();
       if (PG.editRow){ const n = inWk(`.pg-edit input[data-f="sr"][data-s="${si}"][data-r="${ri}"]`); if (n){ n.focus(); try { n.select(); } catch (x){} } } break; }
     case "pg-edrow-done": PG.editRow = null; redraw(); break;
@@ -958,6 +980,10 @@ async function onClick(el, e){
     case "pg-asplanned": { const r = p.weeks[wi].sessions[si].rows[ri]; const n = Math.max(1, setCount(r) || 1), w = num(r.weight);
       commitLine(si, ri, fmtSetLog(Array.from({ length: n }, (_, k) => ({ reps: repsFor(r, k), weight: w })))); redraw(); break; }
     case "pg-layout": PG.layout = el.getAttribute("data-v"); try { localStorage.setItem("tt.pg.layout", PG.layout); } catch (x){} PG.scrollTo = PG.layout === "cal" ? "week" : null; redraw(); break;
+    case "pg-cal-write": { // write a workout for a booked day, beside the rest of that week
+      PG.layout = "days"; PG.mode = "plan"; PG.draftWeek = null; try { localStorage.setItem("tt.pg.layout", "days"); localStorage.setItem("tt.pg.mode", "plan"); } catch (x){}
+      PG.week = +el.getAttribute("data-w"); PG.scrollWk = PG.week; PG.span = null;
+      addOnDay(+el.getAttribute("data-d")); break; }
     case "pg-cal-go": { PG.layout = "days"; try { localStorage.setItem("tt.pg.layout", "days"); } catch (x){} PG.week = +el.getAttribute("data-w"); PG.scrollTo = el.getAttribute("data-sid") || "top"; PG.repeat = null; redraw(); break; }
     case "pg-log": PG.logFor = { w: wi, s: si }; logSheet(); break;
     case "pg-logsave": {
@@ -1262,6 +1288,9 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-colplus:hover,.pg-colplus:focus-visible{background:var(--surface2);color:var(--ink)}
 .pg-col-add{all:unset;box-sizing:border-box;width:100%;cursor:pointer;min-height:150px;border:1.5px dashed var(--line);border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:var(--muted);font-size:12px}
 .pg-col-add span{font-size:22px;line-height:1}
+.pg-col-copy{all:unset;box-sizing:border-box;width:100%;cursor:pointer;text-align:center;font-size:11.5px;color:var(--muted);padding:6px 4px;border-radius:8px;border:1px solid var(--line);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pg-col-copy:hover,.pg-col-copy:focus-visible{color:var(--ink);border-color:var(--accent)}
+.pg-col.booked .pg-col-copy{color:var(--ink)}
 .pg-col.empty .pg-col-add{font-size:11px;padding:0 2px}
 .pg-col.booked .pg-col-add{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--ink);background:color-mix(in srgb,var(--accent) 6%,transparent)}
 .pg-col-add:hover,.pg-col-add:focus-visible{border-color:var(--accent);color:var(--ink)}
