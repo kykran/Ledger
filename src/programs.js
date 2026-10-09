@@ -3,7 +3,7 @@
  * app.js calls attach(ctx) once and then render()/onClick()/onChange()/onInput() while the Programs tab is open.
  * Data goes through ctx.A.programs (see adapter-hosted.js / programs-demo.js). */
 import { pid, newRow, newSession, newWeek, newProgram, copySession, copyWeek, repeatSession, repeatWeek, setCount,
-  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, sessionForDate, sessionBrief, parseTrueCoach, truecoachToProgram, topSet, liftDelta, STANDARD_LIFTS, standardLiftHistory } from "./programs-core.js";
+  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, sessionForDate, sessionBrief, findSession, parseTrueCoach, truecoachToProgram, topSet, liftDelta, STANDARD_LIFTS, standardLiftHistory } from "./programs-core.js";
 import { STARTER_EXERCISES } from "./exercise-seed.js";
 import { createVoice, voiceContext, VOICE_CSS } from "./programs-voice.js";
 
@@ -191,20 +191,23 @@ function briefOf(c, p, when){
   const hit = p ? sessionForDate(p, when, apptsOf(c)) : null;
   const M = C.getModel && C.getModel(), st = M && M.stats && M.stats[c.id];
   const b = sessionBrief({ session: hit && hit.session, logs, notes: c.programNotes, billing: st, before: when });
-  return b.lines.length || b.flags.length ? { ...b, session: hit && hit.session } : null;
+  return b.lines.length || b.flags.length ? { ...b, session: hit && hit.session, prog: p } : null;
 }
 function briefHtml(b, { notes = true, head = true } = {}){
   const flags = b.flags.filter(f => notes || !f.note).map(f => `<li class="pg-bf-${f.tone}">${f.tone === "warn" ? "⚠ " : ""}${esc(f.text)}</li>`).join("");
-  const rows = b.lines.map(l => `<li><b>${esc(l.name)}</b><span class="pg-bf-say pg-bf-${l.dir}">${l.dir === "up" ? "▲ " : l.dir === "plan" ? "↑ " : l.dir === "hold" ? "= " : ""}${esc(l.say)}</span><span class="small muted">${l.last ? esc(fmtDay(l.lastDate) + ": " + l.last) : "no history"}</span></li>`).join("");
+  const mark = { up: "▲ ", reps: "▲ ", plan: "↑ ", hold: "= " };
+  const rows = b.lines.map(l => `<li><b>${esc(l.name)}${l.stuck ? ` <span class="pg-bf-stuck" title="The top set hasn't gone up in the last 3 sessions">stuck 3 sessions</span>` : ""}</b><span class="pg-bf-say pg-bf-${l.dir}">${mark[l.dir] || ""}${esc(l.say)}</span><span class="small muted">${l.last ? esc(fmtDay(l.lastDate) + ": " + l.last) : "no history"}</span></li>`).join("");
+  const n = b.lines.filter(l => l.weight != null).length, canUse = n && b.session && b.prog && !b.prog.shared && !b.prog.imported;
+  const use = canUse ? `<button class="btn sm" data-act="pg-brief-use" data-prog="${esc(b.prog.id)}" data-sid="${esc(b.session.id)}" title="Write the suggested weights into ${esc(b.session.name)}">Use these numbers (${n})</button>` : "";
   return `<div class="pg-brief" aria-label="Before the session">${flags ? `<ul class="pg-bf-flags">${flags}</ul>` : ""}
-    ${b.session ? `${head ? `<div class="small muted pg-bf-h">${esc(b.session.name)} · last time and what to do today</div>` : ""}<ul class="pg-bf-rows">${rows}</ul>` : ""}</div>`;
+    ${b.session ? `${head || use ? `<div class="pg-bf-h">${head ? `<span class="small muted">${esc(b.session.name)} · last time and what to do today</span>` : ""}${use}</div>` : ""}<ul class="pg-bf-rows">${rows}</ul>` : ""}</div>`;
 }
 function renderBrief(c, p, when){ const b = briefOf(c, p, when); return b ? briefHtml(b) : ""; }
 /* On a client's page: one folded line ("Brief · Tomorrow 7 AM · Day A · 2 to go up"), open on the day of the session. */
 function clientBrief(c, progs){
   const when = nextOf(c), p = progs.find(x => x.status !== "archived"); if (!when) return "";
   const b = briefOf(c, p, when); if (!b) return "";
-  const up = b.lines.filter(l => l.dir === "up").length, warn = b.flags.filter(f => f.tone === "warn" && !f.note).length;
+  const up = b.lines.filter(l => l.dir === "up" || l.dir === "reps").length, warn = b.flags.filter(f => f.tone === "warn" && !f.note).length;
   const open = PG.briefOpen != null ? PG.briefOpen : ymd(when) === today();
   const bits = [whenLabel(when), b.session && b.session.name, up && `${up} to go up`, warn && `⚠ ${warn}`].filter(Boolean).map(esc).join(" · ");
   return `<details class="card pg-setup pg-briefbox" ${open ? "open" : ""}><summary><span class="pg-sumk">Brief</span><span class="pg-sumv pg-sumnote">${bits}</span><span class="pg-chev" aria-hidden="true">▾</span></summary>${briefHtml(b, { notes: false, head: false })}</details>`;
@@ -927,6 +930,13 @@ async function onClick(el, e){
       if (prog && t.week >= prog.weeks.length){ while (prog.weeks.length <= t.week) prog.weeks.push(newWeek("Week " + (prog.weeks.length + 1))); saveSoon(prog); C.toast(`Added ${prog.weeks[t.week].label}. Paste a week or session into it.`); }
       PG.week = t.week; redraw(); window.scrollTo({ top: 0 }); break; }
     case "pg-view": PG.view = el.getAttribute("data-v"); redraw(); break;
+    case "pg-brief-use": {
+      const p = (PG.progs || []).find(x => x.id === el.getAttribute("data-prog")), hit = p && findSession(p, el.getAttribute("data-sid")); if (!hit) break;
+      const c = client(p.clientId);
+      const b = sessionBrief({ session: hit.session, logs: PG.logs[p.clientId] || [], before: nextOf(c) || new Date() });
+      let k = 0; for (const l of b.lines) if (l.weight != null){ const r = hit.session.rows.find(x => x.id === l.rowId); if (r){ r.weight = String(Math.round(l.weight * 10) / 10); k++; } }
+      if (k){ saveSoon(p); C.toast(`${hit.session.name}: ${k} weight${k === 1 ? "" : "s"} updated`); }
+      redraw(); break; }
     case "pg-open": { PG.clientId = el.getAttribute("data-id"); PG.progId = null; PG.sub = "program"; PG.repeat = null; const wk = el.getAttribute("data-week");
       const c0 = client(PG.clientId), p0 = c0 && progsOf(c0).find(x => x.status !== "archived"); if (p0) PG.progId = p0.id; PG.week = wk != null ? +wk : 0;
       loadClient(PG.clientId); redraw(); window.scrollTo({ top: 0 }); break; }
@@ -1379,7 +1389,9 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-bf-rows li{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) minmax(0,1.1fr);gap:4px 12px;align-items:baseline;padding:5px 0;border-bottom:1px dashed var(--line)}
 .pg-bf-rows li:last-child{border-bottom:0}
 .pg-bf-rows li .small{order:1}.pg-bf-rows li .pg-bf-say{order:2}
-.pg-bf-say{font-size:14px;font-weight:600}.pg-bf-up{color:var(--pos)}.pg-bf-plan{color:var(--accent)}.pg-bf-hold,.pg-bf-new{color:var(--muted)}
+.pg-bf-say{font-size:14px;font-weight:600}.pg-bf-up,.pg-bf-reps{color:var(--pos)}
+.pg-bf-h{display:flex;align-items:center;gap:10px;justify-content:space-between;flex-wrap:wrap}
+.pg-bf-stuck{font-size:11px;font-weight:600;color:var(--warn);background:var(--warn-bg);border-radius:999px;padding:1px 7px;white-space:nowrap}.pg-bf-plan{color:var(--accent)}.pg-bf-hold,.pg-bf-new{color:var(--muted)}
 @media (max-width:640px){.pg-bf-rows li{grid-template-columns:minmax(0,1fr) auto}.pg-bf-rows li b{grid-column:1/-1}}
 .pg-notes summary{cursor:pointer;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
 .pg-notes textarea{min-height:70px;resize:vertical}

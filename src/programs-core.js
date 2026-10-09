@@ -531,11 +531,15 @@ export function standardLiftHistory(logs){
 }
 
 /* ---------- pre-session brief ----------
- * What to know walking into a session: for each exercise, what they did last time and whether to go up,
- * plus a few flags (notes, a long gap, the package). Pure: the caller passes logs and billing stats.
- * Going up: every set hit its reps (bodyweight: add a rep; heavier last set: match it on all sets; else +5 lb, +10 at 200+).
- * Returns {lines:[{name, last, lastDate, say, dir:"up"|"hold"|"new"|"plan"}], flags:[{text, tone:"warn"|"info"}]}. */
+ * What to know walking into a session: for each exercise, what they did last time and what to do today,
+ * plus a few flags (notes, a long gap, skipped homework, the package). Pure: the caller passes logs and billing stats.
+ * Going up needs every set to hit its reps. With a rep range ("8-10") reps climb first, then weight once every set
+ * reaches the top. Weight steps: +5 lb, +10 at 200+. Bodyweight: add a rep. A heavier last set: match it on all sets.
+ * Stuck (missed reps and no better top set across the last 3 times): drop 5 lb or swap the exercise.
+ * Returns {lines:[{rowId, name, last, lastDate, say, dir:"up"|"reps"|"hold"|"new"|"plan", weight?, stuck}], flags:[{text, tone, note?}]}.
+ * `weight` is the suggested load when it differs from the plan, so "Use these numbers" can write it in. */
 const fmtW = w => String(Math.round(w * 10) / 10);
+const repRange = r => { const m = String((r && r.reps) || "").match(/(\d+)\s*[-–]\s*(\d+)/); return m ? [+m[1], +m[2]] : null; };
 export function sessionBrief({ session, logs = [], notes = "", billing = null, before = new Date() }){
   const cut = ymdOf(before), lines = [], flags = [];
   const byEx = {};
@@ -546,27 +550,36 @@ export function sessionBrief({ session, logs = [], notes = "", billing = null, b
   }
   for (const r of (session && session.rows) || []){
     if (!r.name) continue;
-    const days = byEx[r.name.trim().toLowerCase()] || {}, lastDate = Object.keys(days).sort().pop();
-    if (!lastDate){ lines.push({ name: r.name, last: "", lastDate: "", say: "First time", dir: "new" }); continue; }
+    const days = byEx[r.name.trim().toLowerCase()] || {}, dates = Object.keys(days).sort(), lastDate = dates[dates.length - 1];
+    if (!lastDate){ lines.push({ rowId: r.id, name: r.name, last: "", lastDate: "", say: "First time", dir: "new", stuck: false }); continue; }
     const sets = days[lastDate].sort((a, b) => a.set_no - b.set_no).map(l => ({ reps: n(l.reps), weight: n(l.weight) }));
-    const last = fmtSetLog(sets), top = topSet(sets), pw = n(r.weight);
-    const target = k => repsFor(r, k);
-    const hitAll = sets.length >= setCount(r) && sets.every((s, k) => s.reps != null && (target(k) == null || s.reps >= target(k)));
-    let say, dir;
+    const last = fmtSetLog(sets), top = topSet(sets), pw = n(r.weight), range = repRange(r);
+    const goal = k => range ? range[0] : repsFor(r, k);
+    const full = sets.length >= setCount(r), hitAll = full && sets.every((s, k) => s.reps != null && (goal(k) == null || s.reps >= goal(k)));
+    const hitTop = range ? full && sets.every(s => s.reps != null && s.reps >= range[1]) : hitAll;
+    let say, dir, weight = null;
     if (top.weight != null && pw != null && pw > top.weight){ say = `Plan says ${fmtW(pw)}`; dir = "plan"; }
     else if (top.weight != null){
-      const step = top.weight >= 200 ? 10 : 5;
       const across = sets.every(s => s.weight === top.weight);
-      if (hitAll && !across){ say = `${fmtW(top.weight)} for all sets`; dir = "up"; }
-      else if (hitAll){ say = `Try ${fmtW(top.weight + step)}`; dir = "up"; }
-      else { say = `Stay at ${fmtW(top.weight)}, missed reps`; dir = "hold"; }
-    } else { say = hitAll ? "Add a rep" : "Same again, missed reps"; dir = hitAll ? "up" : "hold"; }
-    lines.push({ name: r.name, last, lastDate, say, dir });
+      if (hitTop && !across){ weight = top.weight; say = `${fmtW(weight)} for all sets`; dir = "up"; }
+      else if (hitTop){ weight = top.weight + (top.weight >= 200 ? 10 : 5); say = `Try ${fmtW(weight)}`; dir = "up"; }
+      else if (range && hitAll){ weight = top.weight; say = `${fmtW(weight)}, aim for ${range[1]} reps`; dir = "reps"; }
+      else { weight = top.weight; say = `Stay at ${fmtW(weight)}, missed reps`; dir = "hold"; }
+    } else { say = hitAll ? "Add a rep" : "Same again, missed reps"; dir = hitAll ? "reps" : "hold"; }
+    // Stuck: not ready to go up, and the last 3 times the top set never beat the first of them.
+    const tops = dates.slice(-3).map(d => topSet(days[d]));
+    const stuck = (dir === "hold" || (dir === "reps" && range)) && tops.length === 3 && tops.slice(1).every(t => (t.weight ?? -1) < (tops[0].weight ?? -1) || ((t.weight ?? -1) === (tops[0].weight ?? -1) && (t.reps ?? 0) <= (tops[0].reps ?? 0)));
+    if (stuck && dir === "hold" && top.weight != null && top.weight > 5){ weight = top.weight - 5; say = `Try ${fmtW(weight)} or swap it`; }
+    if (weight != null && pw != null && weight === pw) weight = null;
+    lines.push({ rowId: r.id, name: r.name, last, lastDate, say, dir, weight, stuck });
   }
   const note = String(notes || "").trim();
   if (note) flags.push({ text: note.length > 140 ? note.slice(0, 140) + "…" : note, tone: "warn", note: true });
   const allDays = logs.map(l => String(l.logged_on).slice(0, 10)).filter(d => d < cut).sort(), lastSeen = allDays.pop();
   if (lastSeen){ const gap = Math.round((parseYmd(cut) - parseYmd(lastSeen)) / DAYMS); if (gap >= 10) flags.push({ text: `First session in ${gap} days. Ease back in.`, tone: "warn" }); }
+  // Homework: only for clients who log it themselves, when nothing came in over the last week.
+  const hw = logs.filter(l => l.source === "client").map(l => String(l.logged_on).slice(0, 10)).filter(d => d < cut).sort().pop();
+  if (hw){ const since = Math.round((parseYmd(cut) - parseYmd(hw)) / DAYMS); if (since > 7) flags.push({ text: `No homework logged in ${since} days`, tone: "info" }); }
   if (billing && billing.bill === "package"){
     const left = billing.remaining;
     if (billing.status === "owes") flags.push({ text: "Package not marked paid", tone: "warn" });
