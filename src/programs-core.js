@@ -325,14 +325,15 @@ export function workoutEmail({ first, trainer, session, weekLabel, when, link })
 }
 
 /* ---------- logging a whole exercise on one line ----------
- * Weight first, then reps — the way it's written on a whiteboard. Read into [{reps, weight}]:
- *   "215x5 215x5 225x4"   one set per chunk: 215 lb for 5 reps, ...   (commas work too: "215x5, 215x5")
- *   "30x8"                8 reps at 30
- *   "215x5x3"             3 sets of 5 at 215
+ * Reps first, then weight. Read into [{reps, weight}]:
+ *   "5x215 5x215 4x225"   one set per chunk: 5 reps at 215, ...   (commas work too: "5x215, 5x215")
+ *   "8x30"                8 reps at 30
+ *   "3x5@215"             3 sets of 5 at 215 (the plan's sets x reps, plus the weight); "5x215x3" also works
  *   "8 8 6"               reps only, at the planned weight
  *   "8 8 6 @ 215"         reps list at one weight
  *   "bw" / "bodyweight"   no load ("12 12 bw")
- *   "3x8@215" / "3 sets of 8 at 215"   also understood
+ *   "3 sets of 8 at 215"  also understood
+ * Logs store reps and weight separately, so sets logged before the switch from weight x reps read the same.
  * plan: {weight, reps(k)} from the program row, used to fill anything left out. */
 export function parseSetLog(str, plan = {}){
   let t = String(str || "").toLowerCase().replace(/×|\*/g, "x").replace(/\b(lbs?|kgs?|reps?)\b/g, " ").replace(/\s*x\s*/g, "x").replace(/\s+/g, " ").trim();
@@ -349,18 +350,18 @@ export function parseSetLog(str, plan = {}){
     const [a, b, c] = ch.split("x").map(Number);
     if (!isFinite(a)) continue;
     if (b == null) out.push({ reps: a, weight: W(out.length ? out[out.length - 1].weight : pw) }); // bare number = reps
-    else for (let k = 0; k < Math.min(12, c || 1); k++) out.push({ reps: b, weight: W(a) });     // weight x reps (x sets)
+    else for (let k = 0; k < Math.min(12, c || 1); k++) out.push({ reps: a, weight: W(b) });     // reps x weight (x sets)
     if (out.length >= 12) break;
   }
   return out.slice(0, 12).map((x, k) => ({ reps: x.reps ?? planReps(k), weight: x.weight }));
 }
-/* Back to text the same way: "215x5 215x5 225x4", identical sets as "215x5x3". */
+/* Back to text the same way: "5x215 5x215 4x225", three or more identical sets as "3x5@215". */
 export function fmtSetLog(sets){
   const ok = (sets || []).filter(s => s && (s.reps != null || s.weight != null));
   if (!ok.length) return "";
   if (ok.every(s => s.weight == null)) return ok.map(s => s.reps ?? "?").join(" ") + " bw";
-  const one = s => s.weight == null ? `${s.reps ?? "?"} bw` : `${s.weight}x${s.reps ?? "?"}`;
-  if (ok.length > 2 && ok.every(s => s.reps === ok[0].reps && s.weight === ok[0].weight)) return `${one(ok[0])}x${ok.length}`;
+  const one = s => s.weight == null ? `${s.reps ?? "?"} bw` : `${s.reps ?? "?"}x${s.weight}`;
+  if (ok.length > 2 && ok[0].weight != null && ok[0].reps != null && ok.every(s => s.reps === ok[0].reps && s.weight === ok[0].weight)) return `${ok.length}x${ok[0].reps}@${ok[0].weight}`;
   return ok.map(one).join(" ");
 }
 
@@ -528,4 +529,63 @@ export function standardLiftHistory(logs){
     out[L.key] = Object.values(days).sort((a, b) => a.date.localeCompare(b.date));
   }
   return out;
+}
+
+/* ---------- pre-session brief ----------
+ * What to know walking into a session: for each exercise, what they did last time and what to do today,
+ * plus a few flags (notes, a long gap, skipped homework, the package). Pure: the caller passes logs and billing stats.
+ * Going up needs every set to hit its reps. With a rep range ("8-10") reps climb first, then weight once every set
+ * reaches the top. Weight steps: +5 lb, +10 at 200+. Bodyweight: add a rep. A heavier last set: match it on all sets.
+ * Stuck (missed reps and no better top set across the last 3 times): drop 5 lb or swap the exercise.
+ * Returns {lines:[{rowId, name, last, lastDate, say, dir:"up"|"reps"|"hold"|"new"|"plan", weight?, stuck}], flags:[{text, tone, note?}]}.
+ * `weight` is the suggested load when it differs from the plan, so "Use these numbers" can write it in. */
+const fmtW = w => String(Math.round(w * 10) / 10);
+const repRange = r => { const m = String((r && r.reps) || "").match(/(\d+)\s*[-–]\s*(\d+)/); return m ? [+m[1], +m[2]] : null; };
+export function sessionBrief({ session, logs = [], notes = "", billing = null, before = new Date() }){
+  const cut = ymdOf(before), lines = [], flags = [];
+  const byEx = {};
+  for (const l of logs){
+    if (!l.ex_name || (!l.done && l.reps == null && l.weight == null)) continue;
+    const d = String(l.logged_on).slice(0, 10); if (d >= cut) continue;
+    const k = l.ex_name.trim().toLowerCase(); ((byEx[k] = byEx[k] || {})[d] = byEx[k][d] || []).push(l);
+  }
+  for (const r of (session && session.rows) || []){
+    if (!r.name) continue;
+    const days = byEx[r.name.trim().toLowerCase()] || {}, dates = Object.keys(days).sort(), lastDate = dates[dates.length - 1];
+    if (!lastDate){ lines.push({ rowId: r.id, name: r.name, last: "", lastDate: "", say: "First time", dir: "new", stuck: false }); continue; }
+    const sets = days[lastDate].sort((a, b) => a.set_no - b.set_no).map(l => ({ reps: n(l.reps), weight: n(l.weight) }));
+    const last = fmtSetLog(sets), top = topSet(sets), pw = n(r.weight), range = repRange(r);
+    const goal = k => range ? range[0] : repsFor(r, k);
+    const full = sets.length >= setCount(r), hitAll = full && sets.every((s, k) => s.reps != null && (goal(k) == null || s.reps >= goal(k)));
+    const hitTop = range ? full && sets.every(s => s.reps != null && s.reps >= range[1]) : hitAll;
+    let say, dir, weight = null;
+    if (top.weight != null && pw != null && pw > top.weight){ say = `Plan says ${fmtW(pw)}`; dir = "plan"; }
+    else if (top.weight != null){
+      const across = sets.every(s => s.weight === top.weight);
+      if (hitTop && !across){ weight = top.weight; say = `${fmtW(weight)} for all sets`; dir = "up"; }
+      else if (hitTop){ weight = top.weight + (top.weight >= 200 ? 10 : 5); say = `Try ${fmtW(weight)}`; dir = "up"; }
+      else if (range && hitAll){ weight = top.weight; say = `${fmtW(weight)}, aim for ${range[1]} reps`; dir = "reps"; }
+      else { weight = top.weight; say = `Stay at ${fmtW(weight)}, missed reps`; dir = "hold"; }
+    } else { say = hitAll ? "Add a rep" : "Same again, missed reps"; dir = hitAll ? "reps" : "hold"; }
+    // Stuck: not ready to go up, and the last 3 times the top set never beat the first of them.
+    const tops = dates.slice(-3).map(d => topSet(days[d]));
+    const stuck = (dir === "hold" || (dir === "reps" && range)) && tops.length === 3 && tops.slice(1).every(t => (t.weight ?? -1) < (tops[0].weight ?? -1) || ((t.weight ?? -1) === (tops[0].weight ?? -1) && (t.reps ?? 0) <= (tops[0].reps ?? 0)));
+    if (stuck && dir === "hold" && top.weight != null && top.weight > 5){ weight = top.weight - 5; say = `Try ${fmtW(weight)} or swap it`; }
+    if (weight != null && pw != null && weight === pw) weight = null;
+    lines.push({ rowId: r.id, name: r.name, last, lastDate, say, dir, weight, stuck });
+  }
+  const note = String(notes || "").trim();
+  if (note) flags.push({ text: note.length > 140 ? note.slice(0, 140) + "…" : note, tone: "warn", note: true });
+  const allDays = logs.map(l => String(l.logged_on).slice(0, 10)).filter(d => d < cut).sort(), lastSeen = allDays.pop();
+  if (lastSeen){ const gap = Math.round((parseYmd(cut) - parseYmd(lastSeen)) / DAYMS); if (gap >= 10) flags.push({ text: `First session in ${gap} days. Ease back in.`, tone: "warn" }); }
+  // Homework: only for clients who log it themselves, when nothing came in over the last week.
+  const hw = logs.filter(l => l.source === "client").map(l => String(l.logged_on).slice(0, 10)).filter(d => d < cut).sort().pop();
+  if (hw){ const since = Math.round((parseYmd(cut) - parseYmd(hw)) / DAYMS); if (since > 7) flags.push({ text: `No homework logged in ${since} days`, tone: "info" }); }
+  if (billing && billing.bill === "package"){
+    const left = billing.remaining;
+    if (billing.status === "owes") flags.push({ text: "Package not marked paid", tone: "warn" });
+    else if (left != null && left <= 0) flags.push({ text: left < 0 ? `${-left} session${left === -1 ? "" : "s"} past the package. Renewal due` : "Last package used up. Renewal due", tone: "warn" });
+    else if (billing.status === "low") flags.push({ text: `${left} session${left === 1 ? "" : "s"} left in the package`, tone: "info" });
+  } else if (billing && billing.status === "owes") flags.push({ text: billing.label || "Owes money", tone: "warn" });
+  return { lines, flags };
 }

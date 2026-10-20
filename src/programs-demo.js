@@ -25,7 +25,7 @@ export function buildProgramsDemo(){
     for (const r of s.rows){
       const n = parseInt(r.sets, 10) || 1;
       for (let k = 1; k <= n; k++) logs.push({ program_id: program.id, session_id: s.id, row_id: r.id, set_no: k, client_id: "maya", ex_name: r.name,
-        reps: parseInt(r.reps, 10) || null, weight: r.weight ? Number(r.weight) + (k === n ? 5 : 0) : null, done: true, logged_on: day, source: s.homework ? "client" : "trainer" });
+        reps: r.name === "Hamstring Curl" ? 11 - k : parseInt(r.reps, 10) || null, weight: r.weight ? Number(r.weight) + (k === n && r.name !== "Hamstring Curl" ? 5 : 0) : null, done: true, logged_on: day, source: s.homework ? "client" : "trainer" });
     }
   }
   const sites = [[14, 22, 17, 24, 141.2], [13, 21, 16, 23, 140.4], [13, 20, 15, 22, 139.6], [12, 19, 15, 21, 138.8]];

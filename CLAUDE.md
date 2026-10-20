@@ -70,7 +70,7 @@ supabase/*.sql        schema, applied in order: schema, studio, automation, sign
 - Board features: day picker on each card, ⋯ menu, drag the ⠿ grip to another day or onto another workout to swap them (keyboard ← →), "⧉ Copy Day A" on booked empty days, and older undated workouts are auto-placed on their booked day.
 
 **Number formats. Kyle cares about these; don't change them:**
-- **Log line = weight × reps.** `215x5 215x5 225x4`, `215x5x3` (3 sets), `8 8 6` (reps at the planned weight), `12 12 bw`. Parser: `parseSetLog` / `fmtSetLog`.
+- **Log line = reps × weight** (Kyle switched from weight × reps on 2026-10-20). `5x215 5x215 4x225`, `3x5@215` (3 identical sets), `8 8 6` (reps at the planned weight), `12 12 bw`. Parser: `parseSetLog` / `fmtSetLog`. Logs store reps and weight separately, so older logs display in the new order. TrueCoach's export stays weight × reps (`parseTrueCoach`).
 - **Plan field = sets × reps.** `3x8`, `3x8,8,6`, `4x8-10`, `3x8 each`. Parser: `parseSetsReps`. The plan is displayed in words ("4 sets of 5 @ 215") so it can't be confused with the log line.
 
 **Multiple weeks on screen:** every handler calls `wkFrom(el)` to set `PG.week` from the nearest `[data-wk]`, and lookups use `inWk(selector)`. Follow this pattern for anything new on the board, or actions will land in the wrong week.
