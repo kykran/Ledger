@@ -345,13 +345,17 @@ export function parseSetLog(str, plan = {}){
   const pw = n(plan.weight), planReps = k => (plan.reps ? plan.reps(k) : null);
   const bw = /\b(bw|bodyweight|body weight)\b/.test(t); t = t.replace(/\b(bw|bodyweight|body weight)\b/g, " ").trim();
   const W = w => bw ? null : w, N = "(\\d+(?:\\.\\d+)?)";
+  // Old habit (and TrueCoach's order) is weight first: "115x8" or "3x115@8". Nobody does 115 reps at 8 lb,
+  // so when the first number is weight-sized and the second rep-sized (or the first is the planned weight), flip them.
+  const flip = (r, w) => !bw && ((r > 30 && w <= 30) || (pw != null && r === pw && w !== pw && w <= 30)) ? [w, r] : [r, w];
   let m = t.match(new RegExp(`^(\\d+)x${N}\\s*(?:@|at)\\s*${N}$`)) || t.match(new RegExp(`^(\\d+) sets? of ${N}\\s*(?:@|at)\\s*${N}$`));
-  if (m) return Array.from({ length: Math.min(12, +m[1]) }, () => ({ reps: +m[2], weight: W(+m[3]) }));
+  if (m){ const [r, w] = flip(+m[2], +m[3]); return Array.from({ length: Math.min(12, +m[1]) }, () => ({ reps: r, weight: W(w) })); }
   m = t.match(new RegExp(`^([\\d\\s,]+?)\\s*(?:@|at)\\s*${N}$`));
   if (m) return m[1].split(/[\s,]+/).filter(Boolean).slice(0, 12).map(Number).map(r => ({ reps: r, weight: W(+m[2]) }));
   const out = [];
   for (const ch of (t.match(/[\d.]+(?:x[\d.]+){0,2}/g) || [])){
-    const [a, b, c] = ch.split("x").map(Number);
+    let [a, b, c] = ch.split("x").map(Number);
+    if (b != null) [a, b] = flip(a, b);
     if (!isFinite(a)) continue;
     if (b == null) out.push({ reps: a, weight: W(out.length ? out[out.length - 1].weight : pw) }); // bare number = reps
     else for (let k = 0; k < Math.min(12, c || 1); k++) out.push({ reps: a, weight: W(b) });     // reps x weight (x sets)
