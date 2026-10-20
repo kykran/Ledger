@@ -97,6 +97,9 @@ main{padding:22px 24px 80px;display:flex;flex-direction:column;gap:18px;max-widt
 .monthsw button:hover:not(:disabled){background:var(--surface2)}
 .monthsw button:disabled{opacity:.3}
 .monthsw span{min-width:118px;text-align:center;font-weight:600;font-size:13.5px}
+.monthsw .ovseg{margin-right:4px;padding:2px}
+.monthsw .ovseg button{width:auto;height:26px;padding:0 9px;display:inline-flex;font-size:12.5px}
+.monthsw .ovseg button[aria-pressed="true"]{color:var(--ink)}
 .seg{display:inline-flex;background:var(--surface2);border-radius:9px;padding:3px;gap:2px}
 .seg button{border:0;background:none;padding:5px 10px;border-radius:7px;font-size:12.5px;color:var(--ink2);font-weight:500}
 .seg button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-sm);font-weight:600}

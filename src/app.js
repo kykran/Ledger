@@ -253,7 +253,13 @@ function renderChrome(){
   $("#pagesub").textContent = inApp ? (S.cal.at ? `Calendar read ${fmtT(S.cal.at)}` + (P("trainerName") ? ` · ${P("trainerName")}` : "") : (P("trainerName") || "")) : "Sessions, packages and billing from your calendar";
   const ms = $("#monthsw");
   ms.hidden = !(inApp && MONTH_TABS.has(S.tab) && S.month);
-  if (!ms.hidden){ const cur = M ? M.curM : S.month; ms.innerHTML = `<button data-act="mprev" aria-label="Previous month">${ic("left")}</button><span>${esc(mLabel(S.month, true))}</span><button data-act="mnext" aria-label="Next month" ${S.month>=cur?"disabled":""}>${ic("right")}</button>`; }
+  if (!ms.hidden){
+    const cur = M ? M.curM : S.month, ov = S.tab === "overview", wk = ov && M && ovWeek();
+    const tog = ov ? `<div class="seg ovseg" role="group" aria-label="Show">${[["month","Month"],["week","Week"]].map(([k,l]) => `<button data-act="ov-mode" data-k="${k}" aria-pressed="${(k==="week")===!!wk}">${l}</button>`).join("")}</div>` : "";
+    ms.innerHTML = wk
+      ? `${tog}<button data-act="wprev" aria-label="Previous week">${ic("left")}</button><span>${esc(weekLabel(wk))}</span><button data-act="wnext" aria-label="Next week" ${wk >= addDays(sow(M.now), 7*OV_AHEAD)?"disabled":""}>${ic("right")}</button>`
+      : `${tog}<button data-act="mprev" aria-label="Previous month">${ic("left")}</button><span>${esc(mLabel(S.month, true))}</span><button data-act="mnext" aria-label="Next month" ${S.month>=cur?"disabled":""}>${ic("right")}</button>`;
+  }
   $("#actions").innerHTML = inApp ? `<button class="btn icon" data-act="refresh" title="Refresh calendar" aria-label="Refresh calendar" ${S.cal.state==="loading"?"disabled":""}>${ic("refresh")}</button>
     <button class="btn" data-act="payment" ${S.readOnly?"disabled":""}>${ic("cash")}<span class="lbl">Payment</span></button>
     <button class="btn primary" data-act="new-client" ${S.readOnly?"disabled":""}>${ic("plus")}<span class="lbl">Client</span></button>` : (S.screen !== "signin" ? themeBtn : "");
@@ -408,16 +414,40 @@ function applyRentVisibility(){
 
 /* ---------- overview ---------- */
 const chipFor = st => `<span class="chip ${st.status}">${esc(st.label)}</span>`;
+/* Week view on Overview: S.ovMode is remembered per device; S.ovAt is the Monday shown. */
+const OV_AHEAD = 4;
+if (S.ovMode == null) { try { S.ovMode = localStorage.getItem("tt-ov") || "month"; } catch(e){ S.ovMode = "month"; } }
+const ovWeek = () => S.ovMode === "week" ? (S.ovAt || (S.M ? sow(S.M.now) : null)) : null;
+function setOvMode(k, M){
+  if (k === "week") S.ovAt = S.month && S.month !== M.curM ? sow(addDays(mStart(mNext(S.month)), -1)) : sow(M.now);
+  else if (S.ovAt) S.month = [mkey(S.ovAt), M.curM].sort()[0];
+  S.ovMode = k; try { localStorage.setItem("tt-ov", k); } catch(e){}
+}
+function weekTotals(M, a){
+  const b = addDays(a, 7), list = sessionsIn(M, a, b).filter(s => s.billable !== false), r = rentCfg();
+  const done = list.filter(s => !s.future), booked = list.filter(s => s.future);
+  const earned = done.reduce((x,s)=>x+s.value,0), bEarned = booked.reduce((x,s)=>x+s.value,0);
+  let rent = done.reduce((x,s)=>x+s.rent,0), bRent = booked.reduce((x,s)=>x+s.rent,0);
+  if (r.mode === "monthly"){ const wk = num(r.monthly) * 12/52, f = Math.min(1, Math.max(0, (M.now - a) / (7*DAY))); rent += wk*f; bRent += wk*(1-f); }
+  let collected = 0;
+  for (const c of S.clients){
+    for (const p of (c.payments||[])){ const d = parseDay(p.date); if (p.date && d >= a && d < b) collected += num(p.amount); }
+    if (M.stats[c.id].bill === "payg") collected += done.filter(s => s.c.id === c.id).reduce((x,s)=>x+s.value,0);
+  }
+  return {n:done.length, booked:booked.length, clients:new Set(list.map(s => s.c.id)).size, earned, rent, net:earned-rent, bNet:bEarned-bRent, collected};
+}
 function renderOverview(M){
+  if (!S.clients.length) return `<div class="card"><div class="empty"><b>No clients yet</b><span>${M.unmatched.length ? `Your calendar has ${M.unmatched.length} recurring names that look like clients.` : S.cal.state === "loading" ? "Reading your calendar…" : "Add a client, or put sessions on your calendar with the client's name as the event title."}</span>
+    ${M.unmatched.length ? `<button class="btn primary" data-tab="clients">Review suggested clients</button>` : `<button class="btn primary" data-act="new-client">Add client</button>`}</div></div>`;
+  return ovWeek() ? renderOverviewWeek(M, ovWeek()) : renderOverviewMonth(M);
+}
+function renderOverviewMonth(M){
   const k = S.month, T = monthTotals(M, k), isCur = k === M.curM, pr = isCur ? projectMonth(M, k) : {n:0, earned:0, net:0, rent:0};
-  const A2 = attention(M);
   const owed = S.clients.reduce((a,c) => a + (M.stats[c.id].balance||0), 0);
   const weekS = sow(M.now);
   const weekN = S.clients.reduce((a,c)=>a + M.stats[c.id].past.filter(s=>s.date>=weekS).length, 0);
   const booked = S.clients.reduce((a,c)=>a + M.stats[c.id].future.filter(s=>s.date < addDays(weekS,7)).length, 0);
   const prevT = monthTotals(M, mPrev(k));
-  if (!S.clients.length) return `<div class="card"><div class="empty"><b>No clients yet</b><span>${M.unmatched.length ? `Your calendar has ${M.unmatched.length} recurring names that look like clients.` : S.cal.state === "loading" ? "Reading your calendar…" : "Add a client, or put sessions on your calendar with the client's name as the event title."}</span>
-    ${M.unmatched.length ? `<button class="btn primary" data-tab="clients">Review suggested clients</button>` : `<button class="btn primary" data-act="new-client">Add client</button>`}</div></div>`;
   const delta = prevT.net ? (T.net - prevT.net) : null;
   return `<section class="card" data-tour="hero"><div class="hero">
       <div><h3>Net to you · ${esc(mName(k))}</h3>
@@ -432,7 +462,11 @@ function renderOverview(M){
     <div class="stat"><span class="k">Collected</span><span class="v">${money(T.collected)}</span><span class="d">payments this month</span></div>
     <div class="stat"><span class="k">Outstanding</span><span class="v ${owed>0.5?"neg":""}">${money(owed)}</span><span class="d">owed across clients</span></div>
   </div>
-  ${todoCard(M)}
+  ${overviewRest(M)}`;
+}
+function overviewRest(M){
+  const A2 = attention(M);
+  return `${todoCard(M)}
   <div class="grid2">
     <section class="card" data-tour="attention"><div class="card-h"><h2>Needs attention</h2><span class="small muted">${A2.length ? A2.length + " client" + (A2.length===1?"":"s") : ""}</span></div>
       ${A2.length ? `<div class="alist">${A2.map(attnRow).join("")}</div>` : `<div class="empty">Everyone is paid up with sessions left.</div>`}
@@ -443,6 +477,25 @@ function renderOverview(M){
       <dl class="kv"><dt>Average per week, last 8</dt><dd>${avgWeek(M).toFixed(1)}</dd><dt>Active clients</dt><dd>${S.clients.filter(c=>c.active!==false).length}</dd></dl>
     </section>
   </div>`;
+}
+function renderOverviewWeek(M, a){
+  const T = weekTotals(M, a), P7 = weekTotals(M, addDays(a, -7)), isCur = +a === +sow(M.now), future = a > M.now;
+  const owed = S.clients.reduce((x,c) => x + (M.stats[c.id].balance||0), 0);
+  const delta = !isCur && !future && P7.n ? T.net - P7.net : null;
+  return `<section class="card" data-tour="hero"><div class="hero">
+      <div><h3>Net to you · ${isCur ? "this week" : "week of " + esc(fmtD(a))}</h3>
+        <div class="big" style="margin-top:8px">${money(T.net)}${T.booked && T.bNet > 0 ? ` <small>→ ${money(T.net + T.bNet)}</small>` : ""}</div>
+        <div class="eq"><span><b>${money(T.earned)}</b> earned</span><span>−</span><span><b>${money(T.rent)}</b> studio rent</span>${delta !== null ? `<span class="${delta>=0?"pos":"neg"}">${delta>=0?"▲":"▼"} ${money(Math.abs(delta))} vs week before</span>` : ""}${T.booked && T.bNet > 0 ? `<span class="muted">· with what's booked</span>` : ""}</div>
+      </div>
+      <div class="spark" data-chart="spark"></div>
+    </div></section>
+  <div class="stats">
+    <div class="stat"><span class="k">Sessions</span><span class="v">${T.n}${T.booked ? `<span class="muted" style="font-size:14px;font-weight:600"> +${T.booked}</span>` : ""}</span><span class="d">${T.clients} client${T.clients===1?"":"s"}${T.booked ? ` · ${T.booked} still booked` : P7.n && !future ? ` · ${T.n-P7.n>=0?"+":""}${T.n-P7.n} vs week before` : ""}</span></div>
+    <div class="stat"><span class="k">Per session</span><span class="v">${T.n ? money2(T.net/T.n) : "–"}</span><span class="d">net, after rent</span></div>
+    <div class="stat"><span class="k">Collected</span><span class="v">${money(T.collected)}</span><span class="d">payments this week</span></div>
+    <div class="stat"><span class="k">Outstanding</span><span class="v ${owed>0.5?"neg":""}">${money(owed)}</span><span class="d">owed across clients</span></div>
+  </div>
+  ${overviewRest(M)}`;
 }
 function todoCard(M){
   const rec = recTodos(M), pg = PROGS() ? PROGS().todos(M).filter(t => t.kind !== "noprogram") : [], ml = E.monthLinkTodos(M);
@@ -1092,15 +1145,16 @@ function barChart(el, bars, opts){
   el.innerHTML = s + "</svg>";
 }
 function sparkChart(el, M){
-  const k = S.month, ms = mStart(k), days = new Date(ms.getFullYear(), ms.getMonth()+1, 0).getDate();
-  const list = sessionsIn(M, ms, mStart(mNext(k)));
+  const wk = S.tab === "overview" && ovWeek(), k = S.month, ms = wk || mStart(k), days = wk ? 7 : new Date(ms.getFullYear(), ms.getMonth()+1, 0).getDate();
+  const list = sessionsIn(M, ms, wk ? addDays(wk, 7) : mStart(mNext(k))).filter(s => !wk || s.billable !== false);
   const daily = Array(days).fill(0), fut = Array(days).fill(0);
-  for (const s of list){ const d = s.date.getDate()-1; if (s.future) fut[d] += s.value; else daily[d] += s.value; }
+  for (const s of list){ const d = wk ? Math.round((new Date(s.date.getFullYear(), s.date.getMonth(), s.date.getDate()) - ms) / DAY) : s.date.getDate()-1; if (s.future) fut[d] += s.value; else daily[d] += s.value; }
   const cum = [], cumF = []; let a = 0;
-  const todayIdx = k === M.curM ? M.now.getDate()-1 : days-1;
+  const inRange = M.now >= ms && M.now < addDays(ms, days);
+  const todayIdx = wk ? (inRange ? (M.now.getDay()+6)%7 : M.now < ms ? 0 : days-1) : k === M.curM ? M.now.getDate()-1 : days-1;
   for (let i = 0; i < days; i++){ a += daily[i]; cum.push(a); }
-  const pr = k === M.curM ? projectMonth(M, k).earned : 0;
-  let b = cum[todayIdx]; const rest = days - 1 - todayIdx; const booked = fut.reduce((x,y)=>x+y,0); const extra = Math.max(0, pr - booked);
+  const pr = wk ? fut.reduce((x,y)=>x+y,0) : k === M.curM ? projectMonth(M, k).earned : 0;
+  let b = cum[todayIdx] + (wk && M.now < ms ? fut[0] : 0); const rest = days - 1 - todayIdx; const booked = fut.reduce((x,y)=>x+y,0); const extra = Math.max(0, pr - booked);
   for (let i = 0; i < days; i++){ if (i < todayIdx) { cumF.push(null); continue; } if (i > todayIdx) b += fut[i] + (rest ? extra/rest : 0); cumF.push(b); }
   const W = Math.max(240, el.clientWidth || 400), H = 110, pl = 4, pr2 = 4, pt = 16, pb = 18;
   const max = Math.max(1, ...cum, ...cumF.filter(v=>v!==null));
@@ -1114,9 +1168,9 @@ function sparkChart(el, M){
     <line x1="${pl}" x2="${W-pr2}" y1="${H-pb}" y2="${H-pb}" stroke="var(--line)"/>
     <path d="${dA}" fill="url(#sg)"/><path d="${dL}" fill="none" stroke="var(--accent)" stroke-width="2.2" stroke-linejoin="round"/>
     ${dF && todayIdx < days-1 ? `<path d="${dF}" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-dasharray="4 4" opacity=".7"/>` : ""}
-    <circle cx="${X(todayIdx)}" cy="${Y(cum[todayIdx])}" r="4" fill="var(--accent)" stroke="var(--surface)" stroke-width="2"/>
-    <text x="${Math.min(W-60, Math.max(4, X(todayIdx)-20))}" y="${Math.max(11, Y(cum[todayIdx])-9)}">${money(cum[todayIdx])} earned</text>
-    <text x="${pl}" y="${H-4}">${MONTHS[ms.getMonth()]} 1</text><text x="${W-pr2}" y="${H-4}" text-anchor="end">${MONTHS[ms.getMonth()]} ${days}</text>
+    ${wk && M.now < ms ? "" : `<circle cx="${X(todayIdx)}" cy="${Y(cum[todayIdx])}" r="4" fill="var(--accent)" stroke="var(--surface)" stroke-width="2"/>
+    <text x="${X(todayIdx) > W-90 ? W-pr2 : Math.max(4, X(todayIdx)-20)}" y="${Math.max(11, Y(cum[todayIdx])-9)}"${X(todayIdx) > W-90 ? ' text-anchor="end"' : ""}>${money(cum[todayIdx])} earned</text>`}
+    ${wk ? `<text x="${pl}" y="${H-4}">Mon ${esc(fmtD(ms))}</text><text x="${W-pr2}" y="${H-4}" text-anchor="end">Sun ${esc(fmtD(addDays(ms, 6)))}</text>` : `<text x="${pl}" y="${H-4}">${MONTHS[ms.getMonth()]} 1</text><text x="${W-pr2}" y="${H-4}" text-anchor="end">${MONTHS[ms.getMonth()]} ${days}</text>`}
   </svg>`;
 }
 function drawCharts(M){
@@ -1356,6 +1410,9 @@ async function onClick(e){
     case "cal-list": S.calList = null; S.calListErr = null; render(); break;
     case "mprev": S.month = mPrev(S.month); render(); break;
     case "mnext": if (S.month < M.curM) S.month = mNext(S.month); render(); break;
+    case "ov-mode": setOvMode(el.getAttribute("data-k"), M); render(); break;
+    case "wprev": S.ovAt = addDays(ovWeek(), -7); render(); break;
+    case "wnext": if (ovWeek() < addDays(sow(M.now), 7*OV_AHEAD)) S.ovAt = addDays(ovWeek(), 7); render(); break;
     case "day": S.day = el.getAttribute("data-day"); render(); break;
     case "trend-mode": S.trendMode = el.getAttribute("data-mode"); render(); break;
     case "reload": location.reload(); break;
