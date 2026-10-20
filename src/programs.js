@@ -274,7 +274,8 @@ function renderProgram(c, progs){
         <div class="pg-acts">${progActs}</div></div></div>` : "";
   // A floating Today / Calendar button in thumb reach, so the zoom starts from what you're looking at.
   const zbtn = W.length ? `<button class="btn pg-zoombtn" data-act="pg-layout" data-v="${PG.layout === "cal" ? "days" : "cal"}">${PG.layout === "cal" ? "◎ Today" : "▦ Calendar"}</button>` : "";
-  return zbtn + `<section class="card pg-prog">
+  const cs = clip && clip.type === "session" && !p.shared ? `<div class="pg-clipbar" role="status"><span>⧉ <b>${esc(clip.data.name)}</b> copied.<span class="pg-cliphint"> ${PG.layout === "cal" || MODE === "plan" ? "Tap <b>Paste</b> on any day." : "Open Calendar or Plan to paste it on any day."}</span></span><button class="btn sm" data-act="pg-clipx">Done</button></div>` : "";
+  return zbtn + cs + `<section class="card pg-prog">
     <div class="pg-bar"><b class="pg-pname" title="${esc(p.name)}">${esc(p.name)}</b>${layoutSeg}${PG.layout === "cal" ? "" : modeSeg + weekChips}
       <span class="small muted pg-savest" id="pg-save">${esc(PG.save)}</span>
       <button class="btn sm ${PG.tools ? "primary" : "ghost"} pg-toolsbtn" data-act="pg-tools" aria-expanded="${!!PG.tools}" title="Week and program tools: rename, copy, repeat, AI, start date, share, archive">⋯ ${PG.tools ? "Close" : "More"}</button></div>
@@ -304,6 +305,18 @@ function copySource(p, wi, d){
   const order = weekDates(p, wi).map(x => x.getDay()), at = order.indexOf(d);
   const pick = (w, before) => (w ? (w.sessions || []) : []).filter(x => !x.homework && written(x) && hasDay(x) && (before == null || order.indexOf(+x.day) < before)).sort((a, b) => order.indexOf(+b.day) - order.indexOf(+a.day))[0];
   return pick(p.weeks[wi], at) || pick(p.weeks[wi - 1]);
+}
+/* While a workout is copied, every day gets a Paste button. */
+function pasteBtn(p, d, when, wi){
+  const cl = PG.clip; if (!cl || cl.type !== "session" || p.shared) return "";
+  return `<button class="pg-paste" data-act="pg-pasteday" data-d="${d}"${wi != null ? ` data-w="${wi}"` : ""} aria-label="Paste ${esc(cl.data.name)} on ${esc(when)}">⧉ Paste</button>`;
+}
+/* Paste the copied workout onto weekday d of week wi (adding weeks if the calendar runs ahead). */
+function pasteOn(wi, d, when){
+  const p = P(), cl = PG.clip; if (!p || !cl || cl.type !== "session") return;
+  padWeeks(p, wi); const ss = p.weeks[wi].sessions, s = copySession(cl.data); s.day = d;
+  if (/^Day [A-Z]$/.test(s.name) && ss.some(x => x.name === s.name)) s.name = "Day " + String.fromCharCode(65 + Math.min(ss.filter(x => !x.homework).length, 25));
+  ss.push(s); saveSoon(p); redraw(); C.toast(`Pasted ${s.name} on ${when}`);
 }
 /* ---------- the week board (Plan mode): one compact column per workout, side by side, on the day it's done ---------- */
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -345,7 +358,8 @@ function renderBoard(c, p, wi, week){
   for (const d of dates){
     const dow = d.getDay(), k = ymd(d), here = all.filter(x => hasDay(x.s) && +x.s.day === dow), bk = booked[k];
     const head = `<div class="pg-colh ${k === tk ? "today" : ""}"><span class="pg-colday">${DOW[dow]} <b>${d.getDate()}</b></span>${bk ? `<span class="pg-booked" title="${esc(c.name.split(" ")[0])} is booked">📅 ${esc(bk.map(tm).join(", "))}</span>` : ""}${here.length ? `<button class="pg-colplus" data-act="pg-addday" data-d="${dow}" title="Add another workout on ${DOW[dow]}" aria-label="Add another workout on ${DOW[dow]} ${d.getDate()}">+</button>` : ""}</div>`;
-    cols.push(`<div class="pg-col ${here.length ? "" : "empty"} ${bk ? "booked" : ""}" data-day="${dow}">${head}${here.map(x => renderSession(p, wi, x.si, x.s, dates)).join("")}${here.length ? "" : `<button class="pg-col-add" data-act="pg-addday" data-d="${dow}" aria-label="Add a workout on ${DOW[dow]} ${d.getDate()}"><span>+</span>Workout</button>${bk && (() => { const src = copySource(p, wi, dow); return src ? `<button class="pg-col-copy" data-act="pg-copyday" data-d="${dow}" data-from="${esc(src.id)}" title="Start from ${esc(src.name)} and change what you need">⧉ Copy ${esc(src.name)}</button>` : ""; })() || ""}`}</div>`);
+    const paste = pasteBtn(p, dow, `${DOW[dow]} ${d.getDate()}`);
+    cols.push(`<div class="pg-col ${here.length ? "" : "empty"} ${bk ? "booked" : ""}" data-day="${dow}">${head}${here.length ? "" : paste}${here.map(x => renderSession(p, wi, x.si, x.s, dates)).join("")}${here.length ? paste : `<button class="pg-col-add" data-act="pg-addday" data-d="${dow}" aria-label="Add a workout on ${DOW[dow]} ${d.getDate()}"><span>+</span>Workout</button>${bk && (() => { const src = copySource(p, wi, dow); return src ? `<button class="pg-col-copy" data-act="pg-copyday" data-d="${dow}" data-from="${esc(src.id)}" title="Start from ${esc(src.name)} and change what you need">⧉ Copy ${esc(src.name)}</button>` : ""; })() || ""}`}</div>`);
   }
   return `<div class="pg-board" role="list">${cols.join("")}</div>`;
 }
@@ -411,7 +425,7 @@ function renderCalendar(c, p){
         if (hit && !used.has(hit.session.id)){ used.add(hit.session.id); items.push(card(hit.session, wi, false, tm(a))); }
         else if (!hit && !items.length) items.push(`<button class="pg-cal-gap" data-act="pg-cal-write" data-w="${wi}" data-d="${dt.getDay()}" aria-label="Write a workout for ${esc(dt.toDateString())}"><span class="muted">${esc(tm(a))}</span> nothing written</button>`);
       }
-      return `<div class="pg-cal-d ${items.length ? "has" : ""} ${key === tk ? "today" : ""} ${key < tk ? "past" : ""}"><div class="pg-cal-dn"><span>${dt.toLocaleDateString(undefined, { weekday: "short" })}</span><b>${dt.getDate()}</b></div>${items.join("")}</div>`;
+      return `<div class="pg-cal-d ${items.length ? "has" : ""} ${key === tk ? "today" : ""} ${key < tk ? "past" : ""}"><div class="pg-cal-dn"><span>${dt.toLocaleDateString(undefined, { weekday: "short" })}</span><b>${dt.getDate()}</b></div>${items.join("")}${pasteBtn(p, dt.getDay(), dt.toDateString(), wi)}</div>`;
     }).join("");
     const left = (w.sessions || []).filter(x => !used.has(x.id) && (x.rows || []).some(r => r.name));
     const strip = (label, list) => list.length ? `<div class="pg-cal-left"><span class="small muted">${label}</span>${list.map(x => card(x, wi, false, "")).join("")}</div>` : "";
@@ -486,7 +500,7 @@ function renderSession(p, wi, si, s, dates){
   return `<section class="card pg-sess ${s.homework ? "hw" : ""} ${recS ? "rec" : ""} ${board ? "pg-mini" : ""}" id="pg-s-${esc(s.id)}" data-si="${si}">
     ${board ? boardHead(p, si, s, dates, cKey, rep) : `<div class="card-h"><div class="pg-row" style="flex:1"><input class="pg-in pg-sname" data-pg="sess" data-s="${si}" data-f="name" value="${esc(s.name)}" aria-label="Session name">
       <label class="check small pg-planonly"><input type="checkbox" data-pg="sess" data-s="${si}" data-f="homework" ${s.homework ? "checked" : ""}> Homework <span class="muted">(client can log)</span></label></div>
-      <div class="pg-acts">${recS ? `<button class="btn sm" data-act="pg-editsess" data-s="${si}" title="Switch to Plan to rewrite this workout">✎ Edit workout</button>` : ""}${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress" data-s="${si}">✦ Progress</button>` : ""}${!p.shared && C.A.programs.emailWorkout ? `<button class="btn sm" data-act="pg-mail" data-s="${si}" title="Email this workout to the client now">✉ Email</button>` : ""}<button class="btn sm pg-planonly" data-act="pg-copysess" data-s="${si}">Copy</button>
+      <div class="pg-acts">${recS ? `<button class="btn sm" data-act="pg-editsess" data-s="${si}" title="Switch to Plan to rewrite this workout">✎ Edit workout</button>` : ""}${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress" data-s="${si}">✦ Progress</button>` : ""}${!p.shared && C.A.programs.emailWorkout ? `<button class="btn sm" data-act="pg-mail" data-s="${si}" title="Email this workout to the client now">✉ Email</button>` : ""}<button class="btn sm" data-act="pg-copysess" data-s="${si}">⧉ Copy</button>
         ${rep ? "" : `<button class="btn sm pg-planonly" data-act="pg-repeat" data-s="${si}">Repeat…</button>`}
         <button class="btn sm ghost pg-planonly" data-act="pg-up" data-s="${si}" aria-label="Move up" ${si ? "" : "disabled"}>↑</button>
         ${PG.confirm === cKey ? `<button class="btn sm danger" data-act="pg-delsess" data-s="${si}">Delete?</button>` : `<button class="btn sm ghost pg-planonly" data-act="pg-confirm" data-k="${cKey}">Delete</button>`}</div></div>`}
@@ -508,11 +522,11 @@ function boardHead(p, si, s, dates, cKey, rep){
   const menu = open ? `<div class="pg-menu" role="menu">
       ${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress" data-s="${si}">✦ Progress</button>` : ""}
       ${!p.shared && C.A.programs.emailWorkout ? `<button class="btn sm" data-act="pg-mail" data-s="${si}">✉ Email it</button>` : ""}
-      <button class="btn sm" data-act="pg-copysess" data-s="${si}">Copy</button>${rep ? "" : `<button class="btn sm" data-act="pg-repeat" data-s="${si}">Repeat…</button>`}
+      ${rep ? "" : `<button class="btn sm" data-act="pg-repeat" data-s="${si}">Repeat…</button>`}
       <label class="check small"><input type="checkbox" data-pg="sess" data-s="${si}" data-f="homework" ${s.homework ? "checked" : ""}> Homework</label>
       ${PG.confirm === cKey ? `<button class="btn sm danger" data-act="pg-delsess" data-s="${si}">Delete workout?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="${cKey}">Delete</button>`}</div>` : "";
   return `<div class="pg-mhead"><button class="pg-sgrip" data-drag="sess" data-s="${si}" title="Drag to another day (or focus and use ← →)" aria-label="Move ${esc(s.name)} to another day. Drag, or use the left and right arrow keys">⠿</button><input class="pg-in pg-sname" data-pg="sess" data-s="${si}" data-f="name" value="${esc(s.name)}" aria-label="Workout name">${day}
-    <button class="btn sm ghost pg-dots" data-act="pg-more" data-id="${esc(s.id)}" aria-expanded="${open}" aria-label="More for ${esc(s.name)}">⋯</button></div>${s.homework ? `<span class="tag pg-hwtag">homework</span>` : ""}${menu}`;
+    <button class="btn sm ghost pg-cpy ${PG.clip && PG.clip.type === "session" && PG.clip.from === s.id ? "on" : ""}" data-act="pg-copysess" data-s="${si}" title="Copy, then paste on any day" aria-label="Copy ${esc(s.name)}">⧉</button><button class="btn sm ghost pg-dots" data-act="pg-more" data-id="${esc(s.id)}" aria-expanded="${open}" aria-label="More for ${esc(s.name)}">⋯</button></div>${s.homework ? `<span class="tag pg-hwtag">homework</span>` : ""}${menu}`;
 }
 
 /* ---------- quick add ---------- */
@@ -995,7 +1009,10 @@ async function onClick(el, e){
     case "pg-pasteweek": if (PG.clip && PG.clip.type === "week") mutate(p => { p.weeks[wi] = copyWeek(PG.clip.data, p.weeks[wi].label); }); break;
     case "pg-addsess": { let n = 0; mutate(p => { n = p.weeks[wi].sessions.length; p.weeks[wi].sessions.push(newSession("Day " + String.fromCharCode(65 + Math.min(n, 25)))); });
       const q = inWk(`input[data-pg="qa"][data-s="${n}"]`); if (q){ q.focus(); q.scrollIntoView({ block: "center" }); } break; }
-    case "pg-copysess": PG.clip = { type: "session", data: JSON.parse(JSON.stringify(p.weeks[wi].sessions[si])) }; C.toast("Session copied. Paste it into any week."); redraw(); break;
+    case "pg-copysess": { const x = p.weeks[wi].sessions[si]; PG.clip = { type: "session", from: x.id, data: JSON.parse(JSON.stringify(x)) }; PG.more = null; redraw(); break; }
+    case "pg-pasteday": { const d = +el.getAttribute("data-d"), w = el.hasAttribute("data-w") ? +el.getAttribute("data-w") : wi, dt = weekDates(p, w).find(x => x.getDay() === d);
+      pasteOn(w, d, dt ? `${DOW[d]} ${dt.getDate()}` : DOW[d]); break; }
+    case "pg-clipx": PG.clip = null; redraw(); break;
     case "pg-pastesess": if (PG.clip && PG.clip.type === "session") mutate(p => p.weeks[wi].sessions.push(copySession(PG.clip.data))); break;
     case "pg-delsess": mutate(p => p.weeks[wi].sessions.splice(si, 1)); break;
     case "pg-up": if (si > 0) mutate(p => { const ss = p.weeks[wi].sessions; [ss[si - 1], ss[si]] = [ss[si], ss[si - 1]]; }); break;
@@ -1447,6 +1464,15 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-cal-step{position:sticky;top:calc(var(--pg-stick,0px) + 8px);z-index:15;display:flex;gap:6px;justify-content:center;margin:0 auto 10px;width:max-content;padding:6px;border-radius:999px;background:color-mix(in srgb,var(--surface) 92%,transparent);backdrop-filter:blur(10px);border:1px solid var(--line);box-shadow:0 4px 14px rgba(0,0,0,.12)}
 .pg-cal-ws{display:flex;align-items:center;gap:4px;padding-left:6px;border-left:1px solid var(--line);margin-left:2px}.pg-cal-ws select{width:auto;padding:4px 6px;font-size:13px}
 .pg-cal-w.ghost{border-style:dashed;background:transparent}
+.pg-cpy{padding:4px 8px!important}
+.pg-cpy.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.pg-paste{all:unset;box-sizing:border-box;width:100%;cursor:pointer;text-align:center;font-size:12px;font-weight:600;color:var(--accent);padding:7px 4px;margin:4px 0;border-radius:8px;border:1.5px dashed var(--accent);background:var(--accent-soft)}
+.pg-paste:hover,.pg-paste:focus-visible{border-style:solid}
+.pg-cal-d .pg-paste{font-size:11px;padding:5px 2px;margin-top:4px}
+.pg-clipbar{position:fixed;left:16px;right:150px;bottom:calc(18px + env(safe-area-inset-bottom));z-index:25;display:flex;align-items:center;gap:8px;justify-content:space-between;max-width:440px;padding:6px 6px 6px 14px;border-radius:18px;background:var(--surface);border:1.5px solid var(--accent);box-shadow:0 6px 20px rgba(0,0,0,.2);font-size:13px}
+.pg-clipbar>span{min-width:0;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+@media (max-width:600px){.pg-cliphint{display:none}}
+@media (max-width:900px){.app:not(.bare) .pg-clipbar{bottom:calc(76px + env(safe-area-inset-bottom))}}
 .pg-zoombtn{position:fixed;right:16px;bottom:calc(18px + env(safe-area-inset-bottom));z-index:25;border-radius:999px;padding:10px 16px;font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,.25);background:var(--ink);color:var(--bg);border-color:transparent;view-transition-name:pg-zoombtn}
 #main:has(.pg-zoombtn){padding-bottom:84px}
 @media (max-width:900px){.app:not(.bare) .pg-zoombtn{bottom:calc(76px + env(safe-area-inset-bottom))}}
