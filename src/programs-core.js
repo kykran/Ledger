@@ -325,14 +325,15 @@ export function workoutEmail({ first, trainer, session, weekLabel, when, link })
 }
 
 /* ---------- logging a whole exercise on one line ----------
- * Weight first, then reps — the way it's written on a whiteboard. Read into [{reps, weight}]:
- *   "215x5 215x5 225x4"   one set per chunk: 215 lb for 5 reps, ...   (commas work too: "215x5, 215x5")
- *   "30x8"                8 reps at 30
- *   "215x5x3"             3 sets of 5 at 215
+ * Reps first, then weight. Read into [{reps, weight}]:
+ *   "5x215 5x215 4x225"   one set per chunk: 5 reps at 215, ...   (commas work too: "5x215, 5x215")
+ *   "8x30"                8 reps at 30
+ *   "3x5@215"             3 sets of 5 at 215 (the plan's sets x reps, plus the weight); "5x215x3" also works
  *   "8 8 6"               reps only, at the planned weight
  *   "8 8 6 @ 215"         reps list at one weight
  *   "bw" / "bodyweight"   no load ("12 12 bw")
- *   "3x8@215" / "3 sets of 8 at 215"   also understood
+ *   "3 sets of 8 at 215"  also understood
+ * Logs store reps and weight separately, so sets logged before the switch from weight x reps read the same.
  * plan: {weight, reps(k)} from the program row, used to fill anything left out. */
 export function parseSetLog(str, plan = {}){
   let t = String(str || "").toLowerCase().replace(/×|\*/g, "x").replace(/\b(lbs?|kgs?|reps?)\b/g, " ").replace(/\s*x\s*/g, "x").replace(/\s+/g, " ").trim();
@@ -349,18 +350,18 @@ export function parseSetLog(str, plan = {}){
     const [a, b, c] = ch.split("x").map(Number);
     if (!isFinite(a)) continue;
     if (b == null) out.push({ reps: a, weight: W(out.length ? out[out.length - 1].weight : pw) }); // bare number = reps
-    else for (let k = 0; k < Math.min(12, c || 1); k++) out.push({ reps: b, weight: W(a) });     // weight x reps (x sets)
+    else for (let k = 0; k < Math.min(12, c || 1); k++) out.push({ reps: a, weight: W(b) });     // reps x weight (x sets)
     if (out.length >= 12) break;
   }
   return out.slice(0, 12).map((x, k) => ({ reps: x.reps ?? planReps(k), weight: x.weight }));
 }
-/* Back to text the same way: "215x5 215x5 225x4", identical sets as "215x5x3". */
+/* Back to text the same way: "5x215 5x215 4x225", three or more identical sets as "3x5@215". */
 export function fmtSetLog(sets){
   const ok = (sets || []).filter(s => s && (s.reps != null || s.weight != null));
   if (!ok.length) return "";
   if (ok.every(s => s.weight == null)) return ok.map(s => s.reps ?? "?").join(" ") + " bw";
-  const one = s => s.weight == null ? `${s.reps ?? "?"} bw` : `${s.weight}x${s.reps ?? "?"}`;
-  if (ok.length > 2 && ok.every(s => s.reps === ok[0].reps && s.weight === ok[0].weight)) return `${one(ok[0])}x${ok.length}`;
+  const one = s => s.weight == null ? `${s.reps ?? "?"} bw` : `${s.reps ?? "?"}x${s.weight}`;
+  if (ok.length > 2 && ok[0].weight != null && ok[0].reps != null && ok.every(s => s.reps === ok[0].reps && s.weight === ok[0].weight)) return `${ok.length}x${ok[0].reps}@${ok[0].weight}`;
   return ok.map(one).join(" ");
 }
 
