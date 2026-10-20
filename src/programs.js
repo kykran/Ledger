@@ -395,7 +395,12 @@ function renderCalendar(c, p){
       ${rows.slice(0, 4).map(r => `<span class="pg-cal-ex ${grpClass(r.group)}"><span class="gchip">${esc(r.group || "·")}</span><span class="pg-cal-n">${esc(r.name)}</span><span class="muted">${esc(fmtSetsReps(r))}</span></span>`).join("")}
       ${more > 0 ? `<span class="small muted">+${more} more</span>` : rows.length ? "" : `<span class="small muted">empty</span>`}</button>`;
   };
-  const weeks = W.map((w, wi) => {
+  // The calendar keeps going past the written weeks: through a month past today and past the last booked session,
+  // so you can scroll ahead. Weeks not written yet show the bookings; tapping one writes that week.
+  const lastAppt = appts.reduce((m, a) => Math.max(m, Math.floor((a - start) / (7 * 86400000))), -1);
+  const N = Math.min(W.length + 26, Math.max(W.length, thisWeek + 5, lastAppt + 1));
+  const all = Array.from({ length: N }, (_, wi) => W[wi] || { label: "Week " + (wi + 1), sessions: [], ghost: true });
+  const weeks = all.map((w, wi) => {
     const used = new Set(), from = new Date(start.getTime() + wi * 7 * 86400000);
     const days = Array.from({ length: 7 }, (_, k) => {
       const dt = new Date(from.getFullYear(), from.getMonth(), from.getDate() + k), key = ymd(dt), items = [];
@@ -411,16 +416,20 @@ function renderCalendar(c, p){
     const left = (w.sessions || []).filter(x => !used.has(x.id) && (x.rows || []).some(r => r.name));
     const strip = (label, list) => list.length ? `<div class="pg-cal-left"><span class="small muted">${label}</span>${list.map(x => card(x, wi, false, "")).join("")}</div>` : "";
     const end = new Date(from.getFullYear(), from.getMonth(), from.getDate() + 6), fmt = dt => dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-    return `<section class="card pg-cal-w ${wi === thisWeek ? "now" : ""}" id="pg-cw-${wi}"><div class="card-h"><h3>${esc(w.label || "Week " + (wi + 1))} <span class="small muted">${fmt(from)} – ${fmt(end)}</span>${wi === thisWeek ? ` <span class="tag">this week</span>` : ""}</h3><button class="btn sm ghost" data-act="pg-cal-go" data-w="${wi}">Edit week</button></div>
+    return `<section class="card pg-cal-w ${wi === thisWeek ? "now" : ""} ${w.ghost ? "ghost" : ""}" id="pg-cw-${wi}" data-cw="${wi}"><div class="card-h"><h3>${esc(w.label || "Week " + (wi + 1))} <span class="small muted">${fmt(from)} – ${fmt(end)}</span>${wi === thisWeek ? ` <span class="tag">this week</span>` : ""}${w.ghost ? ` <span class="small muted">not written yet</span>` : ""}</h3>${p.shared && w.ghost ? "" : `<button class="btn sm ghost" data-act="pg-cal-go" data-w="${wi}">${w.ghost ? "Write week" : "Edit week"}</button>`}</div>
       <div class="pg-cal-days">${days}</div>
       ${strip("Not on the calendar yet", left.filter(x => !x.homework))}${strip("Homework", left.filter(x => x.homework))}</section>`;
   }).join("");
   if (PG.scrollTo === "week" || PG.calFor !== p.id){ PG.calFor = p.id; PG.scrollTo = null;
-    setTimeout(() => { const el = document.getElementById("pg-cw-" + Math.max(0, Math.min(W.length - 1, thisWeek))); if (el && thisWeek > 0) el.scrollIntoView({ block: "start", behavior: "smooth" });
+    setTimeout(() => { const el = document.getElementById("pg-cw-" + Math.max(0, Math.min(N - 1, thisWeek))); if (el && thisWeek > 0) el.scrollIntoView({ block: "start", behavior: "smooth" });
       // On a phone each week scrolls sideways: start it at today.
       document.querySelectorAll("#main .pg-cal-days").forEach(row => { const t = row.querySelector(".today"); if (t && row.scrollWidth > row.clientWidth) row.scrollLeft = t.offsetLeft - row.offsetLeft - 4; }); }, 30); }
-  return `<div class="pg-cal">${weeks}</div>${p.shared ? "" : `<div class="pg-acts" style="justify-content:flex-start"><button class="btn" data-act="pg-addweek">+ Week</button></div>`}`;
+  setTimeout(() => { const b = [...document.querySelectorAll("header.bar, header.pa-bar")].find(x => getComputedStyle(x).position === "sticky"); document.documentElement.style.setProperty("--pg-stick", (b ? b.offsetHeight : 0) + "px"); }, 0);
+  const step = `<div class="pg-cal-step" role="group" aria-label="Weeks"><button class="btn sm" data-act="pg-cal-step" data-d="-1" aria-label="Previous week">‹</button><button class="btn sm" data-act="pg-cal-step" data-d="0">This week</button><button class="btn sm" data-act="pg-cal-step" data-d="1" aria-label="Next week">›</button></div>`;
+  return `${step}<div class="pg-cal">${weeks}</div>${p.shared ? "" : `<div class="pg-acts" style="justify-content:flex-start"><button class="btn" data-act="pg-addweek">+ Week</button></div>`}`;
 }
+/* Write into a week the calendar shows ahead of the program: add the weeks up to it first. */
+function padWeeks(p, wi){ let n = 0; while (p.weeks.length <= wi){ p.weeks.push(newWeek("Week " + (p.weeks.length + 1))); n++; } if (n) saveSoon(p); }
 function repeatForm(){
   return `<span class="pg-repeat">Copy into the next <input type="number" min="1" max="52" value="${esc(PG.repeat.n || 3)}" id="pg-rep-n" class="pg-in" style="width:64px"> weeks <button class="btn sm primary" data-act="pg-repeat-go">Paste</button><button class="btn sm ghost" data-act="pg-repeat-x">Cancel</button></span>`;
 }
@@ -1059,9 +1068,15 @@ async function onClick(el, e){
       break; }
     case "pg-cal-write": { // write a workout for a booked day, beside the rest of that week
       PG.layout = "days"; PG.mode = "plan"; PG.draftWeek = null; try { localStorage.setItem("tt.pg.layout", "days"); localStorage.setItem("tt.pg.mode", "plan"); } catch (x){}
-      PG.week = +el.getAttribute("data-w"); PG.scrollWk = PG.week; PG.span = null;
+      PG.week = +el.getAttribute("data-w"); padWeeks(P(), PG.week); PG.scrollWk = PG.week; PG.span = null;
       addOnDay(+el.getAttribute("data-d")); break; }
-    case "pg-cal-go": { const sid = el.getAttribute("data-sid"), go = () => { PG.layout = "days"; try { localStorage.setItem("tt.pg.layout", "days"); } catch (x){} PG.week = +el.getAttribute("data-w"); PG.scrollTo = sid ? null : "top"; PG.repeat = null; redraw(); };
+    case "pg-cal-step": { // ‹ This week › — glide to the neighbouring week
+      const secs = [...document.querySelectorAll("#main .pg-cal-w")], d = +el.getAttribute("data-d"); if (!secs.length) break;
+      const top = el.closest(".pg-cal-step").getBoundingClientRect().bottom + 4;
+      let cur = secs.findIndex(x => x.getBoundingClientRect().bottom > top + 40); if (cur < 0) cur = secs.length - 1;
+      const to = d === 0 ? (document.querySelector("#main .pg-cal-w.now") || secs[0]) : secs[Math.max(0, Math.min(secs.length - 1, cur + d))];
+      window.scrollBy({ top: to.getBoundingClientRect().top - top, behavior: "smooth" }); break; }
+    case "pg-cal-go": { const sid = el.getAttribute("data-sid"), go = () => { padWeeks(P(), +el.getAttribute("data-w")); PG.layout = "days"; try { localStorage.setItem("tt.pg.layout", "days"); } catch (x){} PG.week = +el.getAttribute("data-w"); PG.scrollTo = sid ? null : "top"; PG.repeat = null; redraw(); };
       if (sid) zoom(el, go, () => document.getElementById("pg-s-" + sid)); else go(); break; }
     case "pg-log": PG.logFor = { w: wi, s: si }; logSheet(); break;
     case "pg-logsave": {
@@ -1423,6 +1438,8 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-done{font-size:11.5px;font-weight:600;color:var(--pos);white-space:nowrap;margin-right:4px}
 .pg-next{border-color:color-mix(in srgb,var(--accent) 45%,var(--line));background:color-mix(in srgb,var(--accent) 6%,var(--surface))}
 .pg-next h3{color:var(--accent)}
+.pg-cal-step{position:sticky;top:calc(var(--pg-stick,0px) + 8px);z-index:15;display:flex;gap:6px;justify-content:center;margin:0 auto 10px;width:max-content;padding:6px;border-radius:999px;background:color-mix(in srgb,var(--surface) 92%,transparent);backdrop-filter:blur(10px);border:1px solid var(--line);box-shadow:0 4px 14px rgba(0,0,0,.12)}
+.pg-cal-w.ghost{border-style:dashed;background:transparent}
 .pg-zoombtn{position:fixed;right:16px;bottom:calc(18px + env(safe-area-inset-bottom));z-index:25;border-radius:999px;padding:10px 16px;font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,.25);background:var(--ink);color:var(--bg);border-color:transparent;view-transition-name:pg-zoombtn}
 #main:has(.pg-zoombtn){padding-bottom:84px}
 @media (max-width:900px){.app:not(.bare) .pg-zoombtn{bottom:calc(76px + env(safe-area-inset-bottom))}}
