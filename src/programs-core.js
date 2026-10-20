@@ -126,7 +126,7 @@ export function clientProgramView({ client, trainerName, programs, exercises, lo
   const sex = client.sex, by = client.birthYear;
   const meas = (measurements || []).map(m => ({ date: String(m.taken_on).slice(0, 10), weight: m.weight != null ? Number(m.weight) : null,
     bodyFat: m.body_fat != null ? Number(m.body_fat) : bodyFat4(m, sex, ageOn(by, m.taken_on)), source: m.source })).sort((a, b) => a.date.localeCompare(b.date));
-  const strip = p => ({ id: p.id, name: p.name, startDate: p.startDate, weeks: (p.weeks || []).map(w => ({ id: w.id, label: w.label,
+  const strip = p => ({ id: p.id, name: p.name, startDate: p.startDate, weekStart: p.weekStart, weeks: (p.weeks || []).map(w => ({ id: w.id, label: w.label,
     sessions: (w.sessions || []).map(s => ({ id: s.id, name: s.name, homework: !!s.homework, notes: s.notes || "",
       rows: (s.rows || []).filter(r => r.name || r.exId).map(r => ({ id: r.id, exId: r.exId && ex[r.exId] ? r.exId : null, name: (r.exId && ex[r.exId] && ex[r.exId].name) || r.name, group: r.group || "", sets: r.sets || "", reps: r.reps || "", weight: r.weight || "", note: r.note || "" })) })) })) });
   return {
@@ -137,7 +137,7 @@ export function clientProgramView({ client, trainerName, programs, exercises, lo
   };
 }
 
-/* Program to-dos from the calendar. A program's week N covers startDate + 7N days.
+/* Program to-dos from the calendar. A program's week N covers weekZero + 7N days.
  * For each client with an active program, this week or next with more calendar sessions
  * than planned in-studio workouts is flagged; so is a calendar week past the end of the program.
  * sessionsOf(clientId) -> [{date: Date, future: bool}] (billable sessions). Returns [{key, kind, clientId, progId, week, from, to, n, planned, dates}]. */
@@ -159,7 +159,7 @@ export function programTodos({ clients, programs, sessionsOf, now = new Date(), 
       continue;
     }
     const p = progs.sort((a, b) => b.startDate.localeCompare(a.startDate))[0];
-    const [y, m, d] = p.startDate.split("-").map(Number), start = new Date(y, m - 1, d);
+    const start = weekZero(p);
     const byWeek = {};
     for (const s of ss){ if (s.date < start) continue; const i = Math.floor((sod(s.date) - start) / (7 * DAY)); (byWeek[i] = byWeek[i] || []).push(s); }
     for (const [i, list] of Object.entries(byWeek)){
@@ -281,11 +281,15 @@ export function repsFor(r, k){
 const DAYMS = 86400000;
 const sod = d => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 const parseYmd = s => { const [y, m, d] = String(s).slice(0, 10).split("-").map(Number); return new Date(y, m - 1, d); };
+/* Program weeks line up with calendar weeks: week 1 is the week (starting on program.weekStart, Monday unless set,
+ * 0 = Sunday) that holds the start date, and week N starts 7N days later. */
+export const weekStartDay = p => { const w = p && p.weekStart; return w === 0 || (w >= 1 && w <= 6) ? +w : 1; };
+export function weekZero(p){ const s = parseYmd(p.startDate); return new Date(s.getFullYear(), s.getMonth(), s.getDate() - ((s.getDay() - weekStartDay(p) + 7) % 7)); }
 /* Which written session a client does on `date`: program week = weeks since the program's start date, and the
  * nth calendar session in that week gets the nth in-studio session (Day A, Day B...). null if nothing is written. */
 export function sessionForDate(program, date, sessionDates){
   if (!program || !program.startDate) return null;
-  const start = parseYmd(program.startDate), wk = Math.floor((sod(date) - start) / (7 * DAYMS));
+  const start = weekZero(program), wk = Math.floor((sod(date) - start) / (7 * DAYMS));
   if (wk < 0 || wk >= (program.weeks || []).length) return null;
   const week = program.weeks[wk], written = (week.sessions || []).filter(s => !s.homework && (s.rows || []).some(r => r.name));
   // A workout given a day (0 = Sunday) goes on that weekday. The rest fill the other booked days in order.

@@ -3,7 +3,7 @@
  * app.js calls attach(ctx) once and then render()/onClick()/onChange()/onInput() while the Programs tab is open.
  * Data goes through ctx.A.programs (see adapter-hosted.js / programs-demo.js). */
 import { pid, newRow, newSession, newWeek, newProgram, copySession, copyWeek, repeatSession, repeatWeek, setCount,
-  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, sessionForDate, sessionBrief, findSession, parseTrueCoach, truecoachToProgram, topSet, liftDelta, STANDARD_LIFTS, standardLiftHistory } from "./programs-core.js";
+  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, sessionForDate, weekZero, weekStartDay, sessionBrief, findSession, parseTrueCoach, truecoachToProgram, topSet, liftDelta, STANDARD_LIFTS, standardLiftHistory } from "./programs-core.js";
 import { STARTER_EXERCISES } from "./exercise-seed.js";
 import { createVoice, voiceContext, VOICE_CSS } from "./programs-voice.js";
 
@@ -158,7 +158,7 @@ function whenLabel(d){
   const day = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime(), n = (day(d) - day(new Date())) / 86400000;
   return n === 0 ? "Today " + t : n === 1 ? "Tomorrow " + t : d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }) + ", " + t;
 }
-function weekIndexFor(p, d){ if (!p || !p.startDate) return 0; const [y, m, dd] = p.startDate.split("-").map(Number); return Math.max(0, Math.min((p.weeks || []).length - 1, Math.floor((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - new Date(y, m - 1, dd)) / (7 * 86400000)))); }
+function weekIndexFor(p, d){ if (!p || !p.startDate) return 0; return Math.max(0, Math.min((p.weeks || []).length - 1, Math.floor((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - weekZero(p)) / (7 * 86400000)))); }
 function renderClientList(){
   const progOf = id => (PG.progs || []).filter(p => p.clientId === id && p.status !== "archived");
   const list = C.S.clients.filter(c => c.active !== false).map(c => ({ c, next: nextOf(c) }))
@@ -308,10 +308,10 @@ function copySource(p, wi, d){
 /* ---------- the week board (Plan mode): one compact column per workout, side by side, on the day it's done ---------- */
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const hasDay = s => s.day !== null && s.day !== undefined && s.day !== "";
-/* The 7 dates of program week wi, starting on the program's start day. */
+/* The 7 dates of program week wi, starting on the program's week start day (Monday unless changed). */
 function weekDates(p, wi){
-  const [y, m, d] = String(p.startDate || today()).split("-").map(Number);
-  return Array.from({ length: 7 }, (_, k) => new Date(y, m - 1, d + wi * 7 + k));
+  const z = weekZero({ ...p, startDate: p.startDate || today() });
+  return Array.from({ length: 7 }, (_, k) => new Date(z.getFullYear(), z.getMonth(), z.getDate() + wi * 7 + k));
 }
 /* Plan shows a run of weeks stacked, so you can scroll up and down to compare. The selected week is in the middle. */
 function renderWeeks(c, p, sel){
@@ -381,7 +381,7 @@ function apptsOf(c){ if (c.shared) return []; const M = C.getModel && C.getModel
 function renderCalendar(c, p){
   const W = p.weeks || [];
   if (!W.length) return `<div class="card"><div class="empty">No weeks yet. <button class="btn sm primary" data-act="pg-addweek">Add a week</button></div></div>`;
-  const [y, m, d] = String(p.startDate || today()).split("-").map(Number), start = new Date(y, m - 1, d);
+  const start = weekZero({ ...p, startDate: p.startDate || today() });
   const appts = apptsOf(c), byDay = {}, logged = {}, sess = {};
   for (const a of appts){ const k = ymd(a); (byDay[k] = byDay[k] || []).push(a); }
   for (const l of PG.logs[c.id] || []) if (l.done || l.reps != null){ const k = String(l.logged_on).slice(0, 10); (logged[k] = logged[k] || new Set()).add(l.session_id); }
@@ -425,9 +425,12 @@ function renderCalendar(c, p){
       // On a phone each week scrolls sideways: start it at today.
       document.querySelectorAll("#main .pg-cal-days").forEach(row => { const t = row.querySelector(".today"); if (t && row.scrollWidth > row.clientWidth) row.scrollLeft = t.offsetLeft - row.offsetLeft - 4; }); }, 30); }
   setTimeout(() => { const b = [...document.querySelectorAll("header.bar, header.pa-bar")].find(x => getComputedStyle(x).position === "sticky"); document.documentElement.style.setProperty("--pg-stick", (b ? b.offsetHeight : 0) + "px"); }, 0);
-  const step = `<div class="pg-cal-step" role="group" aria-label="Weeks"><button class="btn sm" data-act="pg-cal-step" data-d="-1" aria-label="Previous week">‹</button><button class="btn sm" data-act="pg-cal-step" data-d="0">This week</button><button class="btn sm" data-act="pg-cal-step" data-d="1" aria-label="Next week">›</button></div>`;
+  const ws = weekStartDay(p), startSel = p.shared ? "" : `<label class="pg-cal-ws small muted">Starts <select class="pg-in" data-pg="wkstart" aria-label="Weeks start on">${[1, 2, 3, 4, 5, 6, 0].map(d => `<option value="${d}" ${d === ws ? "selected" : ""}>${DAYS[d].slice(0, 3)}</option>`).join("")}</select></label>`;
+  const step = `<div class="pg-cal-step" role="group" aria-label="Weeks"><button class="btn sm" data-act="pg-cal-step" data-d="-1" aria-label="Previous week">‹</button><button class="btn sm" data-act="pg-cal-step" data-d="0">This week</button><button class="btn sm" data-act="pg-cal-step" data-d="1" aria-label="Next week">›</button>${startSel}</div>`;
   return `${step}<div class="pg-cal">${weeks}</div>${p.shared ? "" : `<div class="pg-acts" style="justify-content:flex-start"><button class="btn" data-act="pg-addweek">+ Week</button></div>`}`;
 }
+const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const profWeekStart = () => { const w = C.S.prof && C.S.prof.weekStart; return w === 0 || (w >= 1 && w <= 6) ? +w : 1; };
 /* Write into a week the calendar shows ahead of the program: add the weeks up to it first. */
 function padWeeks(p, wi){ let n = 0; while (p.weeks.length <= wi){ p.weeks.push(newWeek("Week " + (p.weeks.length + 1))); n++; } if (n) saveSoon(p); }
 function repeatForm(){
@@ -838,7 +841,7 @@ async function tcImport(){
       const wk = copyWeek(last, "Week 1");
       for (const s of wk.sessions) for (const r of s.rows) r.note = String(r.note || "").split(" · ").filter(x => !/^Logged:/.test(x)).join(" · ");
       const d = new Date(), mon = new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7));
-      const np = { id: pid("p"), ...newProgram(c.id, c.name.split(" ")[0] + "'s program"), weeks: [wk] };
+      const np = { id: pid("p"), weekStart: profWeekStart(), ...newProgram(c.id, c.name.split(" ")[0] + "'s program"), weeks: [wk] };
       np.startDate = mon.getFullYear() + "-" + String(mon.getMonth() + 1).padStart(2, "0") + "-" + String(mon.getDate()).padStart(2, "0");
       await C.A.programs.saveProgram(np); PG.progs.push(np); PG.progId = np.id; PG.week = 0; PG.mode = "plan";
     }
@@ -925,7 +928,7 @@ async function aiAccept(how){
   const X = PG.ai, R = X.result;
   if (X.mode === "create"){
     const weeks = []; for (const w of R.weeks || []){ const ss = []; for (const s of w.sessions || []) ss.push(await aiSession(s)); weeks.push({ id: pid("w"), label: w.label || "Week " + (weeks.length + 1), sessions: ss }); }
-    const np = { id: pid("p"), ...newProgram(PG.clientId, R.name || "Program"), weeks };
+    const np = { id: pid("p"), weekStart: profWeekStart(), ...newProgram(PG.clientId, R.name || "Program"), weeks };
     PG.progs.push(np); PG.progId = np.id; PG.week = 0; saveSoon(np);
   } else {
     const p = P(), ss = []; for (const s of R.sessions || []) ss.push(await aiSession(s));
@@ -980,7 +983,7 @@ async function onClick(el, e){
     case "pg-sub": PG.sub = el.getAttribute("data-v"); redraw(); break;
     case "pg-new": case "pg-newprog": {
       const name = act === "pg-new" ? (valIn("pg-newname").trim() || "Program") : "New program";
-      const np = { id: pid("p"), ...newProgram(PG.clientId, name) };
+      const np = { id: pid("p"), weekStart: profWeekStart(), ...newProgram(PG.clientId, name) };
       PG.progs.push(np); PG.progId = np.id; PG.week = 0; saveSoon(np); redraw(); break; }
     case "pg-archive": mutate(p => p.status = p.status === "archived" ? "active" : "archived"); break;
     case "pg-confirm": PG.confirm = el.getAttribute("data-k"); PG.edEx ? exSheet() : redraw(); break;
@@ -1183,6 +1186,9 @@ function onChange(t){
     return true; }
   if (k === "logline"){ commitLine(si, ri, t.value); setTimeout(() => redraw(), 0); return true; }
   if (k === "prog" && t.getAttribute("data-f") === "startDate"){ redraw(); return true; }
+  if (k === "wkstart"){ // which day a week starts on: this program, and the default for new ones
+    const p = P(); if (!p || p.shared) return true; p.weekStart = +t.value; saveSoon(p);
+    C.saveProfile({ weekStart: +t.value }).catch(() => {}); PG.calFor = null; redraw(); return true; }
   if (k === "tcfile"){
     const f = t.files && t.files[0]; if (!f) return true;
     f.text().then(txt => {
@@ -1439,6 +1445,7 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-next{border-color:color-mix(in srgb,var(--accent) 45%,var(--line));background:color-mix(in srgb,var(--accent) 6%,var(--surface))}
 .pg-next h3{color:var(--accent)}
 .pg-cal-step{position:sticky;top:calc(var(--pg-stick,0px) + 8px);z-index:15;display:flex;gap:6px;justify-content:center;margin:0 auto 10px;width:max-content;padding:6px;border-radius:999px;background:color-mix(in srgb,var(--surface) 92%,transparent);backdrop-filter:blur(10px);border:1px solid var(--line);box-shadow:0 4px 14px rgba(0,0,0,.12)}
+.pg-cal-ws{display:flex;align-items:center;gap:4px;padding-left:6px;border-left:1px solid var(--line);margin-left:2px}.pg-cal-ws select{width:auto;padding:4px 6px;font-size:13px}
 .pg-cal-w.ghost{border-style:dashed;background:transparent}
 .pg-zoombtn{position:fixed;right:16px;bottom:calc(18px + env(safe-area-inset-bottom));z-index:25;border-radius:999px;padding:10px 16px;font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,.25);background:var(--ink);color:var(--bg);border-color:transparent;view-transition-name:pg-zoombtn}
 #main:has(.pg-zoombtn){padding-bottom:84px}

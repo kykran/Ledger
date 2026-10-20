@@ -1,5 +1,5 @@
 /* A client's private program page: their program and videos, homework logging, bodyweight and progress charts. */
-import { clientProgramView, setCount, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, repsFor } from "./programs-core.js";
+import { clientProgramView, weekZero, setCount, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, repsFor } from "./programs-core.js";
 
 const $m = document.getElementById("m");
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -19,8 +19,7 @@ const logsFor = (pid, sid) => { const o = {}; for (const l of V.logs) if (l.p ==
 
 function currentWeek(p){
   if (!p.startDate || !p.weeks.length) return 0;
-  const [y, m, d] = p.startDate.split("-").map(Number);
-  const i = Math.floor((Date.now() - new Date(y, m - 1, d).getTime()) / (7 * 86400000));
+  const i = Math.floor((Date.now() - weekZero(p).getTime()) / (7 * 86400000));
   return Math.max(0, Math.min(p.weeks.length - 1, i));
 }
 
