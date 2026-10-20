@@ -4,7 +4,7 @@
 //        Only sessions the trainer marked as homework can be logged.
 //   POST {t, action:"weight", weight, taken_on}   -> adds a bodyweight entry
 import { admin, send, readJson } from "./_lib.js";
-import { clientProgramView, findSession } from "../src/programs-core.js";
+import { clientProgramView, findSession, timedPlan } from "../src/programs-core.js";
 
 const TOKEN = /^[A-Za-z0-9_-]{16,64}$/;
 const day = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s || "")) ? String(s) : new Date().toISOString().slice(0, 10);
@@ -72,7 +72,7 @@ export default async function handler(req, res){
       const now = new Date().toISOString(), on = day(b.logged_on);
       const sets = (Array.isArray(b.sets) ? b.sets : []).slice(0, 200).filter(s => rows[s.row_id] && Number.isInteger(+s.set_no) && +s.set_no >= 1 && +s.set_no <= 12);
       const up = sets.map(s => ({ user_id: uid, program_id: pr.id, session_id: found.session.id, row_id: s.row_id, set_no: +s.set_no, client_id: cid,
-        ex_name: String(rows[s.row_id].name || "").slice(0, 120), reps: numOrNull(s.reps), weight: numOrNull(s.weight), done: !!s.done, logged_on: on, source: "client", updated_at: now }));
+        ex_name: String(rows[s.row_id].name || "").slice(0, 120), reps: numOrNull(s.reps), weight: numOrNull(s.weight), timed: timedPlan(rows[s.row_id]), done: !!s.done, logged_on: on, source: "client", updated_at: now }));
       if (up.length){ const { error } = await admin.from("program_logs").upsert(up); if (error) throw error; }
       return send(res, 200, { ok: true, saved: up.length });
     }

@@ -69,7 +69,7 @@ function logSummary(logs){
   return Object.entries(by).slice(0, 40).map(([name, ls]) => {
     ls.sort((a, b) => String(a.logged_on).localeCompare(String(b.logged_on)));
     const days = {}; for (const l of ls){ const d = String(l.logged_on).slice(0, 10); (days[d] = days[d] || []).push(l); }
-    const last = Object.entries(days).slice(-3).map(([d, s]) => `${d}: ${s.map(x => `${x.reps ?? "?"}x${x.weight ?? "bw"}${x.done ? "" : " (missed)"}`).join(", ")}`);
+    const last = Object.entries(days).slice(-3).map(([d, s]) => `${d}: ${s.map(x => `${x.reps ?? "?"}${x.timed ? "s" : ""}x${x.weight ?? "bw"}${x.done ? "" : " (missed)"}`).join(", ")}`);
     return `  ${name} -> ${last.join(" | ")}`;
   }).join("\n");
 }

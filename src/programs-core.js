@@ -132,7 +132,7 @@ export function clientProgramView({ client, trainerName, programs, exercises, lo
   return {
     first: String(client.name || "").trim().split(/[\s+&]/)[0] || "there", trainer: trainerName || "",
     programs: active.map(strip), exercises: ex,
-    logs: (logs || []).map(l => ({ p: l.program_id, s: l.session_id, r: l.row_id, n: l.set_no, reps: l.reps != null ? Number(l.reps) : null, weight: l.weight != null ? Number(l.weight) : null, done: !!l.done, date: String(l.logged_on).slice(0, 10), by: l.source, ex: l.ex_name })),
+    logs: (logs || []).map(l => ({ p: l.program_id, s: l.session_id, r: l.row_id, n: l.set_no, reps: l.reps != null ? Number(l.reps) : null, weight: l.weight != null ? Number(l.weight) : null, timed: !!l.timed, done: !!l.done, date: String(l.logged_on).slice(0, 10), by: l.source, ex: l.ex_name })),
     measurements: meas, updated: new Date().toISOString()
   };
 }
@@ -277,6 +277,9 @@ export function repsFor(r, k){
   return parseInt(parts[Math.min(k, parts.length - 1)], 10) || null;
 }
 
+/* A timed exercise: the plan's reps are seconds ("3x30s", "45 sec"). */
+export const timedPlan = r => /^\s*[x×]?\s*\d+(?:\s*-\s*\d+)?\s*(?:s|secs?|seconds?)\b/i.test(String((r && r.reps) || ""));
+
 /* ---------- workout emails ---------- */
 const DAYMS = 86400000;
 const sod = d => new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -337,11 +340,14 @@ export function workoutEmail({ first, trainer, session, weekLabel, when, link })
  *   "8 8 6 @ 215"         reps list at one weight
  *   "bw" / "bodyweight"   no load ("12 12 bw")
  *   "3 sets of 8 at 215"  also understood
+ *   "30s" / "3x30s"       seconds, not reps (timed: true, seconds kept in reps): "45s 45s 30s", "3x30s@25", "30sx25"
  * Logs store reps and weight separately, so sets logged before the switch from weight x reps read the same.
- * plan: {weight, reps(k)} from the program row, used to fill anything left out. */
+ * plan: {weight, reps(k), timed} from the program row, used to fill anything left out. */
 export function parseSetLog(str, plan = {}){
-  let t = String(str || "").toLowerCase().replace(/×|\*/g, "x").replace(/\b(lbs?|kgs?|reps?)\b/g, " ").replace(/\s*x\s*/g, "x").replace(/\s+/g, " ").trim();
+  let t = String(str || "").toLowerCase().replace(/×|\*/g, "x").replace(/\b(lbs?|kgs?|reps?)\b/g, " ").replace(/(\d)\s*(?:seconds?|secs?|s)(?=x|@|\s|$)/g, "$1s").replace(/\s*x\s*/g, "x").replace(/\s+/g, " ").trim();
   if (!t) return [];
+  // A number ending in s is seconds: "30s", "3x30s", "3x30s@25", "45s 45s 30s". Bare numbers on a timed exercise are seconds too.
+  if (/\ds(?=x|@|\s|$)/.test(t) || plan.timed) return parseTimed(t, plan);
   const pw = n(plan.weight), planReps = k => (plan.reps ? plan.reps(k) : null);
   const bw = /\b(bw|bodyweight|body weight)\b/.test(t); t = t.replace(/\b(bw|bodyweight|body weight)\b/g, " ").trim();
   const W = w => bw ? null : w, N = "(\\d+(?:\\.\\d+)?)";
@@ -363,13 +369,35 @@ export function parseSetLog(str, plan = {}){
   }
   return out.slice(0, 12).map((x, k) => ({ reps: x.reps ?? planReps(k), weight: x.weight }));
 }
+function parseTimed(t, plan){
+  const bw = /\b(bw|bodyweight|body weight)\b/.test(t); t = t.replace(/\b(bw|bodyweight|body weight)\b/g, " ").trim();
+  const pw = bw ? null : n(plan.weight), N = "(\\d+(?:\\.\\d+)?)";
+  // "3x30s" is 3 sets of 30 seconds (and "3x30" on a timed exercise); a first number over 10 is a weight ("25x30s").
+  const m = t.match(new RegExp(`^(\\d+)x${N}s?\\s*(?:@|at)\\s*${N}$`)) || t.match(new RegExp(`^(\\d+)x${N}s${plan.timed ? "?" : ""}$`));
+  if (m && +m[1] <= 10) return Array.from({ length: Math.min(12, +m[1]) }, () => ({ reps: +m[2], weight: bw ? null : m[3] != null ? +m[3] : pw, timed: true }));
+  const out = [];
+  for (const ch of (t.match(/[\d.]+s?(?:x[\d.]+s?)?/g) || [])){
+    const [a, b] = ch.split("x"), as = /s$/.test(a);
+    // "30sx25" = 30 seconds holding 25; "25x30s" = the same, weight first.
+    const secs = b != null && !as && /s$/.test(b) ? parseFloat(b) : parseFloat(a), w = b == null ? null : parseFloat(b != null && !as && /s$/.test(b) ? a : b);
+    if (!isFinite(secs)) continue;
+    out.push({ reps: secs, weight: bw ? null : w ?? (out.length ? out[out.length - 1].weight : pw), timed: true });
+    if (out.length >= 12) break;
+  }
+  return out;
+}
 /* Back to text the same way: "5x215 5x215 4x225", three or more identical sets as "3x5@215". */
 export function fmtSetLog(sets){
   const ok = (sets || []).filter(s => s && (s.reps != null || s.weight != null));
   if (!ok.length) return "";
-  if (ok.every(s => s.weight == null)) return ok.map(s => s.reps ?? "?").join(" ") + " bw";
-  const one = s => s.weight == null ? `${s.reps ?? "?"} bw` : `${s.reps ?? "?"}x${s.weight}`;
-  if (ok.length > 2 && ok[0].weight != null && ok[0].reps != null && ok.every(s => s.reps === ok[0].reps && s.weight === ok[0].weight)) return `${ok.length}x${ok[0].reps}@${ok[0].weight}`;
+  const u = s => s.timed ? "s" : "";
+  if (ok.every(s => s.timed && s.weight == null)){
+    if (ok.length > 2 && ok.every(s => s.reps === ok[0].reps)) return `${ok.length}x${ok[0].reps ?? "?"}s`;
+    return ok.map(s => `${s.reps ?? "?"}s`).join(" ");
+  }
+  if (ok.every(s => s.weight == null)) return ok.map(s => (s.reps ?? "?") + u(s)).join(" ") + " bw";
+  const one = s => s.weight == null ? `${s.reps ?? "?"}${u(s)}${s.timed ? "" : " bw"}` : `${s.reps ?? "?"}${u(s)}x${s.weight}`;
+  if (ok.length > 2 && ok[0].weight != null && ok[0].reps != null && ok.every(s => s.reps === ok[0].reps && s.weight === ok[0].weight && !!s.timed === !!ok[0].timed)) return `${ok.length}x${ok[0].reps}${u(ok[0])}@${ok[0].weight}`;
   return ok.map(one).join(" ");
 }
 
@@ -504,7 +532,7 @@ export function topSet(logs){
   for (const l of logs || []){
     if (!l.done && l.reps == null && l.weight == null) continue;
     const w = n(l.weight), r = n(l.reps);
-    if (!best || (w ?? -1) > (best.weight ?? -1) || ((w ?? -1) === (best.weight ?? -1) && (r ?? 0) > (best.reps ?? 0))) best = { weight: w, reps: r };
+    if (!best || (w ?? -1) > (best.weight ?? -1) || ((w ?? -1) === (best.weight ?? -1) && (r ?? 0) > (best.reps ?? 0))) best = { weight: w, reps: r, timed: !!l.timed };
   }
   return best;
 }
@@ -514,7 +542,7 @@ export function liftDelta(cur, prev){
   const dw = cur.weight != null && prev.weight != null ? Math.round((cur.weight - prev.weight) * 10) / 10 : 0;
   const dr = cur.reps != null && prev.reps != null ? cur.reps - prev.reps : 0;
   const part = (v, u) => (v > 0 ? "+" : "−") + Math.abs(v) + u;
-  const bits = []; if (dw) bits.push(part(dw, " lb")); if (dr) bits.push(part(dr, dr === 1 || dr === -1 ? " rep" : " reps"));
+  const bits = []; if (dw) bits.push(part(dw, " lb")); if (dr) bits.push(part(dr, cur.timed ? "s" : dr === 1 || dr === -1 ? " rep" : " reps"));
   const dir = dw > 0 || (dw === 0 && dr > 0) ? "up" : dw < 0 || (dw === 0 && dr < 0) ? "down" : "same";
   return { dw, dr, dir, text: bits.length ? bits.join(" · ") : "same as last time" };
 }
@@ -561,7 +589,7 @@ export function sessionBrief({ session, logs = [], notes = "", billing = null, b
     if (!r.name) continue;
     const days = byEx[r.name.trim().toLowerCase()] || {}, dates = Object.keys(days).sort(), lastDate = dates[dates.length - 1];
     if (!lastDate){ lines.push({ rowId: r.id, name: r.name, last: "", lastDate: "", say: "First time", dir: "new", stuck: false }); continue; }
-    const sets = days[lastDate].sort((a, b) => a.set_no - b.set_no).map(l => ({ reps: n(l.reps), weight: n(l.weight) }));
+    const sets = days[lastDate].sort((a, b) => a.set_no - b.set_no).map(l => ({ reps: n(l.reps), weight: n(l.weight), timed: !!l.timed })), secs = sets.some(x => x.timed);
     const last = fmtSetLog(sets), top = topSet(sets), pw = n(r.weight), range = repRange(r);
     const goal = k => range ? range[0] : repsFor(r, k);
     const full = sets.length >= setCount(r), hitAll = full && sets.every((s, k) => s.reps != null && (goal(k) == null || s.reps >= goal(k)));
@@ -572,9 +600,10 @@ export function sessionBrief({ session, logs = [], notes = "", billing = null, b
       const across = sets.every(s => s.weight === top.weight);
       if (hitTop && !across){ weight = top.weight; say = `${fmtW(weight)} for all sets`; dir = "up"; }
       else if (hitTop){ weight = top.weight + (top.weight >= 200 ? 10 : 5); say = `Try ${fmtW(weight)}`; dir = "up"; }
-      else if (range && hitAll){ weight = top.weight; say = `${fmtW(weight)}, aim for ${range[1]} reps`; dir = "reps"; }
-      else { weight = top.weight; say = `Stay at ${fmtW(weight)}, missed reps`; dir = "hold"; }
-    } else { say = hitAll ? "Add a rep" : "Same again, missed reps"; dir = hitAll ? "reps" : "hold"; }
+      else if (range && hitAll){ weight = top.weight; say = `${fmtW(weight)}, aim for ${range[1]}${secs ? "s" : " reps"}`; dir = "reps"; }
+      else { weight = top.weight; say = `Stay at ${fmtW(weight)}, ${secs ? "came up short" : "missed reps"}`; dir = "hold"; }
+    } else if (secs){ say = hitAll ? "Add 5–10s" : "Same again, came up short"; dir = hitAll ? "reps" : "hold"; }
+    else { say = hitAll ? "Add a rep" : "Same again, missed reps"; dir = hitAll ? "reps" : "hold"; }
     // Stuck: not ready to go up, and the last 3 times the top set never beat the first of them.
     const tops = dates.slice(-3).map(d => topSet(days[d]));
     const stuck = (dir === "hold" || (dir === "reps" && range)) && tops.length === 3 && tops.slice(1).every(t => (t.weight ?? -1) < (tops[0].weight ?? -1) || ((t.weight ?? -1) === (tops[0].weight ?? -1) && (t.reps ?? 0) <= (tops[0].reps ?? 0)));
