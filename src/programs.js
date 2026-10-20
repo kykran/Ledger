@@ -250,7 +250,7 @@ function renderProgram(c, progs){
   const week = W[wi];
   const clip = PG.clip;
   const progSel = progs.length > 1 ? `<select class="pg-in" data-pg="progsel">${progs.map(x => `<option value="${esc(x.id)}" ${x.id === p.id ? "selected" : ""}>${esc(x.name)}${x.status === "archived" ? " (archived)" : ""}</option>`).join("")}</select>` : "";
-  const layoutSeg = `<div class="seg pg-layout" role="group" aria-label="Program view">${[["days", "Days"], ["cal", "Calendar"]].map(([v, l]) => `<button data-act="pg-layout" data-v="${v}" aria-pressed="${PG.layout === v}">${l}</button>`).join("")}</div>`;
+  const layoutSeg = `<div class="seg pg-layout" role="group" aria-label="Program view">${[["days", "Today"], ["cal", "Calendar"]].map(([v, l]) => `<button data-act="pg-layout" data-v="${v}" aria-pressed="${PG.layout === v}">${l}</button>`).join("")}</div>`;
   MODE = modeFor(week);
   const modeSeg = `<div class="seg pg-layout" role="group" aria-label="Mode">${[["record", "Record"], ["plan", "Plan"]].map(([v, l]) => `<button data-act="pg-mode" data-v="${v}" aria-pressed="${MODE === v}" title="${v === "record" ? "Log what the client did" : "Write and edit the program"}">${l}</button>`).join("")}</div>`;
   const weekChips = `<div class="pg-weeks" role="tablist">${W.map((w, i) => `<button role="tab" aria-selected="${i === wi}" data-act="pg-week" data-i="${i}">${esc(w.label || "Week " + (i + 1))}</button>`).join("")}<button data-act="pg-addweek" title="Add a week">+ Week</button></div>`;
@@ -272,7 +272,9 @@ function renderProgram(c, progs){
       <div class="pg-row"><span class="small muted pg-tl">Program</span><input class="pg-in pg-title" data-pg="prog" data-f="name" value="${esc(p.name)}" aria-label="Program name" style="max-width:240px">${progSel}
         <label class="small muted pg-start">Week 1 starts <input type="date" class="pg-in" data-pg="prog" data-f="startDate" value="${esc(p.startDate || "")}" ${p.shared ? "disabled" : ""}></label>
         <div class="pg-acts">${progActs}</div></div></div>` : "";
-  return `<section class="card pg-prog">
+  // A floating Today / Calendar button in thumb reach, so the zoom starts from what you're looking at.
+  const zbtn = W.length ? `<button class="btn pg-zoombtn" data-act="pg-layout" data-v="${PG.layout === "cal" ? "days" : "cal"}">${PG.layout === "cal" ? "◎ Today" : "▦ Calendar"}</button>` : "";
+  return zbtn + `<section class="card pg-prog">
     <div class="pg-bar"><b class="pg-pname" title="${esc(p.name)}">${esc(p.name)}</b>${layoutSeg}${PG.layout === "cal" ? "" : modeSeg + weekChips}
       <span class="small muted pg-savest" id="pg-save">${esc(PG.save)}</span>
       <button class="btn sm ${PG.tools ? "primary" : "ghost"} pg-toolsbtn" data-act="pg-tools" aria-expanded="${!!PG.tools}" title="Week and program tools: rename, copy, repeat, AI, start date, share, archive">⋯ ${PG.tools ? "Close" : "More"}</button></div>
@@ -352,6 +354,29 @@ function renderBoard(c, p, wi, week){
  * Which workout lands on which day: logged sets (by their date) first, then the client's calendar sessions
  * mapped to written sessions the same way workout emails are (nth session of the week -> nth in-studio day). */
 const ymd = d => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+/* The workout that matters right now: today's if they're booked today, else their next booked session. {weekIndex, session} or null. */
+function focusOf(c, p){
+  if (!c || !p) return null;
+  const appts = apptsOf(c), now = new Date(), next = nextOf(c);
+  return (appts.some(a => ymd(a) === ymd(now)) && sessionForDate(p, now, appts)) || (next && sessionForDate(p, next, appts)) || sessionForDate(p, now, appts);
+}
+/* Calendar and day view zoom into each other: the tapped card grows into the workout, and shrinks back into its day.
+ * View Transitions where the browser has them, a quick scale from the card otherwise, nothing with reduced motion. */
+function zoom(from, change, to){
+  const land = () => { const el = to(); if (el) el.scrollIntoView({ block: "center", inline: "center" }); return el; };
+  const still = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (!from || still){ change(); land(); return; }
+  if (document.startViewTransition){
+    from.style.viewTransitionName = "pg-zoom";
+    const vt = document.startViewTransition(() => { change(); const el = land(); if (el) el.style.viewTransitionName = "pg-zoom"; });
+    vt.finished.finally(() => { const el = to(); if (el) el.style.viewTransitionName = ""; });
+    return;
+  }
+  const r = from.getBoundingClientRect(); change(); const el = land(); if (!el || !el.animate) return;
+  const t = el.getBoundingClientRect();
+  el.animate([{ transformOrigin: "top left", transform: `translate(${r.left - t.left}px,${r.top - t.top}px) scale(${r.width / t.width},${r.height / t.height})`, opacity: 0.5 },
+    { transformOrigin: "top left", transform: "none", opacity: 1 }], { duration: 280, easing: "cubic-bezier(.2,.8,.2,1)" });
+}
 function apptsOf(c){ if (c.shared) return []; const M = C.getModel && C.getModel(), st = M && M.stats && M.stats[c.id]; return st ? [...st.past, ...st.future].map(x => x.date).filter(d => d instanceof Date) : []; }
 function renderCalendar(c, p){
   const W = p.weeks || [];
@@ -939,7 +964,9 @@ async function onClick(el, e){
       redraw(); break; }
     case "pg-open": { PG.clientId = el.getAttribute("data-id"); PG.progId = null; PG.sub = "program"; PG.repeat = null; const wk = el.getAttribute("data-week");
       const c0 = client(PG.clientId), p0 = c0 && progsOf(c0).find(x => x.status !== "archived"); if (p0) PG.progId = p0.id; PG.week = wk != null ? +wk : 0;
-      loadClient(PG.clientId); redraw(); window.scrollTo({ top: 0 }); break; }
+      // Land on today's (or the next) workout, not the top of the program.
+      const f = p0 && !c0.shared && focusOf(c0, p0); if (f){ PG.week = f.weekIndex; PG.scrollTo = f.session.id; }
+      loadClient(PG.clientId); redraw(); if (!f) window.scrollTo({ top: 0 }); break; }
     case "pg-back": PG.clientId = null; redraw(); break;
     case "pg-sub": PG.sub = el.getAttribute("data-v"); redraw(); break;
     case "pg-new": case "pg-newprog": {
@@ -1015,12 +1042,27 @@ async function onClick(el, e){
       putSet(si, ri, no, patch, true); redraw(); break; }
     case "pg-asplanned": { const r = p.weeks[wi].sessions[si].rows[ri]; const n = Math.max(1, setCount(r) || 1), w = num(r.weight);
       commitLine(si, ri, fmtSetLog(Array.from({ length: n }, (_, k) => ({ reps: repsFor(r, k), weight: w })))); redraw(); break; }
-    case "pg-layout": PG.layout = el.getAttribute("data-v"); try { localStorage.setItem("tt.pg.layout", PG.layout); } catch (x){} PG.scrollTo = PG.layout === "cal" ? "week" : null; redraw(); break;
+    case "pg-layout": {
+      const v = el.getAttribute("data-v"); if (v === "cal" && PG.layout === "cal") break;
+      const save = () => { PG.layout = v; try { localStorage.setItem("tt.pg.layout", v); } catch (x){} };
+      const c = client(PG.clientId), p = P();
+      if (v === "days" && PG.layout === "days"){ // already on a day view: Today jumps back to today's workout
+        const f = focusOf(c, p); if (!f) break; PG.week = f.weekIndex; PG.scrollTo = f.session.id; redraw(); break; }
+      if (v === "days"){ // Calendar → today: zoom into today's (or the next) workout
+        const f = focusOf(c, p), sid = f && f.session.id;
+        const from = sid && (document.querySelector(`#main .pg-cal-s[data-sid="${sid}"]`) || document.querySelector("#main .pg-cal-d.today"));
+        zoom(from, () => { save(); if (f){ PG.week = f.weekIndex; } PG.scrollTo = null; PG.repeat = null; redraw(); }, () => sid && document.getElementById("pg-s-" + sid));
+      } else { // day → Calendar: shrink the workout you're looking at back into its day
+        const vis = [...document.querySelectorAll("#main .pg-sess")].find(x => x.getBoundingClientRect().bottom > 90), sid = vis && vis.id.replace(/^pg-s-/, "");
+        zoom(vis, () => { save(); PG.calFor = p && p.id; PG.scrollTo = null; redraw(); }, () => sid ? document.querySelector(`#main .pg-cal-s[data-sid="${sid}"]`) : document.querySelector("#main .pg-cal-d.today"));
+      }
+      break; }
     case "pg-cal-write": { // write a workout for a booked day, beside the rest of that week
       PG.layout = "days"; PG.mode = "plan"; PG.draftWeek = null; try { localStorage.setItem("tt.pg.layout", "days"); localStorage.setItem("tt.pg.mode", "plan"); } catch (x){}
       PG.week = +el.getAttribute("data-w"); PG.scrollWk = PG.week; PG.span = null;
       addOnDay(+el.getAttribute("data-d")); break; }
-    case "pg-cal-go": { PG.layout = "days"; try { localStorage.setItem("tt.pg.layout", "days"); } catch (x){} PG.week = +el.getAttribute("data-w"); PG.scrollTo = el.getAttribute("data-sid") || "top"; PG.repeat = null; redraw(); break; }
+    case "pg-cal-go": { const sid = el.getAttribute("data-sid"), go = () => { PG.layout = "days"; try { localStorage.setItem("tt.pg.layout", "days"); } catch (x){} PG.week = +el.getAttribute("data-w"); PG.scrollTo = sid ? null : "top"; PG.repeat = null; redraw(); };
+      if (sid) zoom(el, go, () => document.getElementById("pg-s-" + sid)); else go(); break; }
     case "pg-log": PG.logFor = { w: wi, s: si }; logSheet(); break;
     case "pg-logsave": {
       const s = p.weeks[PG.logFor.w].sessions[PG.logFor.s], date = valIn("lg-date") || today(), byKey = {};
@@ -1381,6 +1423,12 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-done{font-size:11.5px;font-weight:600;color:var(--pos);white-space:nowrap;margin-right:4px}
 .pg-next{border-color:color-mix(in srgb,var(--accent) 45%,var(--line));background:color-mix(in srgb,var(--accent) 6%,var(--surface))}
 .pg-next h3{color:var(--accent)}
+.pg-zoombtn{position:fixed;right:16px;bottom:calc(18px + env(safe-area-inset-bottom));z-index:25;border-radius:999px;padding:10px 16px;font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,.25);background:var(--ink);color:var(--bg);border-color:transparent;view-transition-name:pg-zoombtn}
+#main:has(.pg-zoombtn){padding-bottom:84px}
+@media (max-width:900px){.app:not(.bare) .pg-zoombtn{bottom:calc(76px + env(safe-area-inset-bottom))}}
+::view-transition-group(pg-zoom){animation-duration:.32s;animation-timing-function:cubic-bezier(.2,.8,.2,1)}
+::view-transition-old(root),::view-transition-new(root){animation-duration:.2s}
+::view-transition-old(pg-zoom),::view-transition-new(pg-zoom){height:100%;width:100%;object-fit:cover;overflow:clip}
 .pg-briefbox .pg-brief{margin-top:4px}
 .pg-brief{margin-top:12px;padding-top:12px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
 .pg-brief ul{list-style:none;margin:0;padding:0}
