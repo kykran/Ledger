@@ -625,13 +625,13 @@ function deltaFor(s, r){
   return liftDelta(topSet(mine), topSet(by[prevDay]));
 }
 const deltaBadge = d => d ? `<span class="pg-delta ${d.dir}" title="Top set vs last time">${d.dir === "up" ? "▲" : d.dir === "down" ? "▼" : "="} ${esc(d.text)}</span>` : "";
-/* Most recent earlier day this client did an exercise with the same name: "8×70, 8×70, 6×75" (reps × weight). */
+/* Most recent earlier day this client did an exercise with the same name: "70×8, 70×8, 75×6" (weight × reps). */
 function lastTime(name, excludeSid){
   const key = String(name || "").trim().toLowerCase(); if (!key) return "";
   const by = {};
   for (const l of PG.logs[PG.clientId] || []){ if (l.session_id === excludeSid || String(l.ex_name || "").trim().toLowerCase() !== key || (!l.done && l.reps == null && l.weight == null)) continue; const d = String(l.logged_on).slice(0, 10); (by[d] = by[d] || []).push(l); }
   const day = Object.keys(by).sort().pop(); if (!day) return "";
-  return fmtDay(day) + ": " + by[day].sort((a, b) => a.set_no - b.set_no).map(l => l.weight != null ? `${l.reps ?? "?"}${secsU(l)}×${l.weight}` : l.timed ? `${l.reps ?? "?"}s` : `${l.reps ?? "?"} bw`).join(", ");
+  return fmtDay(day) + ": " + by[day].sort((a, b) => a.set_no - b.set_no).map(l => l.weight != null ? `${l.weight}×${l.reps ?? "?"}${secsU(l)}` : l.timed ? `${l.reps ?? "?"}s` : `${l.reps ?? "?"} bw`).join(", ");
 }
 function recordBar(s, si){
   const R = recOf(s); let done = 0, total = 0;
@@ -655,10 +655,10 @@ function voiceCard(s){
     ${items ? `<ul>${items}</ul>` : `<p class="small muted">Nothing to log from that.</p>`}${R.note ? `<p class="small muted">${esc(R.note)}</p>` : ""}
     <div class="actions"><button class="btn sm" data-act="pg-voice-x">Discard</button>${items ? `<button class="btn sm primary" data-act="pg-voice-save">Save ${R.sets.length} set${R.sets.length === 1 ? "" : "s"}</button>` : ""}</div></div>`;
 }
-/* One line per exercise while recording, reps x weight: "5x215 5x215 4x225" (or "3x5@215", "8 8 6"). Enter saves and moves on. */
+/* One line per exercise while recording, weight x reps: "215x5 215x5 225x4" (or "3x5@215", "8 8 6"). Enter saves and moves on. */
 const planOf = r => ({ weight: r.weight, reps: k => repsFor(r, k), timed: timedPlan(r) });
 const secsU = l => l && l.timed ? "s" : "";
-/* The plan in words, so it can't be mistaken for the reps x weight you type: "4 sets of 5 @ 215". */
+/* The plan in words, so it can't be mistaken for the weight x reps you type: "4 sets of 5 @ 215". */
 const planText = r => { const sets = String(r.sets || "").trim(), reps = String(r.reps || "").replace(/^\s*[x×]\s*/i, "").trim();
   const sr = sets && reps ? `${sets} sets of ${reps}` : reps ? reps + " reps" : sets ? sets + " sets" : ""; return sr ? sr + (r.weight ? " @ " + r.weight : "") : ""; };
 /* The plan written the way you'd type it: "4x5@215", "3x8". */
@@ -671,7 +671,7 @@ function planLine(r){
 function loggedSets(s, r){
   return (PG.logs[PG.clientId] || []).filter(l => l.session_id === s.id && l.row_id === r.id && l.done).sort((a, b) => a.set_no - b.set_no).map(l => ({ reps: l.reps == null ? null : +l.reps, weight: l.weight == null ? null : +l.weight, ...(l.timed ? { timed: true } : {}) }));
 }
-const prevText = list => list.length ? `→ ${list.length} set${list.length === 1 ? "" : "s"}: ${list.map(x => x.weight != null ? `${x.reps ?? "?"}${secsU(x)} × ${x.weight}` : x.timed ? `${x.reps ?? "?"}s` : `${x.reps ?? "?"} bw`).join(", ")}` : "";
+const prevText = list => list.length ? `→ ${list.length} set${list.length === 1 ? "" : "s"}: ${list.map(x => x.weight != null ? `${x.weight} × ${x.reps ?? "?"}${secsU(x)}` : x.timed ? `${x.reps ?? "?"}s` : `${x.reps ?? "?"} bw`).join(", ")}` : "";
 function recordRows(p, s, si, r, ri){
   const have = loggedSets(s, r), last = lastTime(r.name, s.id), plan = planText(r), typed = planLine(r);
   const ed = PG.editRow === r.id;
@@ -680,15 +680,21 @@ function recordRows(p, s, si, r, ri){
   const editor = ed ? `<div class="pg-edit">${f("name", "Exercise", `list="pg-exlist"`)}${f("sr", "Sets × reps", `inputmode="text"`)}${f("weight", "Weight")}${f("note", "Note")}
       <div class="pg-edit-acts"><button class="btn sm ghost" data-act="pg-delrow" data-s="${si}" data-r="${ri}">Remove</button><button class="btn sm primary" data-act="pg-edrow-done">Done</button></div></div>` : "";
   return `<tr class="pg-recrow ${grpClass(r.group)}"><td colspan="2"></td><td colspan="6">${head}${editor}<div class="pg-logline">
-      <input class="pg-in pg-login ${have.length ? "on" : ""}" data-pg="logline" data-s="${si}" data-r="${ri}" value="${esc(fmtSetLog(have))}" placeholder="${esc(typed || (timedPlan(r) ? "30s 30s 30s" : "8x135 8x135 6x145"))}" aria-label="${esc(r.name)} sets done, reps x weight, e.g. 5x215 5x215 4x225" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next">
+      <input class="pg-in pg-login ${have.length ? "on" : ""}" data-pg="logline" data-s="${si}" data-r="${ri}" value="${esc(shownLine(s, r, have))}" placeholder="${esc(typed || (timedPlan(r) ? "30s 30s 30s" : "135x8 135x8 145x6"))}" aria-label="${esc(r.name)} sets done, weight x reps, e.g. 215x5 215x5 225x4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next">
       ${have.length ? `<span class="pg-logok" aria-label="${have.length} sets logged">✓ ${have.length}</span>${deltaBadge(deltaFor(s, r))}` : plan ? `<button class="btn sm" data-act="pg-asplanned" data-s="${si}" data-r="${ri}" title="Log every set as written: ${esc(plan)}">✓ As planned</button>` : ""}
     </div><div class="small muted pg-logprev" id="pg-lp-${esc(r.id)}">${last ? "Last time " + esc(last) : ""}</div></td></tr>`;
+}
+/* Show the line as it was typed ("3x8@44", "44x8 44x8 44x8") while it still matches what's saved; otherwise the saved sets. */
+const typedLines = {};
+function shownLine(s, r, have){
+  const t = typedLines[s.id + "|" + r.id], same = t != null && JSON.stringify(parseSetLog(t, planOf(r)).map(x => [x.reps, x.weight, !!x.timed])) === JSON.stringify(have.map(x => [x.reps, x.weight, !!x.timed]));
+  return same ? t : fmtSetLog(have);
 }
 /* Save a typed line: sets 1..n done with what was typed; anything logged past n is cleared. */
 function commitLine(si, ri, value){
   const p = P(); if (!p) return;
   const s = p.weeks[PG.week].sessions[si], r = s && s.rows[ri]; if (!r) return;
-  const list = parseSetLog(value, planOf(r));
+  const list = parseSetLog(value, planOf(r)); typedLines[s.id + "|" + r.id] = String(value || "").trim();
   const before = loggedSets(s, r), same = JSON.stringify(before) === JSON.stringify(list);
   if (same) return;
   const old = (PG.logs[PG.clientId] || []).filter(l => l.session_id === s.id && l.row_id === r.id).reduce((m, l) => Math.max(m, l.set_no), 0);
@@ -729,7 +735,7 @@ function renderProgress(c){
   const sessName = sid => { for (const p of PG.progs || []) for (const w of p.weeks || []) for (const s of w.sessions || []) if (s.id === sid) return (w.label ? w.label + " · " : "") + s.name; return "Session"; };
   const hist = Object.values(byDay).sort((a, b) => b.day.localeCompare(a.day)).slice(0, 15);
   const SL = standardLiftHistory(logs);
-  const fmtTop = x => x ? (x.reps != null ? `${x.reps}${secsU(x)} × ` : "") + (x.weight != null ? `${x.weight}` : "bw") : "–";
+  const fmtTop = x => x ? (x.weight != null ? `${x.weight}` : "bw") + (x.reps != null ? ` × ${x.reps}${secsU(x)}` : "") : "–";
   const liftCards = STANDARD_LIFTS.map(L => { const h = SL[L.key], last = h[h.length - 1], prevS = h[h.length - 2];
     const best = h.reduce((b, x) => !b || x.weight > b.weight || (x.weight === b.weight && (x.reps || 0) >= (b.reps || 0)) ? x : b, null), d = liftDelta(last, prevS);
     return `<section class="card pg-liftcard"><div class="card-h"><h2>${L.label}</h2>${last ? `<span class="small muted">${fmtDay(last.date)}</span>` : ""}</div>
@@ -1192,7 +1198,7 @@ function onInput(t){
   if (k === "calc" || k === "who"){ updateBfPreview(); return true; }
   if (k === "qa"){ if (PG.qa && PG.qa.si !== +t.getAttribute("data-s")) PG.qa = null; if (PG.qa) PG.qa.hi = 0; qaRender(+t.getAttribute("data-s")); return true; }
   if (k === "logline"){ const p = P(), r = p && p.weeks[PG.week].sessions[si].rows[ri], el = r && document.getElementById("pg-lp-" + r.id);
-    if (el) el.textContent = t.value.trim() ? prevText(parseSetLog(t.value, planOf(r))) || "Type reps x weight for each set, e.g. 5x215 5x215 4x225" : (lastTime(r.name, p.weeks[PG.week].sessions[si].id) ? "Last time " + lastTime(r.name, p.weeks[PG.week].sessions[si].id) : ""); return true; }
+    if (el) el.textContent = t.value.trim() ? prevText(parseSetLog(t.value, planOf(r))) || "Type weight x reps for each set, e.g. 215x5 215x5 225x4" : (lastTime(r.name, p.weeks[PG.week].sessions[si].id) ? "Last time " + lastTime(r.name, p.weeks[PG.week].sessions[si].id) : ""); return true; }
   if (k === "set"){ const v = t.value === "" ? null : Number(t.value); putSet(+t.getAttribute("data-s"), +t.getAttribute("data-r"), +t.getAttribute("data-n"), { [t.getAttribute("data-f")]: v }); return true; }
   const p = P(); if (!p) return true;
   if (k === "prog"){ p[f] = t.value; saveSoon(p); return true; }
