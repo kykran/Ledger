@@ -273,7 +273,10 @@ function renderProgram(c, progs){
         <label class="small muted pg-start">Week 1 starts <input type="date" class="pg-in" data-pg="prog" data-f="startDate" value="${esc(p.startDate || "")}" ${p.shared ? "disabled" : ""}></label>
         <div class="pg-acts">${progActs}</div></div></div>` : "";
   // A floating Today / Calendar button in thumb reach, so the zoom starts from what you're looking at.
-  const zbtn = W.length ? `<button class="btn pg-zoombtn" data-act="pg-layout" data-v="${PG.layout === "cal" ? "days" : "cal"}">${PG.layout === "cal" ? "◎ Today" : "▦ Calendar"}</button>` : "";
+  // Record / Plan floats beside it on the day view, so switching never means scrolling back up to the top bar.
+  const canRec = week && (week.sessions || []).some(written);
+  const fmode = PG.layout !== "cal" && canRec && !p.shared ? `<button class="btn pg-fabmode ${MODE === "record" ? "rec" : ""}" data-act="pg-mode" data-v="${MODE === "record" ? "plan" : "record"}" data-fab="1" title="${MODE === "record" ? "Write and edit the program" : "Log what the client did"}">${MODE === "record" ? "✎ Plan" : "● Record"}</button>` : "";
+  const zbtn = W.length ? `<div class="pg-fab">${fmode}<button class="btn pg-zoombtn" data-act="pg-layout" data-v="${PG.layout === "cal" ? "days" : "cal"}">${PG.layout === "cal" ? "◎ Today" : "▦ Calendar"}</button></div>` : "";
   const cs = clip && clip.type === "session" && !p.shared ? `<div class="pg-clipbar" role="status"><span>⧉ <b>${esc(clip.data.name)}</b> copied.<span class="pg-cliphint"> ${PG.layout === "cal" || MODE === "plan" ? "Tap <b>Paste</b> on any day." : "Open Calendar or Plan to paste it on any day."}</span></span><button class="btn sm" data-act="pg-clipx">Done</button></div>` : "";
   return zbtn + cs + `<section class="card pg-prog">
     <div class="pg-bar"><b class="pg-pname" title="${esc(p.name)}">${esc(p.name)}</b>${layoutSeg}${PG.layout === "cal" ? "" : modeSeg + weekChips}
@@ -1040,7 +1043,13 @@ async function onClick(el, e){
     case "pg-editsess": { PG.mode = "plan"; try { localStorage.setItem("tt.pg.mode", "plan"); } catch (x){} PG.editRow = null; const sid = p.weeks[wi].sessions[si].id; redraw();
       const el = document.getElementById("pg-s-" + sid); if (el) el.scrollIntoView({ block: "start", behavior: "smooth" }); break; }
     case "pg-mode": if (el.getAttribute("data-v") === "record" && p && modeFor(p.weeks[wi]) === "plan" && !(p.weeks[wi].sessions || []).some(written)){ C.toast("Write a workout first, then record it here"); }
-      PG.draftWeek = null; PG.editRow = null; PG.mode = el.getAttribute("data-v"); try { localStorage.setItem("tt.pg.mode", PG.mode); } catch (x){} if (PG.mode === "plan" && VOICE) VOICE.cancel(); PG.vres = null; redraw(); break;
+      { // from the floating switch, land on the workout you were looking at (else today's) instead of the top of the page
+        const fab = el.hasAttribute("data-fab"), vis = fab && [...document.querySelectorAll("#main .pg-sess")].find(x => x.getBoundingClientRect().bottom > 90);
+        let sid = vis && vis.id.replace(/^pg-s-/, "");
+        if (fab && !sid){ const f = focusOf(client(PG.clientId), p); if (f && f.weekIndex === wi) sid = f.session.id; }
+        PG.draftWeek = null; PG.editRow = null; PG.mode = el.getAttribute("data-v"); try { localStorage.setItem("tt.pg.mode", PG.mode); } catch (x){} if (PG.mode === "plan" && VOICE) VOICE.cancel(); PG.vres = null;
+        if (sid) PG.scrollTo = sid; redraw(); }
+      break;
     case "pg-mic": {
       if (!VOICE) break;
       if (VOICE.state === "listening"){ VOICE.stop(); break; }
@@ -1473,9 +1482,13 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-clipbar>span{min-width:0;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 @media (max-width:600px){.pg-cliphint{display:none}}
 @media (max-width:900px){.app:not(.bare) .pg-clipbar{bottom:calc(76px + env(safe-area-inset-bottom))}}
-.pg-zoombtn{position:fixed;right:16px;bottom:calc(18px + env(safe-area-inset-bottom));z-index:25;border-radius:999px;padding:10px 16px;font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,.25);background:var(--ink);color:var(--bg);border-color:transparent;view-transition-name:pg-zoombtn}
-#main:has(.pg-zoombtn){padding-bottom:84px}
-@media (max-width:900px){.app:not(.bare) .pg-zoombtn{bottom:calc(76px + env(safe-area-inset-bottom))}}
+.pg-fab{position:fixed;right:16px;bottom:calc(18px + env(safe-area-inset-bottom));z-index:25;display:flex;gap:8px;align-items:center}
+.pg-zoombtn,.pg-fabmode{border-radius:999px;padding:10px 16px;font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,.25)}
+.pg-zoombtn{background:var(--ink);color:var(--bg);border-color:transparent;view-transition-name:pg-zoombtn}
+.pg-fabmode{background:var(--card,var(--bg));color:var(--ink);border:1px solid var(--line)}
+.pg-fabmode:not(.rec){background:var(--accent);color:var(--bg);border-color:transparent}
+#main:has(.pg-fab){padding-bottom:84px}
+@media (max-width:900px){.app:not(.bare) .pg-fab{bottom:calc(76px + env(safe-area-inset-bottom))}}
 ::view-transition-group(pg-zoom){animation-duration:.32s;animation-timing-function:cubic-bezier(.2,.8,.2,1)}
 ::view-transition-old(root),::view-transition-new(root){animation-duration:.2s}
 ::view-transition-old(pg-zoom),::view-transition-new(pg-zoom){height:100%;width:100%;object-fit:cover;overflow:clip}
