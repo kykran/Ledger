@@ -332,16 +332,18 @@ export function workoutEmail({ first, trainer, session, weekLabel, when, link })
 }
 
 /* ---------- logging a whole exercise on one line ----------
- * Reps first, then weight. Read into [{reps, weight}]:
- *   "5x215 5x215 4x225"   one set per chunk: 5 reps at 215, ...   (commas work too: "5x215, 5x215")
- *   "8x30"                8 reps at 30
- *   "3x5@215"             3 sets of 5 at 215 (the plan's sets x reps, plus the weight); "5x215x3" also works
+ * Weight first, then reps (Kyle switched back to this on 2026-10-21). Read into [{reps, weight}]:
+ *   "215x5 215x5 225x4"   one set per chunk: 215 for 5, ...   (commas work too: "215x5, 215x5")
+ *   "30x8"                30 lb for 8 reps
+ *   "3x5@215"             3 sets of 5 at 215 (the plan's sets x reps, plus the weight); "215x5x3" also works
  *   "8 8 6"               reps only, at the planned weight
  *   "8 8 6 @ 215"         reps list at one weight
  *   "bw" / "bodyweight"   no load ("12 12 bw")
  *   "3 sets of 8 at 215"  also understood
- *   "30s" / "3x30s"       seconds, not reps (timed: true, seconds kept in reps): "45s 45s 30s", "3x30s@25", "30sx25"
- * Logs store reps and weight separately, so sets logged before the switch from weight x reps read the same.
+ *   "30s" / "3x30s"       seconds, not reps (timed: true, seconds kept in reps): "45s 45s 30s", "3x30s@25", "25x30s"
+ * A chunk typed reps first ("8x44") is read the right way round when the numbers make it plain: the first is
+ * rep-sized and the second weight-sized, or the first is the planned reps, or the second the planned weight.
+ * Logs store reps and weight separately, so changing the order never changes saved sets.
  * plan: {weight, reps(k), timed} from the program row, used to fill anything left out. */
 export function parseSetLog(str, plan = {}){
   let t = String(str || "").toLowerCase().replace(/×|\*/g, "x").replace(/\b(lbs?|kgs?|reps?)\b/g, " ").replace(/(\d)\s*(?:seconds?|secs?|s)(?=x|@|\s|$)/g, "$1s").replace(/\s*x\s*/g, "x").replace(/\s+/g, " ").trim();
@@ -351,8 +353,7 @@ export function parseSetLog(str, plan = {}){
   const pw = n(plan.weight), planReps = k => (plan.reps ? plan.reps(k) : null);
   const bw = /\b(bw|bodyweight|body weight)\b/.test(t); t = t.replace(/\b(bw|bodyweight|body weight)\b/g, " ").trim();
   const W = w => bw ? null : w, N = "(\\d+(?:\\.\\d+)?)";
-  // Old habit (and TrueCoach's order) is weight first: "115x8" or "3x115@8". Nobody does 115 reps at 8 lb,
-  // so when the first number is weight-sized and the second rep-sized (or the first is the planned weight), flip them.
+  // "3x115@8": sets x weight @ reps by mistake. Nobody does 115 reps at 8 lb, so flip it.
   const flip = (r, w) => !bw && ((r > 30 && w <= 30) || (pw != null && r === pw && w !== pw && w <= 30)) ? [w, r] : [r, w];
   let m = t.match(new RegExp(`^(\\d+)x${N}\\s*(?:@|at)\\s*${N}$`)) || t.match(new RegExp(`^(\\d+) sets? of ${N}\\s*(?:@|at)\\s*${N}$`));
   if (m){ const [r, w] = flip(+m[2], +m[3]); return Array.from({ length: Math.min(12, +m[1]) }, () => ({ reps: r, weight: W(w) })); }
@@ -360,11 +361,13 @@ export function parseSetLog(str, plan = {}){
   if (m) return m[1].split(/[\s,]+/).filter(Boolean).slice(0, 12).map(Number).map(r => ({ reps: r, weight: W(+m[2]) }));
   const out = [];
   for (const ch of (t.match(/[\d.]+(?:x[\d.]+){0,2}/g) || [])){
-    let [a, b, c] = ch.split("x").map(Number);
-    if (b != null) [a, b] = flip(a, b);
+    const [a, b, c] = ch.split("x").map(Number);
     if (!isFinite(a)) continue;
-    if (b == null) out.push({ reps: a, weight: W(out.length ? out[out.length - 1].weight : pw) }); // bare number = reps
-    else for (let k = 0; k < Math.min(12, c || 1); k++) out.push({ reps: a, weight: W(b) });     // reps x weight (x sets)
+    if (b == null){ out.push({ reps: a, weight: W(out.length ? out[out.length - 1].weight : pw) }); continue; } // bare number = reps
+    // weight x reps; read "8x44" as 44 for 8 when that's plainly what it means
+    const pr = planReps(out.length), repsFirst = (a <= 30 && b > 30) || (pr != null && a === pr && b !== pr) || (pw != null && b === pw && a !== pw);
+    const [w, r] = repsFirst ? [b, a] : [a, b];
+    for (let k = 0; k < Math.min(12, c || 1); k++) out.push({ reps: r, weight: W(w) });            // weight x reps (x sets)
     if (out.length >= 12) break;
   }
   return out.slice(0, 12).map((x, k) => ({ reps: x.reps ?? planReps(k), weight: x.weight }));
@@ -386,7 +389,7 @@ function parseTimed(t, plan){
   }
   return out;
 }
-/* Back to text the same way: "5x215 5x215 4x225", three or more identical sets as "3x5@215". */
+/* Back to text the same way, one chunk per set: "215x5 215x5 225x4". */
 export function fmtSetLog(sets){
   const ok = (sets || []).filter(s => s && (s.reps != null || s.weight != null));
   if (!ok.length) return "";
@@ -396,8 +399,7 @@ export function fmtSetLog(sets){
     return ok.map(s => `${s.reps ?? "?"}s`).join(" ");
   }
   if (ok.every(s => s.weight == null)) return ok.map(s => (s.reps ?? "?") + u(s)).join(" ") + " bw";
-  const one = s => s.weight == null ? `${s.reps ?? "?"}${u(s)}${s.timed ? "" : " bw"}` : `${s.reps ?? "?"}${u(s)}x${s.weight}`;
-  if (ok.length > 2 && ok[0].weight != null && ok[0].reps != null && ok.every(s => s.reps === ok[0].reps && s.weight === ok[0].weight && !!s.timed === !!ok[0].timed)) return `${ok.length}x${ok[0].reps}${u(ok[0])}@${ok[0].weight}`;
+  const one = s => s.weight == null ? `${s.reps ?? "?"}${u(s)}${s.timed ? "" : " bw"}` : `${s.weight}x${s.reps ?? "?"}${u(s)}`;
   return ok.map(one).join(" ");
 }
 
