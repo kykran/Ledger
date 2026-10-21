@@ -173,7 +173,7 @@ function renderClientList(){
         <div class="small muted">${p ? `${esc(p.name)} · ${esc(w ? w.label : "")}${ready ? "" : " · nothing written for this week yet"}` : "No program yet"}</div></div></div>
       <button class="btn primary" data-act="pg-open" data-id="${esc(up.c.id)}" data-week="${wi}">${p ? "Open program" : "Start program"}</button></div>${renderBrief(up.c, p, up.next)}</section>`;
   }
-  return hero + renderTodos() + `<section class="card"><div class="card-h"><h2>Client programs</h2><span class="small muted">${loading ? "Reading your calendar…" : "next session first"}</span></div>
+  return hero + renderTodos() + `<section class="card"><div class="card-h"><h2>Client programs</h2><span class="small muted">${loading ? "Reading your calendar…" : "next session first"}</span>${PG.addClient ? "" : `<button class="btn sm" data-act="pg-addclient" style="margin-left:auto">+ Add client</button>`}</div>${PG.addClient ? addClientForm() : ""}
     ${list.length ? `<div class="tablewrap"><table><thead><tr><th>Client</th><th>Next session</th><th>Program</th><th class="num">Weeks</th><th></th></tr></thead><tbody>
     ${list.map(({ c, next }) => { const ps = progOf(c.id), p = ps[0];
       return `<tr><td><div class="who">${C.avatar(c)}<a href="#" class="n" data-act="pg-open" data-id="${esc(c.id)}"${next && p ? ` data-week="${weekIndexFor(p, next)}"` : ""}>${esc(c.name)}</a></div></td>
@@ -182,6 +182,27 @@ function renderClientList(){
         <td class="num">${p ? (p.weeks || []).length : "–"}</td>
         <td><div class="rowacts"><button class="btn sm ${p ? "" : "primary"}" data-act="pg-open" data-id="${esc(c.id)}"${next && p ? ` data-week="${weekIndexFor(p, next)}"` : ""}>${p ? "Open" : "Start program"}</button></div></td></tr>`; }).join("")}
     </tbody></table></div>` : `<div class="empty">Add clients first, then build their programs here.</div>`}</section>` + renderShared();
+}
+/* Calendar names coming up (or just past) that aren't a client yet: tap one to add them. */
+function calSuggestions(){
+  const M = C.getModel && C.getModel(); if (!M || !M.ctx) return [];
+  const key = t => String(t || "").trim().toLowerCase();
+  const known = new Set(Object.values(M.byClient || {}).flat().map(e => key(e.title)));
+  const ignored = new Set(((C.S.prof && C.S.prof.ignoredTitles) || []).map(key));
+  const now = Date.now(), from = now - 14 * 86400000, to = now + 21 * 86400000, seen = {};
+  for (const e of M.ctx.events || []){
+    const k = key(e.title), t = +e.date; if (!k || known.has(k) || ignored.has(k) || t < from || t > to) continue;
+    if (!seen[k] || Math.abs(t - now) < Math.abs(seen[k].t - now)) seen[k] = { title: String(e.title).trim(), t };
+  }
+  return Object.values(seen).sort((a, b) => (a.t < now) - (b.t < now) || Math.abs(a.t - now) - Math.abs(b.t - now)).slice(0, 8);
+}
+const nameFromTitle = t => String(t).replace(/\b(pt|session|training|train|workout|intro|consult|consultation|trial|assessment|eval|evaluation|w\/?\s*kyle|with kyle)\b/gi, " ").replace(/[-–:|/]+\s*$/g, "").replace(/\s+/g, " ").trim() || String(t).trim();
+function addClientForm(){
+  const sug = calSuggestions(), pick = PG.addClient && PG.addClient.title;
+  return `<div class="pg-addc"><div class="pg-row"><input id="pg-ac-name" class="pg-in" placeholder="Client name" value="${esc((PG.addClient && PG.addClient.name) || "")}" autocomplete="off" style="flex:1;min-width:160px">
+      <button class="btn sm primary" data-act="pg-addclient-go">Add</button><button class="btn sm ghost" data-act="pg-addclient-x">Cancel</button></div>
+    ${sug.length ? `<div class="pg-ac-sug"><span class="small muted">On your calendar, not a client yet:</span>${sug.map(s => `<button class="pg-chip ${pick === s.title ? "on" : ""}" data-act="pg-addclient-pick" data-t="${esc(s.title)}">${esc(s.title)}</button>`).join("")}</div>` : ""}
+    <div class="small muted">Their calendar sessions match by name. Set how they pay later in Billing.</div></div>`;
 }
 /* The pre-session brief: last numbers, whether to go up, and anything to watch for. On the Next up card and atop each client. */
 function briefOf(c, p, when){
@@ -570,6 +591,7 @@ function qaAdd(si, it, superset){
   else { const inp = inWk(`input[data-pg="qa"][data-s="${si}"]`); if (inp) inp.focus(); }
 }
 function onBuilderKey(e){
+  if (e.key === "Enter" && e.target && e.target.id === "pg-ac-name"){ e.preventDefault(); const b = document.querySelector('[data-act="pg-addclient-go"]'); if (b) onClick(b, e); return; }
   const t = e.target, k = t.getAttribute && t.getAttribute("data-pg"); if (!k) return;
   wkFrom(t);
   if (k === "qa"){
@@ -991,6 +1013,18 @@ async function onClick(el, e){
       const b = sessionBrief({ session: hit.session, logs: PG.logs[p.clientId] || [], before: nextOf(c) || new Date() });
       let k = 0; for (const l of b.lines) if (l.weight != null){ const r = hit.session.rows.find(x => x.id === l.rowId); if (r){ r.weight = String(Math.round(l.weight * 10) / 10); k++; } }
       if (k){ saveSoon(p); C.toast(`${hit.session.name}: ${k} weight${k === 1 ? "" : "s"} updated`); }
+      redraw(); break; }
+    case "pg-addclient": PG.addClient = { name: "" }; redraw(); setTimeout(() => { const i = document.getElementById("pg-ac-name"); if (i) i.focus(); }, 0); break;
+    case "pg-addclient-x": PG.addClient = null; redraw(); break;
+    case "pg-addclient-pick": { const t = el.getAttribute("data-t"); PG.addClient = { name: nameFromTitle(t), title: t }; redraw(); const i = document.getElementById("pg-ac-name"); if (i){ i.focus(); i.select(); } break; }
+    case "pg-addclient-go": {
+      const name = (document.getElementById("pg-ac-name") || {}).value.trim(); if (!name){ C.toast("Type their name"); break; }
+      if (C.S.clients.some(c => c.name.trim().toLowerCase() === name.toLowerCase())){ C.toast(`${name} is already a client`); break; }
+      const title = PG.addClient && PG.addClient.title, d = { ...((globalThis.TallyEngine && globalThis.TallyEngine.DEFAULTS.defaults) || {}), ...((C.S.prof && C.S.prof.defaults) || {}) };
+      const c = { id: Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4), name, aliases: title && title.trim().toLowerCase() !== name.toLowerCase() ? [title] : [],
+        billing: d.billing || "package", rate: d.rate ?? 100, packageSize: d.packageSize || 10, packagePrice: null, active: true, packages: [], payments: [] };
+      PG.addClient = null;
+      Promise.resolve(C.saveClient(c)).then(() => { if (C.modelChanged) C.modelChanged(); C.toast(`${name} added`); }).catch(() => C.toast("Couldn't add. Try again."));
       redraw(); break; }
     case "pg-open": { PG.clientId = el.getAttribute("data-id"); PG.progId = null; PG.sub = "program"; PG.repeat = null; const wk = el.getAttribute("data-week");
       const c0 = client(PG.clientId), p0 = c0 && progsOf(c0).find(x => x.status !== "archived"); if (p0) PG.progId = p0.id; PG.week = wk != null ? +wk : 0;
@@ -1479,6 +1513,10 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-paste{all:unset;box-sizing:border-box;width:100%;cursor:pointer;text-align:center;font-size:12px;font-weight:600;color:var(--accent);padding:7px 4px;margin:4px 0;border-radius:8px;border:1.5px dashed var(--accent);background:var(--accent-soft)}
 .pg-paste:hover,.pg-paste:focus-visible{border-style:solid}
 .pg-cal-d .pg-paste{font-size:11px;padding:5px 2px;margin-top:4px}
+.pg-addc{display:flex;flex-direction:column;gap:8px;padding:12px;margin:0 0 12px;border:1px solid var(--line);border-radius:12px;background:var(--surface2)}
+.pg-ac-sug{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.pg-chip{all:unset;cursor:pointer;font-size:12.5px;padding:5px 10px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--ink)}
+.pg-chip:hover,.pg-chip:focus-visible,.pg-chip.on{border-color:var(--accent);color:var(--accent)}
 .pg-clipbar{position:fixed;left:16px;right:150px;bottom:calc(18px + env(safe-area-inset-bottom));z-index:25;display:flex;align-items:center;gap:8px;justify-content:space-between;max-width:440px;padding:6px 6px 6px 14px;border-radius:18px;background:var(--surface);border:1.5px solid var(--accent);box-shadow:0 6px 20px rgba(0,0,0,.2);font-size:13px}
 .pg-clipbar>span{min-width:0;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 @media (max-width:600px){.pg-cliphint{display:none}}
