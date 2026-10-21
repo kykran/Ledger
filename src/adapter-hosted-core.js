@@ -62,6 +62,7 @@ export const adapter = {
     const ch = sb.channel("clients-" + uid).on("postgres_changes", { event:"*", schema:"public", table:"clients", filter:"user_id=eq." + uid }, soon).subscribe();
     return () => sb.removeChannel(ch);
   },
+  async listClients(){ const { data, error } = await query(() => sb.from("clients").select("id,data").eq("user_id", session.user.id)); if (error) throw fail(error); return (data || []).map(r => ({ id: r.id, ...r.data })); },
   async setProfile(obj){ const { error } = await sb.from("profiles").upsert({ user_id: session.user.id, data: obj, updated_at: new Date().toISOString() }); if (error) throw fail(error); },
   async setClient(id, body){ const { error } = await sb.from("clients").upsert({ user_id: session.user.id, id, data: body, updated_at: new Date().toISOString() }); if (error) throw fail(error); },
   async deleteClient(id){ const { error } = await sb.from("clients").delete().eq("user_id", session.user.id).eq("id", id); if (error) throw fail(error); },

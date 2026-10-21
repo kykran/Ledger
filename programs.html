@@ -15,12 +15,14 @@
     .pa-brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:16px;letter-spacing:-.02em;margin-right:auto;color:var(--ink);text-decoration:none}
     .pa-main{padding:22px 24px 80px;display:flex;flex-direction:column;gap:18px;max-width:1180px;margin:0 auto;width:100%}
     .pa-switch{color:var(--muted);font-weight:500}
+    .pa-switch.spin svg{animation:pa-spin .9s linear infinite} @keyframes pa-spin{to{transform:rotate(360deg)}}
     @media (max-width:900px){.pa-bar{padding:10px 16px}.pa-main{padding:16px 16px 60px}}
   </style>
 </head>
 <body>
   <header class="pa-bar">
     <a class="pa-brand" href="/programs"><span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3.5 9.5v5M6.5 7v10M17.5 7v10M20.5 9.5v5M6.5 12h11"/></svg></span>Programs</a>
+    <button class="btn sm ghost pa-switch" id="pa-sync" data-act="pa-sync" hidden title="Pull in new clients and calendar bookings"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.3-4.3L4 8.5M4 4v4.5h4.5M4 13a8 8 0 0 0 14.3 4.3L20 15.5M20 20v-4.5h-4.5"/></svg><span>Sync</span></button>
     <a class="btn sm ghost pa-switch" href="/?side=billing" id="pa-home" title="Switch to the billing side"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5h12v17l-2.5-1.6L13 20.5l-2.5-1.6L8 20.5l-2-1.3z"/><path d="M9 8.5h6M9 12h6"/></svg><span>Billing</span></a>
   </header>
   <main class="pa-main" id="main"><div class="card"><div class="empty"><b>Loading…</b></div></div></main>

@@ -23,6 +23,7 @@ export function demoAdapter(){
     async init(){ return { status: "ready", account: { email: ME, name: "Alex" } }; },
     watchProfile(cb){ setTimeout(() => cb(profile ? clone(profile) : null), 0); return () => {}; },
     watchClients(cb){ setTimeout(() => cb(clients.map(clone)), 0); return () => {}; },
+    async listClients(){ return clients.map(clone); },
     async setProfile(obj){ profile = clone(obj); },
     async setClient(id, body){ const c = { id, ...clone(body) }; const i = clients.findIndex(x => x.id === id); if (i >= 0) clients[i] = c; else clients.push(c); },
     async deleteClient(id){ clients = clients.filter(c => c.id !== id); },
