@@ -42,6 +42,8 @@ create table if not exists public.program_logs (
   primary key (user_id, program_id, session_id, row_id, set_no)
 );
 create index if not exists program_logs_client on public.program_logs (user_id, client_id, logged_on);
+-- Timed sets ("30s"): reps holds the seconds.
+alter table public.program_logs add column if not exists timed boolean not null default false;
 
 -- Bodyweight and 4-site skinfolds (mm): triceps, abdomen, suprailiac, thigh. body_fat is computed by the app.
 create table if not exists public.measurements (
