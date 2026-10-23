@@ -679,7 +679,8 @@ function recordRows(p, s, si, r, ri){
   const f = (k, ph, extra = "") => `<label><span class="small muted">${ph}</span><input class="pg-in" data-pg="row" data-s="${si}" data-r="${ri}" data-f="${k}" value="${esc(k === "sr" ? fmtSetsReps(r) : r[k])}" placeholder="${k === "sr" ? "3x8" : ""}" ${extra}></label>`;
   const editor = ed ? `<div class="pg-edit">${f("name", "Exercise", `list="pg-exlist"`)}${f("sr", "Sets × reps", `inputmode="text"`)}${f("weight", "Weight")}${f("note", "Note")}
       <div class="pg-edit-acts"><button class="btn sm ghost" data-act="pg-delrow" data-s="${si}" data-r="${ri}">Remove</button><button class="btn sm primary" data-act="pg-edrow-done">Done</button></div></div>` : "";
-  return `<tr class="pg-recrow ${grpClass(r.group)}"><td colspan="2"></td><td colspan="6">${head}${editor}<div class="pg-logline">
+  const grip = p.shared ? "" : `<button class="pg-grip pg-rgrip" data-drag="row" data-s="${si}" data-r="${ri}" title="Drag to move this exercise" aria-label="Move ${esc(r.name || "exercise")}. Drag, or use arrow keys">⠿</button>`;
+  return `<tr class="pg-recrow ${grpClass(r.group)}"><td colspan="2"></td><td colspan="6"><div class="pg-rhead">${grip}${head}</div>${editor}<div class="pg-logline">
       <input class="pg-in pg-login ${have.length ? "on" : ""}" data-pg="logline" data-s="${si}" data-r="${ri}" value="${esc(shownLine(s, r, have))}" placeholder="${esc(typed || (timedPlan(r) ? "30s 30s 30s" : "135x8 135x8 145x6"))}" aria-label="${esc(r.name)} sets done, weight x reps, e.g. 215x5 215x5 225x4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next">
       ${have.length ? `<span class="pg-logok" aria-label="${have.length} sets logged">✓ ${have.length}</span>${deltaBadge(deltaFor(s, r))}` : plan ? `<button class="btn sm" data-act="pg-asplanned" data-s="${si}" data-r="${ri}" title="Log every set as written: ${esc(plan)}">✓ As planned</button>` : ""}
     </div><div class="small muted pg-logprev" id="pg-lp-${esc(r.id)}">${last ? "Last time " + esc(last) : ""}</div></td></tr>`;
@@ -1285,6 +1286,11 @@ const CSS = `
 .pg-dragging td{background:color-mix(in srgb,var(--accent) 8%,transparent)}
 tr.pg-drop-before td{box-shadow:inset 0 3px 0 var(--accent)!important}
 tr.pg-drop-after td{box-shadow:inset 0 -3px 0 var(--accent)!important}
+.pg-sess.pg-mini tr.pg-g.pg-drop-before{box-shadow:inset 0 3px 0 var(--accent),inset 3px 0 0 var(--g,transparent)}
+.pg-sess.pg-mini tr.pg-g.pg-drop-after{box-shadow:inset 0 -3px 0 var(--accent),inset 3px 0 0 var(--g,transparent)}
+.pg-rhead{display:flex;align-items:flex-start;gap:2px}
+.pg-rhead .pg-logname{flex:1;min-width:0}
+.pg-rgrip{margin:0 2px 0 -8px;padding:4px 3px!important}
 body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:none!important;-webkit-user-select:none!important}
 .pg-recbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:color-mix(in srgb,var(--accent) 10%,var(--surface));border:1px solid color-mix(in srgb,var(--accent) 40%,var(--line));border-radius:10px;padding:8px 12px}
 .pg-weekbar{flex-wrap:nowrap;align-items:center}
@@ -1551,8 +1557,11 @@ function dragItems(){
   const s = P().weeks[PG.week].sessions[DRAG.si], tb = DRAG.tbody;
   const trOf = i => tb.querySelector(`tr.pg-g[data-r="${i}"]`);
   const recOf = tr => tr && tr.nextElementSibling && tr.nextElementSibling.classList.contains("pg-recrow") ? tr.nextElementSibling : tr;
-  if (DRAG.kind === "row") return (s.rows || []).map((_, i) => { const tr = trOf(i); return { first: tr, last: recOf(tr), rows: [tr, recOf(tr)] }; });
-  return segments(s.rows || []).map(g => { const trs = []; for (let i = g.start; i <= g.end; i++){ const tr = trOf(i); trs.push(tr); if (recOf(tr) !== tr) trs.push(recOf(tr)); } return { first: trs[0], last: trs[trs.length - 1], rows: trs }; });
+  // Record mode hides the plan rows, so measure and mark only the rows that are showing.
+  const shown = trs => { const v = trs.filter(tr => tr.getClientRects().length); return v.length ? v : trs; };
+  const item = trs => { const v = shown(trs); return { first: v[0], last: v[v.length - 1], rows: trs }; };
+  if (DRAG.kind === "row") return (s.rows || []).map((_, i) => { const tr = trOf(i); return item(recOf(tr) !== tr ? [tr, recOf(tr)] : [tr]); });
+  return segments(s.rows || []).map(g => { const trs = []; for (let i = g.start; i <= g.end; i++){ const tr = trOf(i); trs.push(tr); if (recOf(tr) !== tr) trs.push(recOf(tr)); } return item(trs); });
 }
 function dropTarget(y){
   const items = dragItems();
@@ -1624,7 +1633,9 @@ function onPointerDown(e){
   const si = +h.getAttribute("data-s"), ri = +h.getAttribute("data-r"), kind = h.getAttribute("data-drag");
   const s = P().weeks[PG.week].sessions[si];
   const from = kind === "row" ? ri : segments(s.rows).findIndex(g => g.start <= ri && ri <= g.end);
-  DRAG = { kind, si, from, to: from, tbody: h.closest("tbody"), id: e.pointerId, y: e.clientY, moved: false };
+  const tag = document.createElement("div"); tag.className = "pg-dragtag"; tag.hidden = true;
+  tag.textContent = kind === "row" ? (s.rows[ri] && s.rows[ri].name) || "Exercise" : "Block " + (letterOf(s.rows[ri] && s.rows[ri].group) || ""); document.body.appendChild(tag);
+  DRAG = { kind, si, from, to: from, tbody: h.closest("tbody"), id: e.pointerId, y: e.clientY, moved: false, tag };
   dragItems()[from].rows.forEach(tr => tr.classList.add("pg-dragging"));
   document.body.classList.add("pg-is-dragging");
   try { h.setPointerCapture(e.pointerId); } catch (x){}
@@ -1634,6 +1645,7 @@ let scrollTimer = null;
 function onPointerMove(e){
   if (!DRAG || e.pointerId !== DRAG.id) return;
   DRAG.y = e.clientY; DRAG.moved = true; markDrop(dropTarget(e.clientY));
+  DRAG.tag.hidden = false; DRAG.tag.style.transform = `translate(${e.clientX + 14}px, ${e.clientY - 14}px)`;
   const edge = 70, v = e.clientY < edge ? -14 : e.clientY > window.innerHeight - edge ? 14 : 0;
   clearInterval(scrollTimer); if (v) scrollTimer = setInterval(() => { window.scrollBy(0, v); if (DRAG) markDrop(dropTarget(DRAG.y)); }, 30);
 }
@@ -1642,7 +1654,7 @@ function onPointerUp(e){
   clearInterval(scrollTimer);
   window.removeEventListener("pointermove", onPointerMove); window.removeEventListener("pointerup", onPointerUp); window.removeEventListener("pointercancel", onPointerUp);
   document.body.classList.remove("pg-is-dragging");
-  const d = DRAG; DRAG = null;
+  const d = DRAG; DRAG = null; d.tag.remove();
   if (e.type === "pointercancel" || !d.moved || !applyMove(d.si, d.kind, d.from, d.to)){
     d.tbody.querySelectorAll(".pg-dragging,.pg-drop-before,.pg-drop-after").forEach(x => x.classList.remove("pg-dragging", "pg-drop-before", "pg-drop-after"));
   }
@@ -1669,7 +1681,7 @@ function onDragKey(e){
   if (!applyMove(si, kind, from, to)) return;
   const s2 = P().weeks[PG.week].sessions[si];
   const newRi = kind === "row" ? s2.rows.findIndex(r => r.id === movedId) : segments(s2.rows)[e.key === "ArrowUp" ? from - 1 : from + 1].start;
-  const nh = document.querySelector(`[data-drag="${kind}"][data-s="${si}"][data-r="${newRi}"]`); if (nh) nh.focus();
+  const nh = [...document.querySelectorAll(`#main [data-wk="${PG.week}"] [data-drag="${kind}"][data-s="${si}"][data-r="${newRi}"], #main [data-drag="${kind}"][data-s="${si}"][data-r="${newRi}"]`)].find(x => x.getClientRects().length); if (nh) nh.focus();
 }
 
 function attach(ctx){
