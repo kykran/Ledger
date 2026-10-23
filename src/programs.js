@@ -1454,6 +1454,14 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-sess.pg-mini .pg-qa-box{flex:1;min-width:0}
 .pg-sess.pg-mini .pg-ss{padding:5px 7px}
 @media (max-width:760px){.pg-col{flex-basis:300px}.pg-col.empty{flex:0 0 70px}}
+@media (min-width:1000px){
+  .pa-main:has(.pg-board){max-width:none}
+  .pg-board{overflow-x:auto;scroll-snap-type:none}
+  .pg-col{flex:1 1 0;min-width:220px}
+  .pg-board{gap:8px}
+  .pg-col.empty{flex:0 0 54px;min-width:0}
+  .pg-sess.pg-mini tr.pg-g{grid-template-columns:16px 60px 50px minmax(0,1fr) 22px}
+}
 .pg-pen{margin-left:auto;color:var(--muted);font-size:14px;padding:0 4px}
 .pg-edit{display:grid;grid-template-columns:2fr 1fr 1fr 2fr;gap:8px;align-items:end;margin:0 0 8px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
 .pg-edit label{display:flex;flex-direction:column;gap:3px;min-width:0}
