@@ -3,10 +3,12 @@
 //   {action:"critique", clientId, ownerId?, programId}
 //   {action:"progress", clientId, ownerId?, programId, week, session?, direction, notes}
 //      session given -> progress that one session; omitted -> progress the whole week
+//   {action:"complement", clientId, ownerId?, programId, week} -> one workout that rounds out that week
 // Reads the client's programming notes (injuries, goals, limitations), the program, the exercise
 // library and recent logs, asks Claude, and returns a draft. Nothing is saved here: the trainer
 // reviews the draft in the app and decides what to keep.
 import { admin, send, readJson, userFrom } from "./_lib.js";
+import { PATTERNS, weekCoverage } from "../src/programs-core.js";
 
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001";
 const DIRECTIONS = { stability: "more stability and control (unilateral, anti-rotation, tempo, balance, controlled ranges)",
@@ -56,6 +58,11 @@ const TOOLS = {
     summary: { type: "string", description: "1-3 sentences on what changed and why" },
     changes: { type: "array", items: { type: "string" }, description: "Bullet list of specific changes vs the current version" },
     sessions: { type: "array", items: sessionSchema, description: "The new version: one session if one was given, otherwise every session of the week in the same order" },
+    flags: flagSchema }, required: ["summary", "changes", "sessions", "flags"] } },
+  complement: { name: "round_out_week", description: "Return the one workout that rounds out the week.", input_schema: { type: "object", properties: {
+    summary: { type: "string", description: "1-2 sentences on what the week was missing and how this workout fills it" },
+    changes: { type: "array", items: { type: "string" }, description: "Short bullets: each gap this workout covers (muscle group, movement pattern or quality)" },
+    sessions: { type: "array", items: sessionSchema, description: "Exactly one workout" },
     flags: flagSchema }, required: ["summary", "changes", "sessions", "flags"] } }
 };
 
@@ -118,6 +125,11 @@ export default async function handler(req, res){
       task = `Draft a new program.\nWeeks: ${Math.min(12, Math.max(1, +br.weeks || 4))}\nIn-studio sessions per week: ${Math.min(6, Math.max(1, +br.daysPerWeek || 2))}\nHomework sessions per week: ${Math.min(4, Math.max(0, +br.homework || 0))}\nGoal: ${br.goal || "general strength and fitness"}\nEquipment: ${br.equipment || "full gym"}\nOther: ${br.notes || "none"}\nProgress sensibly week to week. Week labels like "Week 1".`;
     } else if (action === "critique"){
       task = `Critique this program as a senior coach reviewing a colleague's work. Check balance of movement patterns, volume per muscle, exercise order, progression across weeks, fit with the client's goals and notes, and anything risky.\n\nPROGRAM "${p.name}":\n${(p.weeks || []).map(fmtWeek).join("\n\n")}`;
+    } else if (action === "complement"){
+      const wi = Math.max(0, +b.week || 0), w = (p.weeks || [])[wi];
+      if (!w) return send(res, 400, { message: "That week doesn't exist." });
+      const libBy = Object.fromEntries(lib.map(e => [String(e.name).trim().toLowerCase(), e])), cov = weekCoverage(w.sessions || [], libBy);
+      task = `Write ONE extra workout that rounds out this client's week. Look at every workout already planned this week and find what is missing or light: muscle groups, movement patterns (squat, hinge, single leg, horizontal and vertical push and pull, core, carry), and qualities (stability, power, conditioning, mobility). Balance pushing against pulling. Don't repeat exercises already in the week, and don't load the muscles the rest of the week already hits hard. Fit the client's goals and notes, base loads on the recent logs, and keep it to a 45-60 minute in-person session. Name it like "Day C · Round out".\n\nPLANNED SETS THIS WEEK BY PATTERN (rough count from exercise names): ${PATTERNS.map(P => P.label + " " + cov[P.k]).join(", ")}\n\nTHIS WEEK (${w.label || "Week " + (wi + 1)}):\n${(w.sessions || []).map(fmtSession).join("\n") || "  (nothing yet)"}\n\nEARLIER WEEKS FOR CONTEXT:\n${(p.weeks || []).slice(Math.max(0, wi - 2), wi).map((x, i) => fmtWeek(x, Math.max(0, wi - 2) + i)).join("\n\n") || "  (none)"}`;
     } else {
       const wi = Math.max(0, +b.week || 0), w = (p.weeks || [])[wi];
       if (!w) return send(res, 400, { message: "That week doesn't exist." });
