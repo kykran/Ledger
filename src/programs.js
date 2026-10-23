@@ -3,7 +3,7 @@
  * app.js calls attach(ctx) once and then render()/onClick()/onChange()/onInput() while the Programs tab is open.
  * Data goes through ctx.A.programs (see adapter-hosted.js / programs-demo.js). */
 import { pid, newRow, newSession, newWeek, newProgram, copySession, copyWeek, repeatSession, repeatWeek, setCount,
-  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, timedPlan, sessionForDate, weekZero, weekStartDay, sessionBrief, findSession, parseTrueCoach, truecoachToProgram, topSet, liftDelta, STANDARD_LIFTS, standardLiftHistory } from "./programs-core.js";
+  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, timedPlan, sessionForDate, weekZero, weekStartDay, sessionBrief, findSession, parseTrueCoach, truecoachToProgram, topSet, liftDelta, STANDARD_LIFTS, standardLiftHistory, roundOutWeek, weekCoverage, PATTERNS } from "./programs-core.js";
 import { STARTER_EXERCISES } from "./exercise-seed.js";
 import { createVoice, voiceContext, VOICE_CSS } from "./programs-voice.js";
 
@@ -256,6 +256,7 @@ function renderProgram(c, progs){
   const weekChips = `<div class="pg-weeks" role="tablist">${W.map((w, i) => `<button role="tab" aria-selected="${i === wi}" data-act="pg-week" data-i="${i}">${esc(w.label || "Week " + (i + 1))}</button>`).join("")}<button data-act="pg-addweek" title="Add a week">+ Week</button></div>`;
   const weekActs = week ? `<div class="pg-acts">
       <button class="btn sm" data-act="pg-copyweek">Copy week</button>
+      ${p.shared ? "" : `<button class="btn sm" data-act="pg-round">⚖ Round out week</button>`}
       ${clip && clip.type === "week" ? `<button class="btn sm" data-act="pg-pasteweek">Paste week here</button>` : ""}
       ${PG.repeat && PG.repeat.week ? repeatForm() : `<button class="btn sm" data-act="pg-repeat" data-week="1">Repeat week…</button>`}
       ${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress">✦ Progress week</button><button class="btn sm" data-act="pg-ai" data-mode="critique">✦ Critique program</button>` : ""}
@@ -339,7 +340,7 @@ function renderWeeks(c, p, sel){
   const blocks = [];
   for (let i = R.from; i <= R.to; i++){
     const w = W[i], ds = weekDates(p, i);
-    blocks.push(`<section class="pg-wkblock ${i === sel ? "sel" : ""}" data-wk="${i}" id="pg-wk-${i}"><div class="pg-wkh"><b>${esc(w.label || "Week " + (i + 1))}</b><span class="small muted">${fmt(ds[0])} – ${fmt(ds[6])}</span></div>${renderBoard(c, p, i, w)}</section>`);
+    blocks.push(`<section class="pg-wkblock ${i === sel ? "sel" : ""}" data-wk="${i}" id="pg-wk-${i}"><div class="pg-wkh"><b>${esc(w.label || "Week " + (i + 1))}</b><span class="small muted">${fmt(ds[0])} – ${fmt(ds[6])}</span>${p.shared ? "" : `<button class="btn sm ghost pg-roundbtn" data-act="pg-round" title="Build a workout that covers what the rest of this week misses">⚖ Round out week</button>`}</div>${renderBoard(c, p, i, w)}</section>`);
   }
   if (PG.scrollWk != null){ const k = PG.scrollWk; PG.scrollWk = null; setTimeout(() => { const el = document.getElementById("pg-wk-" + k); if (el) el.scrollIntoView({ block: "start", behavior: "smooth" }); }, 30); }
   return `${R.from > 0 ? `<button class="btn sm ghost pg-more-wk" data-act="pg-span" data-d="-4">↑ Show ${Math.min(4, R.from)} earlier week${Math.min(4, R.from) === 1 ? "" : "s"}</button>` : ""}
@@ -883,11 +884,57 @@ function shareSheet(){
     : `<div class="actions"><button class="btn primary" data-act="pg-linkmake">Create link</button></div>`}`);
 }
 
+/* ---------- round out the week ---------- */
+/* The client's earlier rows, newest first: this program's earlier weeks, then their other programs. */
+function clientHistory(c, p, wi){
+  const out = [], take = w => { for (const s of (w && w.sessions) || []) for (const r of s.rows || []) if (r.name) out.push({ name: r.name, sets: r.sets, reps: r.reps, weight: r.weight }); };
+  for (let i = wi - 1; i >= 0; i--) take(p.weeks[i]);
+  for (const q of progsOf(c).filter(x => x !== p)) for (let i = (q.weeks || []).length - 1; i >= 0; i--) take(q.weeks[i]);
+  return out;
+}
+/* Where a round-out workout goes: the next booked day with nothing written, else the next free day; for a past week, a booked day or the day after the last workout. */
+function roundDay(c, p, wi){
+  const dates = weekDates(p, wi), taken = new Set((p.weeks[wi].sessions || []).filter(hasDay).map(s => +s.day));
+  const booked = new Set(apptsOf(c).map(ymd)), tk = today();
+  const free = dates.filter(d => !taken.has(d.getDay()));
+  const d = free.find(d => booked.has(ymd(d)) && ymd(d) >= tk) || free.find(d => ymd(d) >= tk) || free.find(d => booked.has(ymd(d)))
+    || free.find(d => dates.findIndex(x => x.getDay() === d.getDay()) > Math.max(-1, ...[...taken].map(t => dates.findIndex(x => x.getDay() === t)))) || free[0];
+  return d ? { dow: d.getDay(), label: `${DOW[d.getDay()]} ${d.getDate()}`, booked: booked.has(ymd(d)) } : null;
+}
+function covChips(cov){
+  return `<div class="pg-cov">${PATTERNS.map(P => { const n = cov[P.k]; return `<span class="pg-covc ${n >= P.target ? "ok" : n ? "low" : "none"}" title="${n} planned set${n === 1 ? "" : "s"}">${esc(P.label)} <b>${n}</b></span>`; }).join("")}</div>`;
+}
+function roundSheet(){
+  const R = PG.round, c = client(PG.clientId), p = P(), w = p && p.weeks[R.wi]; if (!c || !w) return;
+  const first = c.name.split(" ")[0];
+  R.result = roundOutWeek({ sessions: w.sessions || [], lib: libByName(), history: clientHistory(c, p, R.wi), max: 6 });
+  R.day = roundDay(c, p, R.wi);
+  const rows = R.result.rows;
+  const body = `<p class="small muted">Sets planned this week, by movement. Green is covered, amber is light, grey is missing.</p>${covChips(R.result.coverage)}
+    <h3>Suggested workout</h3><p class="small">Fills in ${esc(R.result.adds.join(", ").toLowerCase())}. Uses ${esc(first)}'s past exercises and numbers where there are some.</p>
+    <table class="ai-rows"><tbody>${rows.map(r => `<tr class="${grpClass(r.group)}"><td class="small"><span class="gchip ${grpClass(r.group)}">${esc(r.group)}</span></td><td>${esc(r.name)}<div class="small muted">${esc(r.pattern)}${r.mine ? "" : " · new for " + esc(first)}</div></td><td class="num">${esc(r.sets)} × ${esc(r.reps)}</td><td class="small">${esc(r.weight || "")}</td></tr>`).join("")}</tbody></table>
+    ${c.programNotes ? `<p class="small">Check against ${esc(first)}'s notes: <i>${esc(c.programNotes.slice(0, 160))}${c.programNotes.length > 160 ? "…" : ""}</i></p>` : ""}
+    <div class="actions"><button class="btn primary" data-act="pg-round-add">${R.day ? `Add on ${esc(R.day.label)}` : "Add to this week"}</button>${C.A.programs.ai ? `<button class="btn" data-act="pg-round-ai" title="The assistant reads the week, ${esc(first)}'s notes and logs, and writes it">✦ Have AI write it</button>` : ""}<button class="btn ghost" data-act="close">Close</button></div>
+    <p class="small muted">You can change anything once it's on the board.</p>`;
+  sheet("⚖ Round out " + (w.label || "Week " + (R.wi + 1)), body);
+}
+/* Put a round-out workout on the board (rows from roundOutWeek or the AI) on the picked day. */
+function addRoundOut(wi, rows, notes){
+  const p = P(), c = client(PG.clientId); if (!p || !p.weeks[wi]) return;
+  const day = roundDay(c, p, wi), lib = libByName(), ss = p.weeks[wi].sessions;
+  const s = newSession("Day " + String.fromCharCode(65 + Math.min(ss.filter(x => !x.homework).length, 25)) + " · Round out");
+  s.notes = notes || ""; if (day) s.day = day.dow;
+  s.rows = rows.map(r => { const e = lib[String(r.name || "").trim().toLowerCase()]; return { id: pid("r"), exId: e ? e.id : null, name: e ? e.name : r.name, group: r.group || "", sets: String(r.sets ?? ""), reps: String(r.reps ?? ""), weight: String(r.weight ?? ""), note: r.note || "" }; });
+  ss.push(s); saveSoon(p); PG.round = null; PG.ai = null; PG.week = wi; C.closeModal(); redraw();
+  setTimeout(() => { const q = inWk(`[data-s="${ss.length - 1}"]`), col = q && q.closest(".pg-col, .pg-sess"); if (col) col.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" }); }, 50);
+  C.toast(day ? `Added on ${day.label}. Edit anything you like.` : "Added. Edit anything you like.");
+}
+
 /* ---------- AI assistant ---------- */
 const DIRS = [["strength", "Strength"], ["stability", "Stability"], ["power", "Power"], ["coordination", "Coordination"], ["endurance", "Endurance"], ["hypertrophy", "Muscle"], ["mobility", "Mobility"], ["deload", "Deload"]];
 function aiSheet(){
   const X = PG.ai, c = client(PG.clientId), p = P(), first = c ? c.name.split(" ")[0] : "client";
-  const title = X.mode === "create" ? "Draft a program" : X.mode === "critique" ? "Critique · " + (p ? p.name : "") : "Progress " + (X.session != null && p ? "“" + p.weeks[X.week].sessions[X.session].name + "”" : p ? p.weeks[X.week].label : "");
+  const title = X.mode === "complement" ? "Round out " + (p ? p.weeks[X.week].label : "") : X.mode === "create" ? "Draft a program" : X.mode === "critique" ? "Critique · " + (p ? p.name : "") : "Progress " + (X.session != null && p ? "“" + p.weeks[X.week].sessions[X.session].name + "”" : p ? p.weeks[X.week].label : "");
   let body = "";
   const flags = f => (f || []).length ? `<div class="ai-flags"><h3>⚠ Check before using</h3>${f.map(x => `<div><b>${esc(x.exercise)}</b>: ${esc(x.concern)}${x.alternative ? ` <span class="muted">Try: ${esc(x.alternative)}</span>` : ""}</div>`).join("")}</div>` : "";
   const lib = libByName();
@@ -915,6 +962,8 @@ function aiSheet(){
       ${(R.strengths || []).length ? `<h3>Working well</h3><ul class="ai-list">${R.strengths.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
       <h3>Suggestions</h3><div class="list">${(R.suggestions || []).map(x => `<div style="display:block"><b>${esc(x.title)}</b> <span class="chip ${x.priority === "high" ? "owes" : x.priority === "medium" ? "low" : "info"}">${esc(x.priority)}</span>${x.where ? ` <span class="small muted">${esc(x.where)}</span>` : ""}<div class="small">${esc(x.detail)}</div></div>`).join("")}</div>
       <div class="actions"><button class="btn primary" data-act="close">Done</button><button class="btn" data-act="pg-ai-back">Run again</button></div>`;
+    else if (X.mode === "complement"){ const d = roundDay(c, p, X.week); body = `<p>${esc(R.summary)}</p>${flags(R.flags)}${(R.changes || []).length ? `<h3>What it adds</h3><ul class="ai-list">${R.changes.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}${(R.sessions || []).slice(0, 1).map(sess).join("")}
+      <div class="actions"><button class="btn primary" data-act="pg-ai-accept" data-how="complement">${d ? `Add on ${esc(d.label)}` : "Add to this week"}</button><button class="btn" data-act="pg-ai-go">Try again</button><button class="btn ghost" data-act="close">Discard</button></div>`; }
     else if (X.mode === "create") body = `<p><b>${esc(R.name)}</b>. ${esc(R.summary)}</p>${flags(R.flags)}${(R.weeks || []).map(w => `<details ${w === R.weeks[0] ? "open" : ""}><summary><b>${esc(w.label)}</b> <span class="small muted">${(w.sessions || []).length} sessions</span></summary>${(w.sessions || []).map(sess).join("")}</details>`).join("")}
       <div class="actions"><button class="btn primary" data-act="pg-ai-accept" data-how="newprog">Use this program</button><button class="btn" data-act="pg-ai-back">Try again</button><button class="btn ghost" data-act="close">Discard</button></div>
       <p class="small muted">New exercises are added to your library when you use the program.</p>`;
@@ -930,6 +979,7 @@ async function aiRun(){
   const X = PG.ai, c = client(PG.clientId), p = P();
   const body = { action: X.mode, clientId: c.shared ? c.realId : c.id, ownerId: c.shared ? c.ownerId : undefined, programId: p ? p.id : undefined };
   if (X.mode === "create") body.brief = { weeks: valIn("ai-weeks"), daysPerWeek: valIn("ai-days"), homework: valIn("ai-hw"), equipment: valIn("ai-eq"), goal: valIn("ai-goal"), notes: valIn("ai-notes") };
+  if (X.mode === "complement"){ body.week = X.week; body.coverage = weekCoverage(p.weeks[X.week].sessions || [], libByName()); }
   if (X.mode === "progress"){ X.notes = valIn("ai-notes"); body.week = X.week; body.session = X.session; body.direction = X.direction || ""; body.notes = X.notes; if (!X.direction && !X.notes){ C.toast("Pick a direction or describe it"); return; } }
   X.step = "loading"; aiSheet();
   try { const r = await C.A.programs.ai(body); X.result = r.result; X.step = "result"; }
@@ -950,6 +1000,7 @@ async function aiToRows(rows){
 const aiSession = async s => ({ id: pid("s"), name: s.name || "Session", homework: !!s.homework, notes: s.notes || "", rows: await aiToRows(s.rows) });
 async function aiAccept(how){
   const X = PG.ai, R = X.result;
+  if (X.mode === "complement"){ const s = (R.sessions || [])[0]; if (!s) return; const rows = await aiToRows(s.rows); addRoundOut(X.week, rows, s.notes); return; }
   if (X.mode === "create"){
     const weeks = []; for (const w of R.weeks || []){ const ss = []; for (const s of w.sessions || []) ss.push(await aiSession(s)); weeks.push({ id: pid("w"), label: w.label || "Week " + (weeks.length + 1), sessions: ss }); }
     const np = { id: pid("p"), weekStart: profWeekStart(), ...newProgram(PG.clientId, R.name || "Program"), weeks };
@@ -1043,6 +1094,9 @@ async function onClick(el, e){
     case "pg-tools": PG.tools = !PG.tools; redraw(); break;
     case "pg-more": { const id = el.getAttribute("data-id"); PG.more = PG.more === id ? null : id; PG.confirm = null; redraw(); break; }
     case "pg-addday": addOnDay(+el.getAttribute("data-d")); break;
+    case "pg-round": PG.round = { wi }; roundSheet(); break;
+    case "pg-round-add": addRoundOut(PG.round.wi, PG.round.result.rows, ""); break;
+    case "pg-round-ai": { const r = PG.round; PG.round = null; PG.ai = { mode: "complement", step: "form", week: r.wi, session: null, direction: "", notes: "" }; aiRun(); break; }
     case "pg-copyday": addOnDay(+el.getAttribute("data-d"), el.getAttribute("data-from")); break;
     case "pg-edrow": { const r = p.weeks[wi].sessions[si].rows[ri]; PG.editRow = PG.editRow === r.id ? null : r.id; redraw();
       if (PG.editRow){ const n = inWk(`.pg-edit input[data-f="sr"][data-s="${si}"][data-r="${ri}"]`); if (n){ n.focus(); try { n.select(); } catch (x){} } } break; }
@@ -1398,6 +1452,13 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-wkblock:first-of-type{border-top:0}
 .pg-wkh{display:flex;gap:10px;align-items:baseline;padding:2px 2px 0}
 .pg-wkh b{font-size:15px}
+.pg-roundbtn{margin-left:auto;align-self:center}
+.pg-cov{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 10px}
+.pg-covc{font-size:12.5px;padding:4px 9px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+.pg-covc b{color:var(--ink);margin-left:2px}
+.pg-covc.ok{border-color:color-mix(in srgb,#2e9e5b 55%,var(--line));background:color-mix(in srgb,#2e9e5b 12%,transparent);color:var(--ink)}
+.pg-covc.low{border-color:color-mix(in srgb,#d99a1e 60%,var(--line));background:color-mix(in srgb,#d99a1e 12%,transparent);color:var(--ink)}
+.pg-covc.none{border-style:dashed}
 .pg-wkblock.sel .pg-wkh b{color:var(--accent)}
 .pg-more-wk{align-self:center}
 .pg-sgrip{touch-action:none;cursor:grab;border:0;background:none;color:var(--muted);font-size:16px;line-height:1;padding:6px 2px;border-radius:6px;flex:0 0 auto;user-select:none;-webkit-user-select:none}

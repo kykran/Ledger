@@ -74,6 +74,15 @@ export function demoProgramsAdapter(){
       if (b.action === "critique") return { result: { summary: "Demo critique: solid split between lower and upper days with sensible supersets. Pulling volume is a little light compared with pushing.",
         strengths: ["Big lifts come first while fresh", "Homework is short and doable alone"], suggestions: [{ title: "Add a second pull", detail: "Add a row or pulldown on Day A to balance the presses.", priority: "medium", where: "Day A" }, { title: "Progress the deadlift", detail: "Climb by 5-10 lb a week while bar speed holds.", priority: "low" }],
         flags: [{ exercise: "Trap Bar Deadlift", concern: "Demo flag: watch the low back if notes mention back pain.", alternative: "Hip Thrust" }] } };
+      if (b.action === "complement") return { result: { summary: "Demo: the week is heavy on squats, presses and rows but has no vertical pulling, no carries and little rotation work, so this day fills those in.",
+        changes: ["Vertical pull (pulldown) to balance the pressing", "A loaded carry for grip and trunk", "Anti-rotation core work", "Single-leg hinge for balance"],
+        sessions: [{ name: "Day C · Round out", homework: false, notes: "Keep rest short between pairs.", rows: [
+          { group: "A1", name: "Single-Leg RDL", sets: "3", reps: "8 each", weight: "25", note: "Slow lower, hips square" },
+          { group: "A2", name: "Lat Pulldown", sets: "3", reps: "10", weight: "70", note: "" },
+          { group: "B1", name: "Goblet Squat", sets: "3", reps: "10", weight: "35", note: "" },
+          { group: "B2", name: "Half-Kneeling Dumbbell Press", sets: "3", reps: "8 each", weight: "20", note: "" },
+          { group: "C1", name: "Suitcase Carry", sets: "3", reps: "40s", weight: "35", note: "Switch hands each round" },
+          { group: "C2", name: "Pallof Press", sets: "3", reps: "10 each", weight: "", note: "" }] }], flags: [] } };
       if (b.action === "progress"){
         const w = prog.weeks[b.week], ss = b.session != null ? [w.sessions[b.session]] : w.sessions;
         return { result: { summary: `Demo: progressed toward ${b.direction || "your notes"}.`, changes: ["Loads up about 5 lb where logs allowed", "Swapped one exercise for a new single-leg option"],

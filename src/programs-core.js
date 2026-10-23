@@ -628,3 +628,59 @@ export function sessionBrief({ session, logs = [], notes = "", billing = null, b
   } else if (billing && billing.status === "owes") flags.push({ text: billing.label || "Owes money", tone: "warn" });
   return { lines, flags };
 }
+
+/* ---------- round out the week ----------
+ * Each exercise is sorted into movement patterns by its name (most real libraries have no muscle tags),
+ * with the library's muscle group as a fallback. A week's coverage is the planned sets per pattern;
+ * roundOutWeek() builds one workout from the patterns the week is short on. */
+export const PATTERNS = [
+  { k: "knee", label: "Squat", lower: true, target: 3, re: /squat|leg press|step[- ]?(up|down)|wall ?sit|leg ext|lunge|pistol/i, muscle: /legs|quad/i, dflt: ["Goblet Squat", "3", "8"] },
+  { k: "hinge", label: "Hinge", lower: true, target: 3, re: /dead ?lift|dealift|\brdl\b|good ?morning|hip thrust|bridge|swing|hamstring|hinge|pull[- ]?through|back ext|hyperext/i, muscle: /hamstring|glute/i, dflt: ["Romanian Deadlift", "3", "8"] },
+  { k: "single", label: "Single leg", lower: true, target: 3, re: /split|lunge|step[- ]?(up|down)|single[- ]?leg|\bsl\b|pistol|bulgarian|skater|lateral squat/i, dflt: ["Reverse Lunge", "3", "8 each"] },
+  { k: "hpush", label: "Push", upper: true, push: true, target: 3, re: /bench|chest (press|fl)|floor press|push[- ]?up|\bfl(y|ies)\b|\bdips?\b|chest press/i, not: /row/i, muscle: /chest/i, dflt: ["Dumbbell Bench Press", "3", "8"] },
+  { k: "vpush", label: "Overhead", upper: true, push: true, target: 3, re: /shoulder press|overhead press|\boh press|military|landmine (shoulder )?press|arnold|pike|kneeling.*press/i, not: /chest|cable/i, muscle: /shoulder/i, dflt: ["Half-Kneeling Dumbbell Press", "3", "8 each"] },
+  { k: "hpull", label: "Row", upper: true, pull: true, target: 3, re: /\brows?\b|face pull|reverse fl|rear delt|pull[- ]?apart|\bseal\b/i, muscle: /back/i, dflt: ["Chest-Supported Row", "3", "10"] },
+  { k: "vpull", label: "Pulldown", upper: true, pull: true, target: 3, re: /pull ?down|pull[- ]?ups?\b|pulll up|chin[- ]?up|lat pull/i, not: /apart/i, dflt: ["Lat Pulldown", "3", "10"] },
+  { k: "core", label: "Core", target: 6, re: /plank|dead ?bug|pallof|bird ?dog|birdog|crunch|hollow|roll ?out|chop|beast|copenhagen|\babs?\b|sit[- ]?up|leg lower|knee tap/i, muscle: /core/i, dflt: ["Dead Bug", "3", "8 each"] },
+  { k: "carry", label: "Carry", target: 2, re: /carry|farmer|suitcase|waiter/i, dflt: ["Suitcase Carry", "3", "40s"] }
+];
+export function patternsOf(name, muscle){
+  const n = String(name || ""), out = PATTERNS.filter(P => P.re.test(n) && !(P.not && P.not.test(n))).map(P => P.k);
+  if (!out.length && muscle){ const P = PATTERNS.find(P => P.muscle && P.muscle.test(muscle)); if (P) out.push(P.k); }
+  return out;
+}
+const libMuscle = (lib, name) => { const e = lib && lib[String(name || "").trim().toLowerCase()]; return e ? e.muscle : ""; };
+/* Planned sets per pattern across the week's workouts (homework counts too). */
+export function weekCoverage(sessions, lib){
+  const cov = Object.fromEntries(PATTERNS.map(P => [P.k, 0]));
+  for (const s of sessions || []) for (const r of s.rows || []){ if (!r.name) continue; const n = setCount(r) || 1; for (const k of patternsOf(r.name, libMuscle(lib, r.name))) cov[k] += n; }
+  return cov;
+}
+/* history: the client's earlier rows, newest first ({name, sets, reps, weight}); libList: the exercise library. */
+export function roundOutWeek({ sessions = [], lib = {}, history = [], max = 6 }){
+  const cov = weekCoverage(sessions, lib), have = new Set();
+  for (const s of sessions) for (const r of s.rows || []) if (r.name) have.add(r.name.trim().toLowerCase());
+  const push = cov.hpush + cov.vpush, pull = cov.hpull + cov.vpull;
+  const need = PATTERNS.map(P => ({ P, gap: P.target - cov[P.k] + (P.pull && pull < push ? (push - pull) / 2 : 0) }));
+  let pick = need.filter(x => x.gap > 0).sort((a, b) => b.gap / b.P.target - a.gap / a.P.target);
+  if (pick.length < 4) pick = [...pick, ...need.filter(x => x.gap <= 0).sort((a, b) => cov[a.P.k] / a.P.target - cov[b.P.k] / b.P.target)].slice(0, 4);
+  pick = pick.slice(0, max).map(x => x.P);
+  // Candidates: what this client has done before (newest first), then the library. Nothing already in the week.
+  const seen = new Set(), cands = [];
+  for (const h of history){ const key = String(h.name || "").trim().toLowerCase(); if (!key || seen.has(key)) continue; seen.add(key); cands.push({ ...h, mine: true }); }
+  for (const e of Object.values(lib)){ const key = String(e.name || "").trim().toLowerCase(); if (!key || seen.has(key)) continue; seen.add(key); cands.push({ name: e.name, sets: e.sets, reps: e.reps, weight: "" }); }
+  const used = new Set(have), rows = [];
+  for (const P of pick){
+    const c = cands.find(x => !used.has(x.name.trim().toLowerCase()) && patternsOf(x.name, libMuscle(lib, x.name)).includes(P.k));
+    const [dn, ds, dr] = P.dflt, name = c ? c.name : dn;
+    if (used.has(name.trim().toLowerCase())) continue; used.add(name.trim().toLowerCase());
+    rows.push({ P, name, sets: String((c && c.sets) || ds), reps: String((c && c.reps) || dr), weight: String((c && c.weight) || ""), mine: !!(c && c.mine) });
+  }
+  // Order: strength lifts in pairs first (lower with upper where there's both), core and carries last.
+  const lower = rows.filter(r => r.P.lower), upper = rows.filter(r => r.P.upper), rest = rows.filter(r => !r.P.lower && !r.P.upper);
+  const strength = []; for (let i = 0; i < Math.max(lower.length, upper.length); i++) strength.push(...[lower[i], upper[i]].filter(Boolean));
+  const blocks = []; for (let i = 0; i < strength.length; i += 2) blocks.push(strength.slice(i, i + 2));
+  if (rest.length) blocks.push(rest);
+  const out = []; blocks.forEach((b, bi) => b.forEach((r, ri) => out.push({ group: b.length > 1 ? String.fromCharCode(65 + bi) + (ri + 1) : String.fromCharCode(65 + bi), name: r.name, sets: r.sets, reps: r.reps, weight: r.weight, note: "", pattern: r.P.label, mine: r.mine })));
+  return { coverage: cov, adds: pick.map(P => P.label), rows: out };
+}
