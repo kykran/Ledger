@@ -50,7 +50,9 @@ async function syncNow(btn){
   } catch (e){ S.calLoading = false; render(); toast("Couldn't sync. Check your connection and try again."); }
   btn.disabled = false; btn.classList.remove("spin"); label.textContent = "Sync";
 }
-async function saveClient(c){ const body = { ...c }; delete body.id; body.updatedAt = new Date().toISOString(); const i = S.clients.findIndex(x => x.id === c.id); if (i >= 0) S.clients[i] = c; await A.setClient(c.id, body); }
+async function saveClient(c){ const body = { ...c }; delete body.id; body.updatedAt = new Date().toISOString(); const i = S.clients.findIndex(x => x.id === c.id); if (i >= 0) S.clients[i] = c; else S.clients.push(c); await A.setClient(c.id, body); }
+/* A client was added here: recount with the bookings already loaded, so their next session shows straight away. */
+function modelChanged(){ if (S.M) S.M = globalThis.TallyEngine.compute({ profile: S.prof, clients: S.clients, events: S.M.ctx.events, now: new Date() }); render(); }
 async function saveProfile(patch){ S.prof = { ...(S.prof || {}), ...patch, updatedAt: new Date().toISOString() }; await A.setProfile(S.prof); }
 
 document.addEventListener("click", e => {
@@ -72,7 +74,7 @@ async function start(){
   if (demo){ await import("./engine-global.js"); const { demoAdapter } = await import("./demo-core.js"); A = demoAdapter(); $("#pa-home").href = "/demo.html"; }
   else A = (await import("./adapter-hosted-core.js")).default;
   demoMode = demo;
-  P.attach({ S, A, avatar, toast, render, closeModal, saveClient, saveProfile, standalone: true, getModel: () => S.M, modelLoading: () => S.calLoading });
+  P.attach({ S, A, avatar, toast, render, closeModal, saveClient, saveProfile, modelChanged, standalone: true, getModel: () => S.M, modelLoading: () => S.calLoading });
   let info; try { info = await A.init(); } catch (e) { info = { status: "error" }; }
   if (info.status !== "ready"){
     $("#main").innerHTML = info.status === "signin"
