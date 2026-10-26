@@ -58,6 +58,22 @@
     footer{color:var(--muted);font-size:12px;text-align:center;margin-top:6px}
     .skel{height:120px;border-radius:16px;background:var(--surface2);animation:p 1.2s ease-in-out infinite alternate} @keyframes p{to{opacity:.5}}
     .empty{color:var(--muted);font-size:14px;text-align:center;padding:14px 0}
+    .btn.wide{width:100%}
+    .card.doing{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+    .strip{display:flex;justify-content:space-between;align-items:center;gap:10px;width:100%;text-align:left;border:1px solid var(--line);background:var(--surface);border-radius:14px;padding:11px 14px;font-size:14px;cursor:pointer}
+    .strip.warn b{color:var(--warn)}
+    .sv{display:flex;flex-direction:column;gap:14px}
+    .sv h2{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin:0 0 4px;font-weight:600}
+    .sv .card{gap:4px}
+    .sv .big{font-size:52px;font-weight:700;line-height:1;letter-spacing:-.02em} .sv .of{color:var(--muted);font-size:15px;margin-left:6px}
+    .sv .bar{height:8px;background:var(--surface2);border-radius:99px;overflow:hidden;margin:12px 0 6px} .sv .bar i{display:block;height:100%;background:var(--accent);border-radius:99px}
+    .sv .note{margin:0} .sv .warn{color:var(--warn)}
+    .sv ul{list-style:none;margin:0;padding:0} .sv li{display:flex;justify-content:space-between;padding:9px 0;border-top:1px solid var(--line)} .sv li:first-child{border-top:0}
+    .sv li span:last-child{color:var(--muted)} .sv .empty{text-align:left;padding:0}
+    .sv ul.num{margin-top:8px} .sv ul.num li span:first-child{display:flex;gap:12px;align-items:baseline}
+    .sv .n{display:inline-block;min-width:26px;text-align:right;color:var(--muted);font-weight:600;font-size:13px}
+    .sv li.bk span:first-child{color:var(--ink2)} .sv li.bk .n{color:var(--accent)}
+    .sv .nextpk{border-color:color-mix(in srgb,var(--warn) 45%,var(--line))}
   </style>
 </head>
 <body>
