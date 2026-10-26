@@ -1,4 +1,6 @@
-/* A client's private program page: their program and videos, homework logging, bodyweight and progress charts. */
+/* A client's private program page: their program and videos, homework (pick one, "Do this workout", it's logged on the day they do it),
+ * sessions left / booked, bodyweight and progress charts. */
+import { sessionCards, sessionsLine } from "./sessions-view.js";
 import { clientProgramView, weekZero, setCount, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, repsFor, timedPlan } from "./programs-core.js";
 
 const $m = document.getElementById("m");
@@ -12,7 +14,7 @@ const CHECK = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 
 document.head.insertAdjacentHTML("beforeend", `<style>${LINECHART_CSS}${VIDEO_CSS}${GROUP_CSS}.ex.g{border-left:4px solid var(--g);padding-left:10px;margin-left:-2px}</style>`);
 
 let V = null, demoStore = null;
-const st = { prog: 0, week: null, tab: "program", open: {}, draft: {}, lift: "" };
+const st = { prog: 0, week: null, tab: "program", open: {}, draft: {}, lift: "", doing: null };
 
 function toast(msg){ const t = document.createElement("div"); t.className = "toast"; t.setAttribute("role", "status"); t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 2600); }
 const logsFor = (pid, sid) => { const o = {}; for (const l of V.logs) if (l.p === pid && l.s === sid) o[l.r + "|" + l.n] = l; return o; };
@@ -26,8 +28,8 @@ function currentWeek(p){
 function render(){
   document.title = `${V.first}'s program`;
   const head = `<div><h1>Hi ${esc(V.first)}</h1><p class="sub">${V.trainer ? `Your program from ${esc(V.trainer)}` : "Your program"}</p></div>
-    <div class="seg" role="group" aria-label="View">${[["program", "Program"], ["progress", "Progress"]].map(([k, l]) => `<button data-act="tab" data-k="${k}" aria-pressed="${st.tab === k}">${l}</button>`).join("")}</div>`;
-  $m.innerHTML = head + (st.tab === "progress" ? renderProgress() : renderProgram()) + `<footer>Trainer Tally</footer>`;
+    <div class="seg" role="group" aria-label="View">${[["program", "Program"], ...(V.sessions ? [["sessions", "Sessions"]] : []), ["progress", "Progress"]].map(([k, l]) => `<button data-act="tab" data-k="${k}" aria-pressed="${st.tab === k}">${l}</button>`).join("")}</div>`;
+  $m.innerHTML = head + (st.tab === "progress" ? renderProgress() : st.tab === "sessions" && V.sessions ? `<div class="sv">${sessionCards(V.sessions)}</div>` : renderProgram()) + `<footer>Trainer Tally</footer>`;
 }
 
 function renderProgram(){
@@ -37,7 +39,22 @@ function renderProgram(){
   const wk = p.weeks[Math.min(st.week, p.weeks.length - 1)];
   const pick = V.programs.length > 1 ? `<select data-act="prog" aria-label="Program">${V.programs.map((x, i) => `<option value="${i}" ${i === st.prog ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : `<h3>${esc(p.name)}</h3>`;
   const tabs = `<div class="tabs" role="tablist">${p.weeks.map((w, i) => `<button role="tab" aria-selected="${i === st.week}" data-act="week" data-i="${i}">${esc(w.label || "Week " + (i + 1))}</button>`).join("")}</div>`;
-  return pick + tabs + (wk && wk.sessions.length ? wk.sessions.map(s => renderSession(p, s)).join("") : `<div class="card"><div class="empty">Nothing scheduled this week.</div></div>`);
+  const studio = wk ? wk.sessions.filter(s => !s.homework) : [];
+  return sessionsStrip() + renderHomework(p) + pick + tabs + (studio.length ? studio.map(s => renderSession(p, s)).join("") : `<div class="card"><div class="empty">${V.trainer ? `Your sessions with ${esc(V.trainer)}` : "Your sessions"} show here once they're written.</div></div>`);
+}
+/* Sessions left (or this month) and the next booking, tapping through to the Sessions tab. */
+function sessionsStrip(){
+  if (!V.sessions) return "";
+  const L = sessionsLine(V.sessions);
+  return `<button class="strip ${L.warn ? "warn" : ""}" data-act="tab" data-k="sessions"><span><b>${esc(L.text)}</b>${L.next ? `<span class="muted"> · next ${esc(L.next)}</span>` : ""}</span><span aria-hidden="true">›</span></button>`;
+}
+/* Homework isn't tied to a day: the client picks a workout, taps "Do this workout", and it's logged on the day they do it.
+ * Shows this week's homework, or the latest week before it that has some. */
+function renderHomework(p){
+  const now = currentWeek(p); let list = [];
+  for (let i = now; i >= 0 && !list.length; i--) list = (p.weeks[i] ? p.weeks[i].sessions : []).filter(s => s.homework && s.rows.length);
+  if (!list.length) return "";
+  return `<h3>Homework · do these on your own</h3>${list.map(s => renderSession(p, s)).join("")}<h3 style="margin-top:6px">With ${esc(V.trainer || "your trainer")}</h3>`;
 }
 
 function renderSession(p, s){
@@ -48,8 +65,8 @@ function renderSession(p, s){
     const ex = r.exId && V.exercises[r.exId], open = st.open[s.id + r.id];
     const rx = [r.sets && r.reps ? `${esc(r.sets)} × ${esc(r.reps)}` : esc(r.reps || r.sets), r.weight ? `@ ${esc(r.weight)}` : ""].filter(Boolean).join(" ");
     let sets = "";
-    if (s.homework){
-      sets = `<div class="sets">${Array.from({ length: setCount(r) }, (_, k) => { const key = r.id + "|" + (k + 1), l = draft[key] || logged[key] || {};
+    if (s.homework && st.doing === s.id){
+      sets = `<div class="sets">${Array.from({ length: setCount(r) }, (_, k) => { const key = r.id + "|" + (k + 1), l = draft[key] || {};
         return `<div class="set"><span class="lbl">Set ${k + 1}</span>
           <input type="number" inputmode="numeric" placeholder="${timedPlan(r) ? "Secs" : "Reps"}${repsFor(r, k) ? " (" + repsFor(r, k) + ")" : ""}" aria-label="Set ${k + 1} ${timedPlan(r) ? "seconds" : "reps"}" data-act="set" data-s="${s.id}" data-k="${esc(key)}" data-f="reps" value="${esc(l.reps ?? "")}">
           <input type="number" inputmode="decimal" step="0.5" placeholder="Weight${r.weight ? " (" + esc(r.weight) + ")" : ""}" aria-label="Set ${k + 1} weight" data-act="set" data-s="${s.id}" data-k="${esc(key)}" data-f="weight" value="${esc(l.weight ?? "")}">
@@ -60,10 +77,13 @@ function renderSession(p, s){
       ${open && ex ? `<div class="detail">${ex.video ? videoEmbed(ex.video) : ""}${ex.cues ? `<div class="note">${esc(ex.cues)}</div>` : ""}</div>` : ""}
       ${sets}</div>`;
   }).join("");
-  return `<section class="card"><div class="sess-h"><h2>${esc(s.name)}</h2>${s.homework ? `<span class="badge ${doneOn ? "done" : ""}">${doneOn ? "Logged " + esc(fmt(doneOn)) : "Homework"}</span>` : doneOn ? `<span class="badge done">Done ${esc(fmt(doneOn))}</span>` : ""}</div>
+  const doing = s.homework && st.doing === s.id, when = d => d === today() ? "today" : fmt(d);
+  return `<section class="card ${doing ? "doing" : ""}" id="s-${esc(s.id)}"><div class="sess-h"><h2>${esc(s.name)}</h2>${s.homework ? (doneOn ? `<span class="badge done">Done ${esc(when(doneOn))}</span>` : "") : doneOn ? `<span class="badge done">Done ${esc(fmt(doneOn))}</span>` : ""}</div>
     ${s.notes ? `<div class="note">${esc(s.notes)}</div>` : ""}
     ${exs || `<div class="empty">No exercises yet.</div>`}
-    ${s.homework && s.rows.length ? `<div class="row"><label class="lbl" for="d-${s.id}">Date</label><input type="date" id="d-${s.id}" value="${doneOn || today()}"><button class="btn primary" data-act="save" data-s="${s.id}" style="margin-left:auto">Save workout</button></div>` : ""}
+    ${s.homework && s.rows.length ? (doing
+      ? `<div class="row"><label class="lbl" for="d-${s.id}">Done on</label><input type="date" id="d-${s.id}" value="${today()}" max="${today()}"><button class="btn" data-act="stop" style="margin-left:auto">Cancel</button><button class="btn primary" data-act="save" data-s="${s.id}">Save workout</button></div>`
+      : `<button class="btn primary wide" data-act="do" data-s="${s.id}">${doneOn ? "Do it again" : "Do this workout"}</button>`) : ""}
   </section>`;
 }
 
@@ -96,14 +116,16 @@ document.addEventListener("click", async e => {
   const a = el.getAttribute("data-act");
   if (a === "tab"){ st.tab = el.getAttribute("data-k"); render(); }
   else if (a === "week"){ st.week = +el.getAttribute("data-i"); render(); }
+  else if (a === "do"){ const sid = el.getAttribute("data-s"); st.doing = sid; st.draft[sid] = {}; render(); const c = document.getElementById("s-" + sid); if (c) c.scrollIntoView({ block: "start", behavior: "smooth" }); }
+  else if (a === "stop"){ st.doing = null; render(); }
   else if (a === "open"){ const k = el.getAttribute("data-k"); st.open[k] = !st.open[k]; render(); }
-  else if (a === "done"){ const s = el.getAttribute("data-s"), k = el.getAttribute("data-k"); const d = (st.draft[s][k] = st.draft[s][k] || { ...(logsFor(V.programs[st.prog].id, s)[k] || {}) }); d.done = !d.done; el.setAttribute("aria-pressed", String(d.done)); }
+  else if (a === "done"){ const s = el.getAttribute("data-s"), k = el.getAttribute("data-k"); const d = (st.draft[s][k] = st.draft[s][k] || {}); d.done = !d.done; el.setAttribute("aria-pressed", String(d.done)); }
   else if (a === "save"){
     const sid = el.getAttribute("data-s"), p = V.programs[st.prog], d = st.draft[sid] || {};
     const sets = Object.entries(d).map(([k, v]) => { const [row_id, n] = k.split("|"); return { row_id, set_no: +n, reps: v.reps ?? null, weight: v.weight ?? null, done: !!v.done || (v.reps != null && v.reps !== "") }; });
     if (!sets.length){ toast("Fill in a set first"); return; }
     el.disabled = true; el.textContent = "Saving…";
-    try { await post({ action: "log", program_id: p.id, session_id: sid, logged_on: document.getElementById("d-" + sid).value, sets }); st.draft[sid] = {}; toast("Workout saved. Nice work!"); await load(true); }
+    try { await post({ action: "log", program_id: p.id, session_id: sid, logged_on: document.getElementById("d-" + sid).value, sets }); st.draft[sid] = {}; st.doing = null; toast("Workout saved. Nice work!"); await load(true); }
     catch (x){ toast(x.message); el.disabled = false; el.textContent = "Save workout"; }
   }
   else if (a === "bw"){
@@ -115,7 +137,7 @@ document.addEventListener("click", async e => {
 document.addEventListener("input", e => {
   const el = e.target; if (el.getAttribute("data-act") !== "set") return;
   const s = el.getAttribute("data-s"), k = el.getAttribute("data-k");
-  const d = (st.draft[s][k] = st.draft[s][k] || { ...(logsFor(V.programs[st.prog].id, s)[k] || {}) });
+  const d = (st.draft[s][k] = st.draft[s][k] || {});
   d[el.getAttribute("data-f")] = el.value === "" ? null : Number(el.value);
 });
 document.addEventListener("change", e => {
@@ -129,6 +151,8 @@ async function load(quiet){
   if (demo){
     if (!demoStore){ const { buildProgramsDemo } = await import("./programs-demo.js"); demoStore = buildProgramsDemo(); }
     V = clientProgramView({ client: { name: "Maya Chen", sex: "female", birthYear: new Date().getFullYear() - 34 }, trainerName: "Alex", programs: demoStore.programs.filter(p => p.clientId === demo), exercises: demoStore.exercises, logs: demoStore.logs, measurements: demoStore.measurements });
+    try { const E = await import("./engine.js"); globalThis.TallyEngine = E; const { buildDemo } = await import("./demo-data.js"), { demoModel } = await import("./demo-core.js");
+      const D = buildDemo(), b = E.clientView(demoModel(D, D.profile, D.clients), demo); if (b) V.sessions = b; } catch (x){}
     return render();
   }
   try {
