@@ -26,18 +26,18 @@ function render(v){
     const line = (iso, n, booked) => `<li class="${booked ? "bk" : ""}"><span><b class="n">${n}</b>${esc(day(iso))}</span><span>${booked ? `booked · ${esc(time(iso))}` : "done"}</span></li>`;
     const P = v.pack, done = P.done.length + (P.uncounted || 0), fmtRange = a => a.length ? `${esc(day(a[0]).replace(/^\w+, /, ""))} – ${esc(day(a[a.length - 1]).replace(/^\w+, /, ""))}` : "";
     const all = [...P.done, ...P.booked];
-    // Earlier packages (not paid yet, or paid ones the trainer chose to show): every session, numbered, oldest package first.
+    // Earlier packages (not paid yet, or paid ones the trainer chose to show): every session, numbered. Newest package is shown first.
     const owed = v.owed || [], unpaidTag = `<span class="due">not paid yet</span>`;
     const owedCards = owed.map((O, k) => { const n0 = O.uncounted || 0;
       return `<div class="card"><h2>Package ${k + 1} · ${O.size} sessions ${O.paid ? `<span class="due paid">${esc(O.paid)}</span>` : unpaidTag}</h2><p class="note">${fmtRange(O.done)} · ${O.done.length + n0} done</p>
-      <ul class="num">${n0 ? `<li><span><b class="n">1–${n0}</b>Earlier sessions</span><span>done</span></li>` : ""}${O.done.map((d, i) => line(d, i + 1 + n0, false)).join("")}</ul></div>`; }).join("");
-    recent = owedCards + `<div class="card"><h2>${owed.length ? `Package ${owed.length + 1}` : "This package"} · ${P.size} sessions${P.unpaid ? " " + unpaidTag : ""}</h2><p class="note">${fmtRange(all)}${P.done.length ? ` · ${Math.min(done, P.size)} done` : ""}${P.booked.length ? ` · ${P.booked.length} booked` : ""}</p>
+      <ul class="num">${n0 ? `<li><span><b class="n">1–${n0}</b>Earlier sessions</span><span>done</span></li>` : ""}${O.done.map((d, i) => line(d, i + 1 + n0, false)).join("")}</ul></div>`; }).reverse().join("");
+    recent = `<div class="card"><h2>${owed.length ? `Package ${owed.length + 1}` : "This package"} · ${P.size} sessions${P.unpaid ? " " + unpaidTag : ""}</h2><p class="note">${fmtRange(all)}${P.done.length ? ` · ${Math.min(done, P.size)} done` : ""}${P.booked.length ? ` · ${P.booked.length} booked` : ""}</p>
       <ul class="num">${P.uncounted ? `<li><span><b class="n">1–${P.uncounted}</b>Earlier sessions</span><span>done</span></li>` : ""}${P.done.map((d, i) => line(d, i + 1 + (P.uncounted || 0), false)).join("")}${P.booked.map((d, i) => line(d, done + i + 1, true)).join("")}</ul>
-      ${done + P.booked.length < P.size ? `<p class="note" style="margin-top:10px">${P.size - done - P.booked.length} more to book in this package.</p>` : ""}</div>`;
+      ${done + P.booked.length < P.size ? `<p class="note" style="margin-top:10px">${P.size - done - P.booked.length} more to book in this package.</p>` : ""}</div>` + owedCards;
     const N = v.nextPack || { done: [], booked: [] };
     if (N.done.length || N.booked.length){
-      recent += `<div class="card nextpk"><h2>Next package</h2><p class="note ${N.done.length ? "warn" : ""}">${N.done.length ? `${N.done.length} session${N.done.length === 1 ? "" : "s"} done since this package ran out. They count toward your next package.` : "These sessions start your next package."}</p>
-        <ul class="num">${N.done.map((d, i) => line(d, i + 1, false)).join("")}${N.booked.map((d, i) => line(d, N.done.length + i + 1, true)).join("")}</ul></div>`;
+      recent = `<div class="card nextpk"><h2>Next package</h2><p class="note ${N.done.length ? "warn" : ""}">${N.done.length ? `${N.done.length} session${N.done.length === 1 ? "" : "s"} done since this package ran out. They count toward your next package.` : "These sessions start your next package."}</p>
+        <ul class="num">${N.done.map((d, i) => line(d, i + 1, false)).join("")}${N.booked.map((d, i) => line(d, N.done.length + i + 1, true)).join("")}</ul></div>` + recent;
     }
     upcoming = "";
   }
