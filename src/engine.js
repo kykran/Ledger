@@ -507,11 +507,21 @@ export function clientView(M, clientId){
   if (st.bill === "package" && st.current){ v.left = Math.max(0, st.remaining); v.size = st.current.size; v.used = Math.min(st.current.size, st.current.usedIn); v.over = Math.max(0, -st.remaining);
     v.runout = st.runout ? st.runout.toISOString() : null; v.runoutEst = !!st.runoutEst;
     // Every session in this package, oldest first and numbered, then the ones past it (they count toward the next package).
-    const ci = st.current.index, cp = (c.packages || [])[ci] || {}, pre = ci === 0 ? num(cp.used0) : 0;
-    const carried = pre > 0 ? st.past.filter(s => s.date < new Date(cp.start)).slice(-pre) : [];
-    const done = [...carried, ...st.past.filter(s => s.pkg === ci)].map(s => s.date.toISOString());
-    const slots = Math.max(0, st.current.size - done.length - (pre - carried.length));
-    v.pack = { size: st.current.size, done, booked: st.future.slice(0, slots).map(s => s.date.toISOString()), uncounted: Math.max(0, pre - carried.length) };
+    const pk = c.packages || [], ci = st.current.index;
+    // Sessions in package j, oldest first. A first package can start before the app's calendar history:
+    // its `earlier` dates (if the trainer listed them) or older calendar sessions fill in those first `used0` slots.
+    const pkgDone = j => {
+      const p = pk[j] || {}, pre = j === 0 ? num(p.used0) : 0;
+      const listed = Array.isArray(p.earlier) ? p.earlier.map(d => new Date(d)).filter(d => !isNaN(d)) : [];
+      const early = pre <= 0 ? [] : listed.length ? listed.slice(-pre) : st.past.filter(s => s.date < new Date(p.start)).slice(-pre).map(s => s.date);
+      return { done: [...early, ...st.past.filter(s => s.pkg === j).map(s => s.date)].map(d => d.toISOString()), uncounted: Math.max(0, pre - early.length) };
+    };
+    const cur = pkgDone(ci), done = cur.done;
+    const slots = Math.max(0, st.current.size - done.length - cur.uncounted);
+    v.pack = { size: st.current.size, done, booked: st.future.slice(0, slots).map(s => s.date.toISOString()), uncounted: cur.uncounted };
+    // Earlier packages that are used up but not paid yet, each with every session, so the client sees what they owe for.
+    v.owed = pk.map((p, j) => ({p, j})).filter(({p, j}) => j < ci && !p.paidDate).map(({p, j}) => ({ size: num(p.size), ...pkgDone(j) }));
+    if (v.owed.length) v.pack.unpaid = !(pk[ci] || {}).paidDate;
     v.nextPack = { done: st.past.filter(s => s.over).map(s => s.date.toISOString()), booked: st.future.slice(slots, slots + 8).map(s => s.date.toISOString()) };
     const inPack = st.past.filter(s => s.pkg === ci || s.over);
     if (inPack.length > v.recent.length) v.recent = inPack.slice().reverse().map(s => s.date.toISOString());

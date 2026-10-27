@@ -13,6 +13,7 @@ function render(v){
     const pct = Math.min(100, Math.round(v.used / v.size * 100));
     head = `<div class="card"><h2>Sessions left</h2><div><span class="big">${v.left}</span><span class="of">of ${v.size}</span></div>
       <div class="bar"><i style="width:${pct}%"></i></div>
+      ${v.owed && v.owed.length ? `<p class="note warn" style="margin-bottom:4px">${v.owed.length + (v.pack && v.pack.unpaid ? 1 : 0)} packages not paid yet. Every session is listed below.</p>` : ""}
       <p class="note ${v.left <= 2 ? "warn" : ""}">${v.over ? `${v.over} session${v.over === 1 ? "" : "s"} past this package. Time to renew.` : v.left === 0 ? "Package used up. Time to renew." : v.runout ? `At your current schedule, your last session is around ${esc(day(v.runout))}.` : `${v.used} used so far.`}</p></div>`;
   } else {
     head = `<div class="card"><h2>This month</h2><div><span class="big">${v.thisMonth || 0}</span><span class="of">${v.included ? `of ${v.included} included` : "sessions so far"}</span></div>
@@ -25,7 +26,12 @@ function render(v){
     const line = (iso, n, booked) => `<li class="${booked ? "bk" : ""}"><span><b class="n">${n}</b>${esc(day(iso))}</span><span>${booked ? `booked · ${esc(time(iso))}` : "done"}</span></li>`;
     const P = v.pack, done = P.done.length + (P.uncounted || 0), fmtRange = a => a.length ? `${esc(day(a[0]).replace(/^\w+, /, ""))} – ${esc(day(a[a.length - 1]).replace(/^\w+, /, ""))}` : "";
     const all = [...P.done, ...P.booked];
-    recent = `<div class="card"><h2>This package · ${P.size} sessions</h2><p class="note">${fmtRange(all)}${P.done.length ? ` · ${Math.min(done, P.size)} done` : ""}${P.booked.length ? ` · ${P.booked.length} booked` : ""}</p>
+    // Earlier packages not paid yet: every session, numbered, oldest package first.
+    const owed = v.owed || [], unpaidTag = `<span class="due">not paid yet</span>`;
+    const owedCards = owed.map((O, k) => { const n0 = O.uncounted || 0;
+      return `<div class="card"><h2>Package ${k + 1} · ${O.size} sessions ${unpaidTag}</h2><p class="note">${fmtRange(O.done)} · ${O.done.length + n0} done</p>
+      <ul class="num">${n0 ? `<li><span><b class="n">1–${n0}</b>Earlier sessions</span><span>done</span></li>` : ""}${O.done.map((d, i) => line(d, i + 1 + n0, false)).join("")}</ul></div>`; }).join("");
+    recent = owedCards + `<div class="card"><h2>${owed.length ? `Package ${owed.length + 1}` : "This package"} · ${P.size} sessions${P.unpaid ? " " + unpaidTag : ""}</h2><p class="note">${fmtRange(all)}${P.done.length ? ` · ${Math.min(done, P.size)} done` : ""}${P.booked.length ? ` · ${P.booked.length} booked` : ""}</p>
       <ul class="num">${P.uncounted ? `<li><span><b class="n">1–${P.uncounted}</b>Earlier sessions</span><span>done</span></li>` : ""}${P.done.map((d, i) => line(d, i + 1 + (P.uncounted || 0), false)).join("")}${P.booked.map((d, i) => line(d, done + i + 1, true)).join("")}</ul>
       ${done + P.booked.length < P.size ? `<p class="note" style="margin-top:10px">${P.size - done - P.booked.length} more to book in this package.</p>` : ""}</div>`;
     const N = v.nextPack || { done: [], booked: [] };
@@ -60,7 +66,11 @@ async function load(){
   if (demo){
     const E = await import("./engine.js"); globalThis.TallyEngine = E;
     const { buildDemo } = await import("./demo-data.js"); const { demoModel } = await import("./demo-core.js");
-    const D = buildDemo(); const v = E.clientView(demoModel(D, D.profile, D.clients), demo);
+    const D = buildDemo();
+    // ?demo=owed: Priya with two unpaid packages, the first started before the calendar history (3 listed earlier dates).
+    if (demo === "owed"){ const c = D.clients.find(x => x.id === "priya"), old = new Date(Date.now() - 95 * 864e5);
+      c.packages = [{ id: "o1", size: 24, price: 2400, start: old.toISOString(), used0: 3, earlier: [1, 2, 3].map(k => new Date(old - (4 - k) * 7 * 864e5).toISOString()) }, { id: "o2", size: 24, price: 2400 }]; }
+    const v = E.clientView(demoModel(D, D.profile, D.clients), demo === "owed" ? "priya" : demo);
     if (v) return render(v);
   }
   try {
