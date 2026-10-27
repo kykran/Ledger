@@ -11,7 +11,8 @@ function render(v){
   let head;
   if (v.billing === "package" && v.size){
     const pct = Math.min(100, Math.round(v.used / v.size * 100));
-    head = `<div class="card"><h2>Sessions left</h2><div><span class="big">${v.left}</span><span class="of">of ${v.size}</span></div>
+    const shared = v.people && v.people.length > 1 ? `<p class="note" style="margin:0 0 8px">Shared package: ${esc(v.people.join(" and "))}</p>` : "";
+    head = `<div class="card"><h2>Sessions left</h2>${shared}<div><span class="big">${v.left}</span><span class="of">of ${v.size}</span></div>
       <div class="bar"><i style="width:${pct}%"></i></div>
       ${(n => n ? `<p class="note warn" style="margin-bottom:4px">${n} package${n === 1 ? "" : "s"} not paid yet. Every session is listed below.</p>` : "")((v.owed || []).filter(O => !O.paid).length + (v.owed && v.owed.length && v.pack && v.pack.unpaid ? 1 : 0))}
       <p class="note ${v.left <= 2 ? "warn" : ""}">${v.over ? `${v.over} session${v.over === 1 ? "" : "s"} past this package. Time to renew.` : v.left === 0 ? "Package used up. Time to renew." : v.runout ? `At your current schedule, your last session is around ${esc(day(v.runout))}.` : `${v.used} used so far.`}</p></div>`;
@@ -23,7 +24,9 @@ function render(v){
   let upcoming = `<div class="card"><h2>Coming up</h2>${rows(v.next, true)}</div>`;
   if (v.pack){
     // Package clients: every session numbered 1..size, then what counts toward the next package.
-    const line = (iso, n, booked) => `<li class="${booked ? "bk" : ""}"><span><b class="n">${n}</b>${esc(day(iso))}</span><span>${booked ? `booked · ${esc(time(iso))}` : "done"}</span></li>`;
+    // On a shared package, each line says whose session it was.
+    const who = iso => v.who && v.who[iso] ? `${esc(v.who[iso])} · ` : "";
+    const line = (iso, n, booked) => `<li class="${booked ? "bk" : ""}"><span><b class="n">${n}</b>${esc(day(iso))}</span><span>${who(iso)}${booked ? `booked · ${esc(time(iso))}` : "done"}</span></li>`;
     const P = v.pack, done = P.done.length + (P.uncounted || 0), fmtRange = a => a.length ? `${esc(day(a[0]).replace(/^\w+, /, ""))} – ${esc(day(a[a.length - 1]).replace(/^\w+, /, ""))}` : "";
     const all = [...P.done, ...P.booked];
     // Earlier packages (not paid yet, or paid ones the trainer chose to show): every session, numbered, oldest package first.
@@ -73,7 +76,9 @@ async function load(){
     // ?demo=cash: Priya's earlier package paid in cash and still listed, then her current one not paid yet.
     if (demo === "cash"){ const c = D.clients.find(x => x.id === "priya"), old = new Date(Date.now() - 95 * 864e5);
       c.packages = [{ id: "c1", size: 24, price: 2400, start: old.toISOString(), used0: 0, paidDate: "2026-08-10", paidNote: "Paid in cash", onLink: true }, { id: "c2", size: 24, price: 2400 }]; }
-    const v = E.clientView(demoModel(D, D.profile, D.clients), demo === "owed" || demo === "cash" ? "priya" : demo);
+    // ?demo=shared (or =david): Leslie uses David's package, so both of their sessions count down one package. Shown from Leslie's side.
+    if (demo === "shared" || demo === "david") D.clients.push({ id: "leslie", name: "Leslie", aliases: [], billing: "package", paidBy: "david", sharePackage: true, packages: [], payments: [], active: true });
+    const v = E.clientView(demoModel(D, D.profile, D.clients), demo === "owed" || demo === "cash" ? "priya" : demo === "shared" ? "leslie" : demo);
     if (v) return render(v);
   }
   try {

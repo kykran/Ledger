@@ -62,6 +62,15 @@ export function buildDemo(now = new Date()){
   gen({ titles: ["Staff meeting"], slots: [[1, 12]], cal: ME, skip: 0.1, cancel: 0 });
   gen({ titles: ["Dana Lee intro"], slots: [[3, 16]], cal: STUDIO_CAL, since: addDays(now, -20), until: addDays(now, 8), skip: 0, cancel: 0 });
   ev("Dentist", new Date(Y, now.getMonth(), Math.max(1, now.getDate() - 9), 14), 60, ME, ME);
+  // For "Sort out calendar names": a trainer who numbered sessions in her package ("Angela 1", "Angela 2"…),
+  // one who adds the place ("Leslie Siena" = Leslie at the Siena apartments), and David, who pays for Leslie.
+  // Fixed dates, no random draws, so the rest of the demo stays the same.
+  const days = (dows, since, h) => { const out = []; for (let d = new Date(since); d < to; d = addDays(d, 1)) if (dows.includes(d.getDay())) out.push(new Date(d.getFullYear(), d.getMonth(), d.getDate(), h)); return out; };
+  const ang = days([2, 5], addDays(now, -150), 8), angPast = ang.filter(d => d < now).length;
+  // Her calendar numbers restart at 1 every 20 sessions; the latest one done is #14.
+  ang.forEach((d, k) => ev("Angela " + ((((k - angPast + 14) % 20) + 20) % 20 + 1), d, 60, ME, STUDIO_CAL));
+  days([1, 3], addDays(now, -70), 10).forEach((d, k) => ev(k % 4 === 3 ? "Leslie" : "Leslie Siena", d, 60, ME, ME));
+  days([1, 4], addDays(now, -90), 18).forEach(d => ev("David Park", d, 60, ME, STUDIO_CAL));
 
   events.sort((a, b) => a.start.dateTime.localeCompare(b.start.dateTime));
   const sessionsOf = (titles, cal) => events.filter(e => e.cal === cal && titles.includes(e.summary.replace(/ - cancelled$/, "")) && !CANCEL.test(e.summary));
@@ -106,6 +115,7 @@ export function buildDemo(now = new Date()){
         { id: "rossi-cur", date: curM + "-01", amount: 600, method: "Card", note: "" }] },
     { id: "chris", name: "Chris Walsh", billing: "payg", rate: 90, noRent: false, email: "chris@example.com" },
     { id: "nina", name: "Nina Alvarez", billing: "payg", rate: 80, email: "nina@example.com" },
+    { id: "david", name: "David Park", billing: "package", rate: 100, packageSize: 20, packagePrice: 2000, email: "david@example.com", phone: "(617) 555-0175", ...pkg("david", { titles: ["David Park"], cal: STUDIO_CAL }, 20, 2000, 9) },
     { id: "ben", name: "Ben Foster", billing: "package", rate: 110, packageSize: 24, active: false, packages: [], payments: [] }
   ].map(c => ({ aliases: [], packages: [], payments: [], noRent: false, noRentNames: [], active: true, email: "", phone: "", ...c }));
 
