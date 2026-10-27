@@ -350,7 +350,8 @@ export function parseSetLog(str, plan = {}){
   if (!t) return [];
   // A number ending in s is seconds: "30s", "3x30s", "3x30s@25", "45s 45s 30s". Bare numbers on a timed exercise are seconds too.
   if (/\ds(?=x|@|\s|$)/.test(t) || plan.timed) return parseTimed(t, plan);
-  const pw = n(plan.weight), planReps = k => (plan.reps ? plan.reps(k) : null);
+  // Only a plain planned weight ("50", "50 lb") is a load to compare against; "+5 lb" or "RPE 7" isn't.
+  const pw = /^\s*\d/.test(String(plan.weight ?? "")) ? n(plan.weight) : null, planReps = k => (plan.reps ? plan.reps(k) : null);
   const bw = /\b(bw|bodyweight|body weight)\b/.test(t); t = t.replace(/\b(bw|bodyweight|body weight)\b/g, " ").trim();
   const W = w => bw ? null : w, N = "(\\d+(?:\\.\\d+)?)";
   // "3x115@8": sets x weight @ reps by mistake. Nobody does 115 reps at 8 lb, so flip it.
@@ -364,8 +365,8 @@ export function parseSetLog(str, plan = {}){
     const [a, b, c] = ch.split("x").map(Number);
     if (!isFinite(a)) continue;
     if (b == null){ out.push({ reps: a, weight: W(out.length ? out[out.length - 1].weight : pw) }); continue; } // bare number = reps
-    // weight x reps; read "8x44" as 44 for 8 when that's plainly what it means
-    const pr = planReps(out.length), repsFirst = (a <= 30 && b > 30) || (pr != null && a === pr && b !== pr) || (pw != null && b === pw && a !== pw);
+    // weight x reps; read "8x44" as 44 for 8 when that's plainly what it means. Never flip when the first number is the bigger one ("55x5").
+    const pr = planReps(out.length), repsFirst = a < b && Number.isInteger(a) && ((a <= 30 && b > 30) || (pr != null && a === pr && b !== pr) || (pw != null && b === pw && a !== pw));
     const [w, r] = repsFirst ? [b, a] : [a, b];
     for (let k = 0; k < Math.min(12, c || 1); k++) out.push({ reps: r, weight: W(w) });            // weight x reps (x sets)
     if (out.length >= 12) break;
@@ -374,7 +375,7 @@ export function parseSetLog(str, plan = {}){
 }
 function parseTimed(t, plan){
   const bw = /\b(bw|bodyweight|body weight)\b/.test(t); t = t.replace(/\b(bw|bodyweight|body weight)\b/g, " ").trim();
-  const pw = bw ? null : n(plan.weight), N = "(\\d+(?:\\.\\d+)?)";
+  const pw = bw || !/^\s*\d/.test(String(plan.weight ?? "")) ? null : n(plan.weight), N = "(\\d+(?:\\.\\d+)?)";
   // "3x30s" is 3 sets of 30 seconds (and "3x30" on a timed exercise); a first number over 10 is a weight ("25x30s").
   const m = t.match(new RegExp(`^(\\d+)x${N}s?\\s*(?:@|at)\\s*${N}$`)) || t.match(new RegExp(`^(\\d+)x${N}s${plan.timed ? "?" : ""}$`));
   if (m && +m[1] <= 10) return Array.from({ length: Math.min(12, +m[1]) }, () => ({ reps: +m[2], weight: bw ? null : m[3] != null ? +m[3] : pw, timed: true }));
