@@ -290,3 +290,15 @@ td.num,th.num{text-align:right;white-space:nowrap}
 .weeks table.sub{font-size:12.5px}
 .weeks table.sub td{padding:7px 8px}
 tr.total td{border-top:2px solid var(--line)}
+/* Sort out calendar names */
+.nm-card{display:flex;flex-direction:column;gap:10px;margin:6px 0 4px}
+.nm-card h3{margin:0}
+.nm-titles{display:flex;flex-wrap:wrap;gap:6px}
+.nm-titles .chip b{font-weight:600;opacity:.7}
+.nm-pkg{border:1px solid var(--line);border-radius:10px;padding:11px 12px;display:flex;flex-direction:column;gap:8px;background:var(--surface2)}
+.nm-pkg p{margin:0}
+.nm-same{display:flex;flex-direction:column;gap:6px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+.nm-same>div{display:flex;gap:8px;flex-wrap:wrap}
+.nm-same select{border:1px solid var(--line);background:var(--bg);border-radius:9px;padding:8px 10px;min-width:0;flex:1 1 180px}
+.nm-card .check{align-items:flex-start}
+.nm-card .check input{margin-top:3px}

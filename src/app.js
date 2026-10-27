@@ -228,7 +228,10 @@ const fillTpl = (t, v) => E.fillTpl(t, v);
 const messageText = (c, kind, monthK, link) => E.messageText(S.M, c, kind, monthK, link);
 const payerOf = c => S.M ? E.payerOf(S.M, c) : null;
 const dependentsOf = c => S.M ? E.dependentsOf(S.M, c) : [];
-const payLine = c => { const p = payerOf(c), d = dependentsOf(c); return p ? ` · paid by ${esc(p.name)}` : d.length ? ` · pays for ${esc(d.map(x=>x.name).join(", "))}` : ""; };
+const sharesPkg = c => !!(S.M && S.M.stats[c.id] && S.M.stats[c.id].sharedPkg);
+const payLine = c => { const p = payerOf(c), d = dependentsOf(c); return p ? (sharesPkg(c) ? ` · on ${esc(p.name)}'s package` : ` · paid by ${esc(p.name)}`) : d.length ? ` · pays for ${esc(d.map(x=>x.name).join(", "))}` : ""; };
+/* Calendar names to sort out: groups like "Angela 1, Angela 2…" or "Leslie, Leslie Siena". Cached per model. */
+const nameGroupsOf = M => M ? (M._groups || (M._groups = E.nameGroups(M))) : [];
 
 /* ---------- chrome ---------- */
 const inAppNow = () => S.screen === "data" && S.profLoaded && S.clientsLoaded && !!(S.prof && S.prof.setupDone);
@@ -241,7 +244,7 @@ function renderChrome(){
   const inApp = inAppNow();
   app.classList.toggle("bare", !inApp);
   const M = S.M;
-  const attn = inApp && M ? attention(M).length : 0, sugg = inApp && M ? M.unmatched.length : 0;
+  const attn = inApp && M ? attention(M).length : 0, sugg = inApp && M ? nameGroupsOf(M).length : 0;
   const recN = inApp && M ? recTodos(M).length : 0, progN = inApp && M && PROGS() ? PROGS().todos(M).filter(t => t.kind !== "noprogram").length : 0;
   const badge = k => k === "overview" && attn ? attn : k === "clients" && sugg ? sugg : k === "reconcile" && recN ? recN : k === "programs" && progN ? progN : 0;
   $("#nav").innerHTML = tabs().map(([k,l]) => `<button data-tab="${k}" ${S.tab===k?'aria-current="page"':""}>${ic(k)}<span>${l}</span>${badge(k)?`<span class="badge">${badge(k)}</span>`:""}</button>`).join("");
@@ -439,8 +442,9 @@ function weekTotals(M, a){
   return {n:done.length, booked:booked.length, clients:new Set(list.map(s => s.c.id)).size, earned, rent, net:earned-rent, bNet:bEarned-bRent, collected};
 }
 function renderOverview(M){
-  if (!S.clients.length) return `<div class="card"><div class="empty"><b>No clients yet</b><span>${M.unmatched.length ? `Your calendar has ${M.unmatched.length} recurring names that look like clients.` : S.cal.state === "loading" ? "Reading your calendar…" : "Add a client, or put sessions on your calendar with the client's name as the event title."}</span>
-    ${M.unmatched.length ? `<button class="btn primary" data-tab="clients">Review suggested clients</button>` : `<button class="btn primary" data-act="new-client">Add client</button>`}</div></div>`;
+  const ng = nameGroupsOf(M).length;
+  if (!S.clients.length) return `<div class="card"><div class="empty"><b>No clients yet</b><span>${ng ? `Your calendar has ${ng} name${ng===1?"":"s"} that look like clients. Go through them one at a time and pick who each one is.` : S.cal.state === "loading" ? "Reading your calendar…" : "Add a client, or put sessions on your calendar with the client's name as the event title."}</span>
+    ${ng ? `<button class="btn primary" data-act="nm-open">Sort out calendar names</button>` : `<button class="btn primary" data-act="new-client">Add client</button>`}</div></div>`;
   return ovWeek() ? renderOverviewWeek(M, ovWeek()) : renderOverviewMonth(M);
 }
 function renderOverviewMonth(M){
@@ -472,7 +476,7 @@ function overviewRest(M){
   <div class="grid2">
     <section class="card" data-tour="attention"><div class="card-h"><h2>Needs attention</h2><span class="small muted">${A2.length ? A2.length + " client" + (A2.length===1?"":"s") : ""}</span></div>
       ${A2.length ? `<div class="alist">${A2.map(attnRow).join("")}</div>` : `<div class="empty">Everyone is paid up with sessions left.</div>`}
-      ${M.unmatched.length ? `<div class="note">${M.unmatched.length} calendar name${M.unmatched.length===1?"":"s"} not matched to a client yet. <button class="btn link" data-tab="clients">Review</button></div>` : ""}
+      ${nameGroupsOf(M).length ? `<div class="note">${nameGroupsOf(M).length} calendar name${nameGroupsOf(M).length===1?"":"s"} to sort out. <button class="btn link" data-act="nm-open">Sort them out</button></div>` : ""}
     </section>
     <section class="card"><div class="card-h"><h2>Sessions by week</h2><div class="legend"><span><i class="sw-acc"></i>Done</span><span><i class="sw-proj"></i>Booked / expected</span></div></div>
       <div class="chart" data-chart="weeks"></div>
@@ -592,18 +596,20 @@ function renderClients(M){
       <td>${chipFor(st)}</td><td>${bal}</td>
       <td class="num">${st.pace ? st.pace.toFixed(1) : "–"}</td>
       <td class="small">${fmtD(st.last)}</td><td class="small">${fmtD(st.next)}</td>
-      <td><div class="rowacts">${st.bill==="package" ? (st.status==="setup" ? `<button class="btn sm" data-act="setup-pkg" data-id="${c.id}">Set package</button>` : `<button class="btn sm" data-act="add-pkg" data-id="${c.id}">New package</button>`) : ""}
+      <td><div class="rowacts">${st.bill==="package" && !st.sharedPkg ? (st.status==="setup" ? `<button class="btn sm" data-act="setup-pkg" data-id="${c.id}">Set package</button>` : `<button class="btn sm" data-act="add-pkg" data-id="${c.id}">New package</button>`) : ""}
         ${st.bill!=="payg" ? `<button class="btn sm" data-act="msg" data-id="${c.id}" data-kind="${st.bill==="package"?(st.status==="owes"?"unpaid":"renew"):"invoice"}">Message</button>` : ""}
         <button class="btn sm" data-act="payment" data-id="${c.id}">Payment</button></div></td></tr>`; };
-  const sugg = M.unmatched;
+  const sugg = nameGroupsOf(M);
+  const seen = g => { if (g.kind === "existing") return "Numbered sessions, no package yet"; const t = groupTitles(g).map(x => esc(x.title) + (x.numbered ? " (numbered)" : ""));
+    return t.length > 4 ? `${t.slice(0, 3).join(", ")} and ${t.length - 3} more` : t.join(", "); };
   return `<section class="card" data-tour="clients"><div class="card-h"><h2>Clients</h2><span class="small muted">${act.length} active</span></div>
     ${act.length ? `<div class="tablewrap"><table><thead><tr><th>Client</th><th>Status</th><th>Package / balance</th><th class="num">Per wk</th><th>Last</th><th>Next</th><th></th></tr></thead><tbody>${act.map(row).join("")}</tbody></table></div>` : `<div class="empty">No clients yet. Add one, or pick from the names found on your calendar below.</div>`}
     ${inact.length ? `<details><summary class="small muted">${inact.length} inactive</summary><div class="tablewrap"><table><tbody>${inact.map(row).join("")}</tbody></table></div></details>` : ""}
   </section>
-  <section class="card" data-tour="found"><div class="card-h"><h2>Found on your calendar</h2><span class="small muted">Recurring event names not matched to a client</span></div>
-    ${sugg.length ? `<div class="tablewrap"><table><thead><tr><th>Event name</th><th class="num">Times</th><th>Last</th><th>Next</th><th></th></tr></thead><tbody>
-      ${sugg.map((u,i) => `<tr><td style="font-weight:600">${esc(u.title)}</td><td class="num">${u.count}</td><td class="small">${fmtD(u.last)}</td><td class="small">${fmtD(u.next)}</td>
-      <td><div class="rowacts"><button class="btn sm primary" data-act="sugg-add" data-i="${i}">Add as client</button><button class="btn sm" data-act="sugg-link" data-i="${i}">Same as…</button><button class="btn sm" data-act="sugg-ignore" data-i="${i}">Not a client</button></div></td></tr>`).join("")}
+  <section class="card" data-tour="found"><div class="card-h"><h2>Found on your calendar</h2>${sugg.length ? `<button class="btn sm primary" data-act="nm-open">Sort them out</button>` : `<span class="small muted">Recurring event names not matched to a client</span>`}</div>
+    ${sugg.length ? `<div class="tablewrap"><table><thead><tr><th>Looks like</th><th class="num">Times</th><th>Last</th><th>Next</th><th></th></tr></thead><tbody>
+      ${sugg.map(g => `<tr><td><div style="font-weight:600">${esc(g.name)}</div><div class="small muted">${seen(g)}</div></td><td class="num">${g.count}</td><td class="small">${fmtD(g.last)}</td><td class="small">${fmtD(g.next)}</td>
+      <td><div class="rowacts"><button class="btn sm primary" data-act="nm-open" data-key="${esc(g.key)}">Sort out</button>${g.kind === "new" ? `<button class="btn sm" data-act="nm-ignore-row" data-key="${esc(g.key)}">Not a client</button>` : ""}</div></td></tr>`).join("")}
     </tbody></table></div>` : `<div class="empty">${S.cal.state==="loading" ? "Reading your calendar…" : "Every recurring name on your calendar is matched or ignored."}</div>`}
   </section>`;
 }
@@ -1256,7 +1262,8 @@ function renderModal(){
       ${(() => { const deps = m.id ? dependentsOf(c) : []; const cur = c.paidBy || "";
         if (deps.length) return `<div class="field full"><label>Paid for by</label><input value="${esc(firstName(c.name))} pays for ${esc(deps.map(x=>x.name).join(", "))}" disabled><span class="hint">A client who pays for someone else can't also be paid for.</span></div>`;
         const opts = S.clients.filter(x => x.id !== m.id && !x.paidBy).sort((a,b)=>a.name.localeCompare(b.name));
-        return `<div class="field full"><label for="ed-paidby">Paid for by</label><select id="ed-paidby"><option value="">Themselves</option>${opts.map(x=>`<option value="${esc(x.id)}" ${x.id===cur?"selected":""}>${esc(x.name)}${x.active===false?" (inactive)":""}</option>`).join("")}</select><span class="hint">If another client pays, bills and renewal messages go to them and show on their messages too.</span></div>`; })()}
+        return `<div class="field full"><label for="ed-paidby">Paid for by</label><select id="ed-paidby"><option value="">Themselves</option>${opts.map(x=>`<option value="${esc(x.id)}" ${x.id===cur?"selected":""}>${esc(x.name)}${x.active===false?" (inactive)":""}</option>`).join("")}</select><span class="hint">If another client pays, bills and renewal messages go to them and show on their messages too.</span></div>
+          <label class="check full" data-bill-show="package"><input type="checkbox" id="ed-share" ${c.sharePackage?"checked":""}> Uses the payer's package<span class="hint" style="display:block">Both people's sessions count down one package, and both client links show the shared count. Only when someone else pays.</span></label>`; })()}
       <div class="field"><label for="ed-email">Email</label><input id="ed-email" type="email" value="${esc(c.email||"")}"></div>
       <div class="field"><label for="ed-phone">Phone</label><input id="ed-phone" type="tel" value="${esc(c.phone||"")}"></div>
       <label class="check full"><input type="checkbox" id="ed-norent" ${c.noRent?"checked":""}> No studio rent for this client</label>
@@ -1266,7 +1273,7 @@ function renderModal(){
       <label class="check full"><input type="checkbox" id="ed-active" ${c.active!==false?"checked":""}> Active</label>
     </div>
     ${m.id && A.links ? clientLinkBlock(c) : ""}
-    ${m.id && b === "package" ? packageHistory(c) : ""}
+    ${m.id && b === "package" ? (sharesPkg(c) ? `<p class="note">${esc(firstName(c.name))} uses ${esc(payerOf(c).name)}'s package. Record packages and payments on ${esc(firstName(payerOf(c).name))}.</p>` : packageHistory(c)) : ""}
     ${m.id ? paymentHistory(c) : ""}
     <div class="actions"><button class="btn primary" data-act="save-client" ${S.readOnly?"disabled":""}>Save</button>
       ${m.id ? (m.confirmDel ? `<button class="btn danger" data-act="del-yes">Delete ${esc(c.name)}</button><button class="btn" data-act="del-no">Keep</button>` : `<button class="btn danger" data-act="del">Delete</button>`) : ""}</div>`;
@@ -1359,6 +1366,13 @@ function renderModal(){
       ${r && r.error ? `<div class="banner err"><span>${esc(r.error)}</span></div>` : ""}
       ${r && r.data ? `<div class="note">Backup from ${esc(new Date(r.data.exportedAt).toLocaleString())}: ${r.data.clients.length} client${r.data.clients.length===1?"":"s"}${r.data.profile.trainerName?` for ${esc(r.data.profile.trainerName)}`:""}.</div>
         <div class="actions"><button class="btn primary" data-act="restore-go" ${S.readOnly?"disabled":""}>Restore</button></div>` : ""}`;
+  } else if (m.type === "names"){
+    const left = nameGroupsOf(S.M).filter(g => !m.skipped.includes(g.key));
+    const g = left.find(x => x.key === m.at) || left[0];
+    title = "Sort out calendar names";
+    m.cur = g ? g.key : null; m.g = g || null;
+    body = g ? namesCard(g, m, left.indexOf(g) + 1, left.length)
+      : `<div class="empty"><b>All sorted</b><span>${m.skipped.length ? `You skipped ${m.skipped.length}. They stay on the Clients tab under "Found on your calendar".` : "Every name on your calendar is a client or marked not a client."}</span></div><div class="actions"><button class="btn primary" data-act="close">Done</button></div>`;
   } else if (m.type === "copyout"){
     title = "Copy your file";
     body = `<p class="small muted">Downloads aren't available here. Copy this text and save it as <b>${esc(m.filename)}</b>.</p>
@@ -1367,6 +1381,77 @@ function renderModal(){
   }
   $("#modal").innerHTML = `<div class="scrim" data-act="close-scrim"><div class="sheet" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="sheet-h"><h2>${esc(title)}</h2><button class="btn sm" data-act="close">Close</button></div>${body}</div></div>`;
   applyBillVisibility();
+}
+/* The names in a group, most used first, with numbered ones folded into one entry ("Angela 1 – 20"). */
+function groupTitles(g){
+  const numd = g.titles.map(t => ({...t, x:E.splitNumber(E.clean(t.title))})), withN = numd.filter(t => t.x.n != null), nums = withN.map(t => t.x.n);
+  return [...(nums.length > 2 ? [{title:`${g.name} ${Math.min(...nums)} – ${Math.max(...nums)}`, count:withN.reduce((a,t) => a + t.count, 0), numbered:true}] : withN), ...numd.filter(t => t.x.n == null)];
+}
+/* One card of "Sort out calendar names". Field values live in m.f so a background redraw keeps what the trainer typed. */
+function namesCard(g, m, i, n){
+  const f = (k, d) => { const v = m.f[g.key + "|" + k]; return v === undefined ? d : v; };
+  const d = defs(), words = g.key.split(" "), lastW = words[words.length - 1];
+  const canSplit = g.kind === "new" && words.length >= 2 && !g.extras.length, split = canSplit && f("nm-split", false);
+  const name = f("nm-name", split ? E.splitNumber(words.slice(0, -1).join(" ")).base.replace(/\b[a-z]/g, ch => ch.toUpperCase()) : g.name);
+  const first = firstName(name);
+  const extras = split ? [{word:lastW, count:g.count, place:true}] : g.extras;
+  const pk = g.pkg, size = Math.max(1, Math.round(num(f("nm-size", pk ? pk.size : 0), pk ? pk.size : 1)));
+  const titles = groupTitles(g).slice(0, 8), nums = titles.some(t => t.numbered);
+  const cap = w => w.replace(/\b[a-z]/g, ch => ch.toUpperCase());
+  const others = S.clients.filter(c => c.active !== false).sort((a,b) => a.name.localeCompare(b.name));
+  return `<p class="small muted">${i} of ${n} · Nothing changes on your calendar. You can redo any of this from the client's page.</p>
+    <div class="nm-card">
+      ${g.kind === "existing" ? `<h3>${esc(g.name)}</h3><p class="small muted">Already a client, but their package isn't set yet. Their calendar sessions are numbered, so the count can pick up where it stands.</p>`
+        : `<p class="small muted">${g.count} session${g.count===1?"":"s"} on your calendar${g.last ? ` · last ${fmtD(g.last)}` : ""}${g.next ? ` · next ${fmtD(g.next)}` : ""}</p>
+      <div class="nm-titles">${titles.map(t => `<span class="chip info">${esc(t.title)}${t.count > 1 ? ` <b>×${t.count}</b>` : ""}</span>`).join("")}${nums ? `<span class="small muted">numbered sessions</span>` : ""}</div>
+      <div class="form"><div class="field full"><label for="nm-name">Client name</label><input id="nm-name" value="${esc(name)}"><span class="hint">Every name above will count for this client.</span></div></div>
+      ${canSplit ? `<label class="check"><input type="checkbox" id="nm-split" ${split?"checked":""}> “${esc(cap(lastW))}” is a place, not part of the name</label>` : ""}
+      ${extras.map((x, k) => `<label class="check"><input type="checkbox" id="nm-place-${k}" data-nm-place="${esc(x.word)}" ${f("nm-place-" + k, x.place) ? "checked" : ""}><span>“${esc(cap(x.word))}” is a place away from the studio, so no studio rent <span class="small muted">· ${x.count} session${x.count===1?"":"s"}</span></span></label>`).join("")}`}
+      ${pk ? `<div class="nm-pkg">
+        <label class="check"><input type="checkbox" id="nm-pk" ${f("nm-pk", true) ? "checked" : ""}> Start ${esc(first)}'s package count from the numbers</label>
+        <p class="small">The last one done was <b>#${pk.lastN}</b> on ${fmtD(pk.lastDate)}. This package ${pk.firstN === 1 ? `started at #1 on ${fmtD(pk.firstDate)}` : `goes back to #${pk.firstN} on ${fmtD(pk.firstDate)}, the earliest the calendar shows`}.</p>
+        <div class="form">
+          <div class="field"><label for="nm-size">Package size</label><input id="nm-size" type="number" min="1" step="1" value="${esc(size)}"></div>
+          <div class="field"><label for="nm-price">Price ($)</label><input id="nm-price" type="number" min="0" step="1" value="${esc(f("nm-price", Math.round(num(d.rate, 100) * size)))}"></div>
+          <label class="check full"><input type="checkbox" id="nm-paid" ${f("nm-paid", true) ? "checked" : ""}> Already paid for</label>
+        </div>
+        <p class="small"><b>${Math.min(size, pk.counted)} used, ${Math.max(0, size - pk.counted)} left of ${size}</b>${pk.counted > size ? ` · ${pk.counted - size} past the package` : ""}</p>
+      </div>` : ""}
+    </div>
+    <div class="actions">
+      ${g.kind === "existing" ? `<button class="btn primary" data-act="nm-apply">Start the package count</button>`
+        : `<button class="btn primary" data-act="nm-add">Add ${esc(first)} as a client</button>
+      <button class="btn" data-act="nm-ignore">Not a client</button>`}
+      <button class="btn ghost" data-act="nm-skip">Skip for now</button>
+    </div>
+    ${g.kind === "new" && others.length ? `<div class="nm-same"><label for="nm-same" class="small muted">Or it's a client you already have</label>
+      <div><select id="nm-same"><option value="">Pick a client…</option>${others.map(c => `<option value="${esc(c.id)}" ${f("nm-same", "") === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select><button class="btn" data-act="nm-same">Same person</button></div></div>` : ""}`;
+}
+/* Saves the trainer's choice on the current card. The card disappears once its names match a client or are ignored. */
+function namesApply(act){
+  const m = S.modal, g = m && m.g; if (!g) return;
+  const d = defs();
+  m.at = null;
+  if (act === "nm-ignore"){ saveProfile({ignoredTitles:[...new Set([...(P("ignoredTitles")||[]), g.key, ...g.titles.map(t => t.title)])]}).then(() => toast("Marked not a client")).catch(()=>{}); return; }
+  let c;
+  if (act === "nm-add"){ const name = val("nm-name").trim(); if (!name){ toast("Add a name"); return; }
+    c = {id:uid(), name, aliases:[], billing:d.billing, rate:d.rate, packageSize:d.packageSize, packagePrice:null, active:true, packages:[], payments:[], noRent:false, noRentNames:[], email:"", phone:""}; }
+  else if (act === "nm-same"){ const x = client(val("nm-same")); if (!x){ toast("Pick a client first"); return; } c = {...x}; }
+  else c = {...client(g.client.id)};
+  // Names the client's own name doesn't already cover ("Angie 3" for Angela) are kept as other calendar names.
+  if (g.kind === "new"){ const al = [...(c.aliases||[])];
+    for (const t of g.titles){ if (E.matchTitle([{...c, aliases:al}], t.title) !== c.id) al.push(E.splitNumber(E.clean(t.title)).base); }
+    c.aliases = [...new Set(al)]; }
+  const pk = g.pkg && chk("nm-pk") && !(c.packages||[]).length;
+  if (pk){ const size = Math.max(1, Math.round(num(val("nm-size"), g.pkg.size))), price = num(val("nm-price"));
+    const p = {id:uid(), start:g.pkg.start.toISOString(), size, price, used0:g.pkg.used0};
+    if (chk("nm-paid")) p.paidDate = ymd(g.pkg.start);
+    Object.assign(c, {billing:"package", packages:[p], packageSize:size, packagePrice:price}); }
+  const places = [...document.querySelectorAll("[data-nm-place]")].filter(x => x.checked).map(x => x.getAttribute("data-nm-place"));
+  const have = (P("noRentWords")||[]).map(E.norm), add = places.filter(w => !have.includes(E.norm(w)));
+  if (add.length) saveProfile({noRentWords:[...(P("noRentWords")||[]), ...add]}).catch(()=>{});
+  saveClient(c).then(() => toast(act === "nm-add" ? `${c.name} added` : act === "nm-same" ? `Matched to ${c.name}` : "Package count started")).catch(()=>{});
+  if (pk && g.pkg.start < parseDay(P("historyStart"))) loadCalendar(false);
 }
 function packageHistory(c){
   const pk = c.packages||[]; if (!pk.length) return "";
@@ -1471,6 +1556,7 @@ async function onClick(e){
         overageRate: val("ed-over") === "" ? null : num(val("ed-over")), billingStart: val("ed-bs") || null,
         email: val("ed-email").trim(), phone: val("ed-phone").trim(), noRent: chk("ed-norent"), noRentNames: val("ed-nrn").split(",").map(s=>s.trim()).filter(Boolean), noAutoNotice: chk("ed-noauto"), monthlyLink: chk("ed-mlink"), active: chk("ed-active"),
         paidBy: document.getElementById("ed-paidby") ? (val("ed-paidby") || null) : (old.paidBy || null),
+        sharePackage: document.getElementById("ed-paidby") ? !!(val("ed-paidby") && chk("ed-share")) : !!old.sharePackage,
         packages: old.packages || [], payments: old.payments || []};
       const isNew = !m.id;
       closeModal(); saveClient(c).then(()=>toast(isNew ? "Client added" : "Saved")).catch(()=>{});
@@ -1519,6 +1605,10 @@ async function onClick(e){
     case "mlink-sent": { const m = S.modal, c = client(m.id); closeModal(); if (c) saveClient({...c, monthlyLinkSent: m.month}).then(()=>toast("Marked sent")).catch(()=>{}); break; }
     case "copy": { const t = document.getElementById("msg-text"); try { await navigator.clipboard.writeText(t.value); toast("Message copied"); } catch(err){ t.focus(); t.select(); toast("Selected. Use your device's copy."); } break; }
     case "copy-out": { const t = document.getElementById("co-text"); try { await navigator.clipboard.writeText(t.value); toast("Copied"); } catch(err){ t.focus(); t.select(); toast("Selected. Use your device's copy."); } break; }
+    case "nm-open": openModal({type:"names", skipped:[], f:{}, at:el.getAttribute("data-key") || null}); break;
+    case "nm-skip": S.modal.skipped.push(S.modal.cur); S.modal.at = null; renderModal(); break;
+    case "nm-add": case "nm-same": case "nm-apply": case "nm-ignore": namesApply(act); break;
+    case "nm-ignore-row": { const g = nameGroupsOf(M).find(x => x.key === el.getAttribute("data-key")); if (g) saveProfile({ignoredTitles:[...new Set([...(P("ignoredTitles")||[]), g.key, ...g.titles.map(t => t.title)])]}).catch(()=>{}); break; }
     case "sugg-add": { const u = M.unmatched[+el.getAttribute("data-i")]; if (u) openModal({type:"edit", name:u.title.replace(/^\s*(pt|session|training)\s*[-:–]?\s*/i,"").trim()}); break; }
     case "sugg-link": openModal({type:"link", i:+el.getAttribute("data-i")}); break;
     case "link-to": { const u = M.unmatched[S.modal.i], c = client(id); closeModal(); if (u && c) saveClient({...c, aliases:[...(c.aliases||[]), u.title]}).then(()=>toast(`Matched to ${c.name}`)).catch(()=>{}); break; }
@@ -1554,6 +1644,7 @@ function onChange(e){
     return;
   }
   if (PROGS() && t.getAttribute && t.getAttribute("data-pg") && PROGS().onChange(t)) return;
+  if (namesField(t, true)) return;
   if (t.id === "sim-inc" || t.id === "sim-mode" || t.id === "sim-lose" || (t.hasAttribute && t.hasAttribute("data-sim-id"))){
     const ids = [...document.querySelectorAll("[data-sim-id]")].filter(x => x.checked).map(x => x.getAttribute("data-sim-id"));
     S.sim = {increase: num(val("sim-inc")), mode: val("sim-mode"), lose: Math.max(0, Math.round(num(val("sim-lose")))), ids};
@@ -1574,7 +1665,15 @@ function onChange(e){
     rd.readAsText(f);
   }
 }
-function onInput(e){ if (PROGS() && e.target.getAttribute && e.target.getAttribute("data-pg") && PROGS().onInput(e.target)) return; if (e.target.id === "msg-text" && S.modal) S.modal.text = e.target.value; }
+function onInput(e){ if (PROGS() && e.target.getAttribute && e.target.getAttribute("data-pg") && PROGS().onInput(e.target)) return; if (e.target.id === "msg-text" && S.modal) S.modal.text = e.target.value; if (namesField(e.target)) return; }
+/* Keeps "Sort out calendar names" fields across redraws; a few of them change what the card shows. */
+function namesField(t, redraw){
+  const m = S.modal; if (!m || m.type !== "names" || !m.cur || !t.id || !t.id.startsWith("nm-")) return false;
+  m.f[m.cur + "|" + t.id] = t.type === "checkbox" ? t.checked : t.value;
+  if (t.id === "nm-split") delete m.f[m.cur + "|nm-name"];
+  if (redraw && ["nm-split", "nm-size", "nm-pk"].includes(t.id)) renderModal();
+  return true;
+}
 
 /* ---------- boot ---------- */
 async function start(adapter){

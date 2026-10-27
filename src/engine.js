@@ -83,7 +83,16 @@ function buildMatcher(clients = CTX.clients){
   const list = [];
   for (const c of clients) for (const n of [c.name, ...(c.aliases||[])]){ const a = clean(n); if (a) list.push({a, id:c.id}); }
   list.sort((x,y)=>y.a.length-x.a.length);
-  return t => { for (const {a,id} of list){ if (t === a) return id; if (t.startsWith(a+" ") && t.slice(a.length+1).split(" ").length <= 2) return id; } return null; };
+  const find = t => { for (const {a,id} of list){ if (t === a) return id; if (t.startsWith(a+" ") && t.slice(a.length+1).split(" ").length <= 2) return id; } return null; };
+  // A session number on the end ("Angela 12", "Angela 3 of 20") doesn't count toward the extra words.
+  return t => { const id = find(t); if (id) return id; const b = splitNumber(t); return b.n != null ? find(b.base) : null; };
+}
+/* The client id a calendar title belongs to, or null, using the same rules as the tally. */
+export function matchTitle(clients, title){ return buildMatcher(clients)(clean(title)); }
+/* A session number at the end of a cleaned title: "angela 12" -> {base:"angela", n:12}; "angela 3 of 20" -> n:3, of:20. */
+export function splitNumber(key){
+  const m = String(key||"").match(/^(.*?[a-z].*?)\s+(\d{1,3})(?:\s+(?:of\s+)?(\d{1,3}))?$/);
+  return m ? {base:m[1], n:+m[2], of:m[3] ? +m[3] : null} : {base:key, n:null, of:null};
 }
 /* Words after the client's name in an event title, e.g. "Sarah home" -> ["home"]. */
 function titleExtras(c, s){
@@ -128,38 +137,65 @@ export function compute({profile, clients, events, now} = {}){
     const skip = ignoreW.some(w => words.includes(w));
     const id = match(t);
     if (!id){
-      if (skip || ignoredT.has(t)) continue;
-      const u = unmatched[t] || (unmatched[t] = {title:e.title, key:t, count:0, past:0, last:null, next:null});
-      u.count++; if (e.date < now){ u.past++; u.last = e.date; } else if (!u.next) u.next = e.date;
+      if (skip || ignoredT.has(t) || ignoredT.has(splitNumber(t).base)) continue;
+      const u = unmatched[t] || (unmatched[t] = {title:e.title, key:t, count:0, past:0, last:null, next:null, dates:[]});
+      u.count++; u.dates.push(e.date); if (e.date < now){ u.past++; u.last = e.date; } else if (!u.next) u.next = e.date;
       continue;
     }
     byClient[id].push({date:e.date, cal:e.cal, calName:e.calName, studio:e.studio, title:e.title, clientId:id, billable:!skip, future:e.date >= now, value:0, rent:0});
   }
   const stats = {};
-  for (const c of CTX.clients) stats[c.id] = clientStats(c, byClient[c.id]||[], now, curM);
+  // Shared packages: a client paid for by someone else can use the payer's package, so both people's sessions count down one package.
+  // Payers go first (their package run sets the value of the sharer's sessions too), then the sharers.
+  const sharers = {}, sharing = new Set();
+  for (const c of CTX.clients){ const p = sharedPayer(c); if (p){ sharing.add(c.id); (sharers[p.id] = sharers[p.id] || []).push(c); } }
+  for (const c of CTX.clients) if (!sharing.has(c.id)) stats[c.id] = clientStats(c, byClient[c.id]||[], now, curM, (sharers[c.id]||[]).map(d => ({c:d, list:byClient[d.id]||[]})));
+  for (const c of CTX.clients) if (sharing.has(c.id)) stats[c.id] = clientStats(c, byClient[c.id]||[], now, curM, null, stats[c.paidBy]);
   for (const c of everyone) if (progOnly.has(c.id)){ const list = byClient[c.id], past = list.filter(s => !s.future), future = list.filter(s => s.future);
     stats[c.id] = {c, bill:"none", programsOnly:true, past, future, skipped:[], monthly:{}, invoices:[], balance:0, pace:0, status:"info", label:"Programs only",
       last: past.length ? past[past.length-1].date : null, next: future[0] ? future[0].date : null}; }
   const recentCut = now - 120*DAY;
   const um = Object.values(unmatched).filter(u => u.count >= 2 && ((u.last && u.last >= recentCut) || u.next)).sort((a,b)=>b.count-a.count).slice(0,40);
-  return {now, curM, stats, unmatched:um, byClient, ctx:CTX};
+  const unmatchedAll = Object.values(unmatched).filter(u => (u.last && u.last >= recentCut) || u.next);
+  return {now, curM, stats, unmatched:um, unmatchedAll, byClient, ctx:CTX};
 }
-function clientStats(c, list, now, curM){
+/* The client whose package this client uses, or null. Both must be on packages, and the payer can't be paid for by someone else. */
+function sharedPayer(c){
+  if (!c.sharePackage || !c.paidBy || c.paidBy === c.id || (c.billing || "package") !== "package") return null;
+  const p = CTX.clients.find(x => x.id === c.paidBy);
+  return p && !p.paidBy && (p.billing || "package") === "package" ? p : null;
+}
+function paceOf(c, past, future, now){
+  const d56 = now - 56*DAY, recent = past.filter(s => s.date >= d56);
+  const first = past.length ? past[0].date : null;
+  const weeks = first ? Math.min(8, Math.max(1, (now - Math.max(+first, d56)) / (7*DAY))) : 8;
+  return c.active === false ? 0 : recent.length ? recent.length/weeks : future.filter(s => s.date < now + 28*DAY).length/4;
+}
+function clientStats(c, list, now, curM, sharers, payerSt){
   const bill = c.billing || "package";
   const all = list.filter(s => s.billable);
   const past = all.filter(s => !s.future), future = all.filter(s => s.future);
   const st = {c, bill, past, future, skipped:list.filter(s=>!s.billable), status:"ok", label:"On track", monthly:{}, balance:0, invoices:[]};
   const d56 = now - 56*DAY;
   const recent = past.filter(s => s.date >= d56);
-  const first = past.length ? past[0].date : null;
-  const weeks = first ? Math.min(8, Math.max(1, (now - Math.max(+first, d56)) / (7*DAY))) : 8;
-  st.pace = c.active === false ? 0 : recent.length ? recent.length/weeks : future.filter(s => s.date < now + 28*DAY).length/4;
+  st.pace = paceOf(c, past, future, now);
   st.rentShare = recent.length ? recent.filter(s => rentApplies(c, s)).length/recent.length : (c.noRent ? 0 : 1);
   st.last = past.length ? past[past.length-1].date : null;
   st.next = future[0] ? future[0].date : null;
   st.rate = num(c.rate, num(defs().rate, 100));
 
-  if (bill === "package") packageStats(c, st, now);
+  if (bill === "package" && payerSt) sharedStats(c, st, payerSt);
+  else if (bill === "package"){
+    // The package counts everyone who shares it, oldest session first.
+    if (sharers && sharers.length){
+      const pk = [st]; let pace = st.pace;
+      for (const {c:d, list:l} of sharers){ const b = l.filter(s => s.billable), p = b.filter(s => !s.future), f = b.filter(s => s.future); pk.push({past:p, future:f}); pace += paceOf(d, p, f, now); }
+      st.pkPast = pk.flatMap(x => x.past).sort((a,b) => a.date - b.date);
+      st.pkFuture = pk.flatMap(x => x.future).sort((a,b) => a.date - b.date);
+      st.pkPace = pace; st.sharedBy = sharers.map(x => x.c);
+    }
+    packageStats(c, st, now);
+  }
   else if (bill === "payg"){ all.forEach(s => s.value = st.rate); st.perSession = st.rate; st.label = "Pays per session"; st.status = "info"; }
   else monthStats(c, st, now, curM);
 
@@ -170,20 +206,29 @@ function clientStats(c, list, now, curM){
   for (const p of (c.payments||[])){ const k = String(p.date||"").slice(0,7); if (k) bucket(k).collected += num(p.amount); }
   return st;
 }
+/* A client on someone else's package: same count and status as the payer's package, but the payer owes for it. */
+function sharedStats(c, st, ps){
+  const p = ps.c;
+  st.sharedPkg = p;
+  for (const k of ["remaining","current","runout","runoutEst","perSession","nextSize","nextPrice","over"]) st[k] = ps[k];
+  st.unpaid = []; st.unpaidAmt = 0; st.balance = 0; st.status = "info";
+  st.label = ps.status === "setup" ? `On ${firstName(p.name)}'s package` : `${firstName(p.name)}'s package · ${ps.remaining < 0 ? -ps.remaining + " over" : ps.remaining + " left"}`;
+}
 function packageStats(c, st, now){
   const pk = c.packages || [];
+  const PAST = st.pkPast || st.past, FUT = st.pkFuture || st.future, PACE = st.pkPace != null ? st.pkPace : st.pace;
   const dSize = num(c.packageSize, num(defs().packageSize, 10)) || 10;
   const dPrice = num(c.packagePrice, st.rate * dSize);
   st.nextSize = dSize; st.nextPrice = dPrice;
   if (!pk.length){
-    [...st.past, ...st.future].forEach(s => s.value = dPrice/dSize);
+    [...PAST, ...FUT].forEach(s => s.value = dPrice/dSize);
     st.status = "setup"; st.label = "Set package"; st.perSession = dPrice/dSize; return;
   }
   const base = new Date(pk[0].start);
   const caps = pk.map((p,i) => Math.max(0, num(p.size) - (i === 0 ? num(p.used0) : 0)));
   const used = caps.map(() => 0);
   let i = 0; const overS = [];
-  for (const s of st.past){
+  for (const s of PAST){
     if (s.date < base){ s.value = num(pk[0].price)/Math.max(1,num(pk[0].size)); continue; }
     while (i < caps.length && used[i] >= caps[i]) i++;
     if (i < caps.length){ used[i]++; s.value = num(pk[i].price)/Math.max(1,num(pk[i].size)); s.pkg = i; }
@@ -195,7 +240,7 @@ function packageStats(c, st, now){
   const cp = pk[cur];
   st.current = {...cp, index:cur, size:num(cp.size), usedIn: used[cur] + (cur === 0 ? num(cp.used0) : 0)};
   st.perSession = num(cp.price)/Math.max(1,num(cp.size));
-  st.future.forEach(s => s.value = st.perSession);
+  FUT.forEach(s => s.value = st.perSession);
   st.unpaid = pk.map((p,j)=>({p,j})).filter(({p,j}) => !p.paidDate && (used[j] > 0 || j === cur || (j === 0 && num(p.used0) > 0)));
   st.unpaidAmt = st.unpaid.reduce((a,{p}) => a + num(p.price), 0);
   st.over = overS.length;
@@ -207,10 +252,10 @@ function packageStats(c, st, now){
   if (st.unpaid.length && st.status !== "out"){ st.status = "owes"; st.label = "Package unpaid"; }
   st.balance = st.unpaidAmt;
   let left = st.remaining;
-  if (left <= 0) st.runout = overS.length ? overS[0].date : (st.past.length ? st.past[st.past.length-1].date : now);
+  if (left <= 0) st.runout = overS.length ? overS[0].date : (PAST.length ? PAST[PAST.length-1].date : now);
   else {
-    for (const s of st.future){ left--; if (left <= 0){ st.runout = s.date; break; } }
-    if (!st.runout && st.pace > 0){ const from = st.future.length ? st.future[st.future.length-1].date : now; st.runout = new Date(+from + left/st.pace*7*DAY); st.runoutEst = true; }
+    for (const s of FUT){ left--; if (left <= 0){ st.runout = s.date; break; } }
+    if (!st.runout && PACE > 0){ const from = FUT.length ? FUT[FUT.length-1].date : now; st.runout = new Date(+from + left/PACE*7*DAY); st.runoutEst = true; }
   }
 }
 function monthStats(c, st, now, curM){
@@ -312,6 +357,76 @@ export function attention(M){
   return out.sort((a,b) => a.rank - b.rank || a.c.name.localeCompare(b.c.name));
 }
 
+/* "Sort out calendar names": event names that look like one person with extras, grouped for the trainer to decide.
+ * "Angela 1", "Angela 2"… (session numbers from an old tracking system) become one Angela card, and
+ * "Leslie" plus "Leslie Siena" (a place after the name) become one Leslie card. A client who already exists,
+ * has numbered event names and no package yet gets a card too, so the trainer can start the count where it stands. */
+export function nameGroups(M){
+  CTX = M.ctx;
+  const byBase = new Map();
+  for (const u of (M.unmatchedAll || [])){
+    const {base, n, of} = splitNumber(u.key);
+    const g = byBase.get(base) || {key:base, variants:[], numbered:[]};
+    g.variants.push(u); if (n != null) for (const d of u.dates) g.numbered.push({date:d, n, of});
+    byBase.set(base, g);
+  }
+  // Fold a longer name into a shorter one it starts with, up to two extra words ("leslie siena" -> "leslie").
+  for (const b of [...byBase.keys()].sort((x,y) => y.length - x.length)){
+    const w = b.split(" "); let to = null;
+    for (let k = Math.max(1, w.length - 2); k < w.length && !to; k++){ const r = w.slice(0, k).join(" "); if (byBase.has(r)) to = r; }
+    if (!to) continue;
+    const g = byBase.get(b), t = byBase.get(to);
+    t.variants.push(...g.variants); t.numbered.push(...g.numbered); byBase.delete(b);
+  }
+  const dSize = num(defs().packageSize, 10) || 10, now = M.now;
+  const places = new Set((P("noRentWords")||[]).map(norm));
+  const out = [];
+  for (const g of byBase.values()){
+    const count = g.variants.reduce((a,u) => a + u.count, 0);
+    if (count < 2) continue;
+    const extras = {};
+    for (const u of g.variants){ const rest = splitNumber(u.key).base.slice(g.key.length).trim(); if (rest) extras[rest] = (extras[rest]||0) + u.count; }
+    const last = g.variants.map(u => u.last).filter(Boolean).sort((a,b) => b - a)[0] || null;
+    const next = g.variants.map(u => u.next).filter(Boolean).sort((a,b) => a - b)[0] || null;
+    out.push({kind:"new", key:g.key, name:groupName(g), titles:g.variants.sort((a,b) => b.count - a.count).map(u => ({title:u.title, count:u.count})),
+      count, last, next, extras:Object.entries(extras).map(([w,n]) => ({word:w, count:n, place:places.has(w)})),
+      pkg:packageFromNumbers(g.numbered, now, dSize)});
+  }
+  out.sort((a,b) => b.count - a.count);
+  for (const c of CTX.clients){
+    const st = M.stats[c.id];
+    if (c.active === false || !st || st.status !== "setup" || st.sharedPkg) continue;
+    const numbered = [];
+    for (const s of [...st.past, ...st.future]){ const x = splitNumber(clean(s.title)); if (x.n != null) numbered.push({date:s.date, n:x.n, of:x.of}); }
+    const pkg = packageFromNumbers(numbered, now, num(c.packageSize, dSize) || dSize);
+    if (pkg) out.push({kind:"existing", key:"client:" + c.id, client:c, name:c.name, count:st.past.length + st.future.length, last:st.last, next:st.next, titles:[], extras:[], pkg});
+  }
+  return out;
+}
+/* The group's name as the trainer typed it on the calendar ("Leslie" from "Leslie Siena"), else capitalized. */
+function groupName(g){
+  const want = g.key.split(" ");
+  for (const u of [...g.variants].sort((a,b) => b.count - a.count)){
+    const got = []; for (const x of u.title.trim().split(/\s+/)) if (got.length < want.length && norm(x) === want[got.length]) got.push(x);
+    if (got.length === want.length) return got.join(" ");
+  }
+  return titleCase(g.key);
+}
+const titleCase = s => String(s||"").replace(/\b[a-z]/g, ch => ch.toUpperCase());
+/* Where a numbered run of sessions stands: the latest run counts up to the last one done ("Angela 14"),
+ * so the package starts at that run's first session. Size comes from "3 of 20", the previous run's top number, or the default. */
+export function packageFromNumbers(list, now, dSize){
+  const past = list.filter(x => x.date < now).sort((a,b) => a.date - b.date);
+  if (!past.length) return null;
+  let i = past.length - 1; const last = past[i];
+  while (i > 0 && past[i-1].n < past[i].n) i--;
+  const first = past[i], prevTop = i > 0 ? past[i-1].n : 0;
+  const size = last.of || first.of || (prevTop >= last.n ? prevTop : Math.max(dSize, last.n));
+  const start = new Date(first.date.getFullYear(), first.date.getMonth(), first.date.getDate());
+  return {start, used0:Math.max(0, first.n - 1), size, lastN:last.n, lastDate:last.date, firstN:first.n, firstDate:first.date,
+    counted:Math.max(0, first.n - 1) + (past.length - i)};
+}
+
 export function fillTpl(t, vars){ return String(t||"").replace(/\{(\w+)\}/g, (m,k) => vars[k] !== undefined ? vars[k] : m); }
 /* "Paid for by": a client can be billed to another client (e.g. a spouse or parent pays). */
 export function payerOf(M, c){
@@ -342,7 +457,7 @@ function dependentLines(M, c, kind, monthK){
   for (const d of dependentsOf(M, c)){
     const st = M.stats[d.id], dn = firstName(d.name);
     if (st.bill === "package"){
-      if (st.status === "setup") continue;
+      if (st.status === "setup" || st.sharedPkg) continue;
       if (st.unpaidAmt > 0.5) lines.push(`${dn}'s package (${money(st.unpaidAmt)}) is also still open.`);
       else if (kind === "renew" || st.status === "low" || st.status === "out") lines.push(st.remaining > 0 ? `${dn} has ${st.remaining} session${st.remaining===1?"":"s"} left on their package.` : `${dn} is out of sessions; their next ${st.nextSize}-session package is ${money(st.nextPrice)}.`);
     } else if (st.bill !== "payg"){
@@ -506,6 +621,10 @@ export function clientView(M, clientId){
   CTX = M.ctx;
   const c = M.ctx.clients.find(x => x.id === clientId); if (!c) return null;
   const st = M.stats[c.id], now = M.now;
+  // On someone else's package: show that shared package, from this client's side.
+  if (st.sharedPkg && M.stats[st.sharedPkg.id]){ const v = clientView(M, st.sharedPkg.id); CTX = M.ctx;
+    return {...v, first: firstName(c.name), sharedWith: firstName(st.sharedPkg.name), next: st.future.slice(0, 6).map(s => s.date.toISOString())}; }
+  const PAST = st.pkPast || st.past, FUT = st.pkFuture || st.future;
   const v = {first: firstName(c.name), trainer: P("trainerName") || "", billing: st.bill,
     next: st.future.slice(0, 6).map(s => s.date.toISOString()), recent: st.past.slice(-6).reverse().map(s => s.date.toISOString()),
     updated: now.toISOString()};
@@ -518,20 +637,23 @@ export function clientView(M, clientId){
     const pkgDone = j => {
       const p = pk[j] || {}, pre = j === 0 ? num(p.used0) : 0;
       const listed = Array.isArray(p.earlier) ? p.earlier.map(d => new Date(d)).filter(d => !isNaN(d)) : [];
-      const early = pre <= 0 ? [] : listed.length ? listed.slice(-pre) : st.past.filter(s => s.date < new Date(p.start)).slice(-pre).map(s => s.date);
-      return { done: [...early, ...st.past.filter(s => s.pkg === j).map(s => s.date)].map(d => d.toISOString()), uncounted: Math.max(0, pre - early.length) };
+      const early = pre <= 0 ? [] : listed.length ? listed.slice(-pre) : PAST.filter(s => s.date < new Date(p.start)).slice(-pre).map(s => s.date);
+      return { done: [...early, ...PAST.filter(s => s.pkg === j).map(s => s.date)].map(d => d.toISOString()), uncounted: Math.max(0, pre - early.length) };
     };
     const cur = pkgDone(ci), done = cur.done;
     const slots = Math.max(0, st.current.size - done.length - cur.uncounted);
-    v.pack = { size: st.current.size, done, booked: st.future.slice(0, slots).map(s => s.date.toISOString()), uncounted: cur.uncounted };
+    v.pack = { size: st.current.size, done, booked: FUT.slice(0, slots).map(s => s.date.toISOString()), uncounted: cur.uncounted };
     // Earlier packages that are used up but not paid yet, each with every session, so the client sees what they owe for.
     // A paid earlier package the trainer marked `onLink` is listed too, tagged with its `paidNote` ("Paid in cash").
     v.owed = pk.map((p, j) => ({p, j})).filter(({p, j}) => j < ci && (!p.paidDate || p.onLink))
       .map(({p, j}) => ({ size: num(p.size), ...pkgDone(j), ...(p.paidDate ? { paid: p.paidNote || "Paid" } : {}) }));
     if (v.owed.length) v.pack.unpaid = !(pk[ci] || {}).paidDate;
-    v.nextPack = { done: st.past.filter(s => s.over).map(s => s.date.toISOString()), booked: st.future.slice(slots, slots + 8).map(s => s.date.toISOString()) };
-    const inPack = st.past.filter(s => s.pkg === ci || s.over);
+    v.nextPack = { done: PAST.filter(s => s.over).map(s => s.date.toISOString()), booked: FUT.slice(slots, slots + 8).map(s => s.date.toISOString()) };
+    const inPack = PAST.filter(s => s.pkg === ci || s.over);
     if (inPack.length > v.recent.length) v.recent = inPack.slice().reverse().map(s => s.date.toISOString());
+    // Who did each session, when more than one person shares this package.
+    if (st.sharedBy && st.sharedBy.length){ v.who = {}; v.people = [c, ...st.sharedBy].map(p => firstName(p.name));
+      for (const p of [c, ...st.sharedBy]) for (const x of [...M.stats[p.id].past, ...M.stats[p.id].future]) v.who[x.date.toISOString()] = firstName(p.name); }
     v.packSessions = true; }
   else { const k = M.curM; v.thisMonth = st.past.filter(s => mkey(s.date) === k).length; v.bookedThisMonth = st.future.filter(s => mkey(s.date) === k).length;
     if (st.bill === "membership" && num(c.included)) v.included = num(c.included);
