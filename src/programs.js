@@ -42,7 +42,7 @@ const libById = () => Object.fromEntries([...(PG.sharedLib || []), ...(PG.lib ||
 const libByName = () => Object.fromEntries((PG.lib || []).map(e => [e.name.trim().toLowerCase(), e]));
 /* Programs other trainers shared with me show up as virtual clients: "sh:<owner>:<their client id>". */
 const sharedClients = () => { const out = {}; for (const p of PG.shared){ const id = "sh:" + p.ownerId + ":" + p.clientId; out[id] = out[id] || { id, name: p.clientName || "Client", shared: true, ownerId: p.ownerId, ownerName: p.ownerName, realId: p.clientId }; } return Object.values(out); };
-const client = id => C.S.clients.find(c => c.id === id) || sharedClients().find(c => c.id === id);
+const client = id => (C.S.allClients || C.S.clients).find(c => c.id === id) || sharedClients().find(c => c.id === id);
 const progsOf = c => c.shared ? PG.shared.filter(p => p.ownerId === c.ownerId && p.clientId === c.realId) : (PG.progs || []).filter(p => p.clientId === c.id);
 /* Plan mode can show several weeks at once: lookups prefer the week you're working in (PG.week). */
 const inWk = sel => document.querySelector(`#main [data-wk="${PG.week}"] ${sel}`) || document.querySelector(`#main ${sel}`);
@@ -101,7 +101,7 @@ async function loadClient(id){
 function todos(M){
   M = M || (C.getModel && C.getModel());
   if (!M || !PG.progs) return [];
-  return programTodos({ clients: C.S.clients, programs: PG.progs, now: M.now || new Date(), dismissed: (C.S.prof && C.S.prof.programsDismissed) || [],
+  return programTodos({ clients: (C.S.allClients || C.S.clients), programs: PG.progs, now: M.now || new Date(), dismissed: (C.S.prof && C.S.prof.programsDismissed) || [],
     sessionsOf: id => { const st = M.stats && M.stats[id]; return st ? [...st.past, ...st.future] : []; } });
 }
 const shortD = d => d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -161,7 +161,7 @@ function whenLabel(d){
 function weekIndexFor(p, d){ if (!p || !p.startDate) return 0; return Math.max(0, Math.min((p.weeks || []).length - 1, Math.floor((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - weekZero(p)) / (7 * 86400000)))); }
 function renderClientList(){
   const progOf = id => (PG.progs || []).filter(p => p.clientId === id && p.status !== "archived");
-  const list = C.S.clients.filter(c => c.active !== false).map(c => ({ c, next: nextOf(c) }))
+  const list = (C.S.allClients || C.S.clients).filter(c => c.active !== false).map(c => ({ c, next: nextOf(c) }))
     .sort((a, b) => (a.next && b.next ? a.next - b.next : a.next ? -1 : b.next ? 1 : 0) || a.c.name.localeCompare(b.c.name));
   const loading = C.modelLoading && C.modelLoading();
   const up = list.find(x => x.next);
