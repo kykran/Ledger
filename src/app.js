@@ -339,7 +339,68 @@ function syncWizCals(){
   const w = S.wiz; if (!S.calList || !w) return;
   const have = new Map(w.cals.map(c => [c.id, c]));
   const me = (S.detectedEmail||"").toLowerCase();
-  w.cals = S.calList.map(c => { const h = have.get(c.id); return h ? {...h, name:c.summary||c.id} : {id:c.id, name:c.summary||c.id, use: c.id.toLowerCase() === me, studio:false, mineOnly:false}; });
+  const listed = new Set(S.calList.map(c => c.id));
+  w.cals = S.calList.map(c => { const h = have.get(c.id); return h ? {...h, name:c.summary||c.id} : {id:c.id, name:c.summary||c.id, use: c.id.toLowerCase() === me, studio:false, mineOnly:false}; })
+    .concat(w.cals.filter(c => c.use && !listed.has(c.id)));
+}
+/* Settings › Calendars: tick any calendar to read sessions from it, or add one shared with you by its address. */
+function calRows(){
+  const saved = P("calendars")||[], have = new Map(saved.map(c => [c.id, c]));
+  const listed = (S.calList||[]).map(c => { const h = have.get(c.id); return h ? {...h, name:h.name||c.summary||c.id} : {id:c.id, name:c.summary||c.id, use:false, studio:false, mineOnly:false}; });
+  const ids = new Set(listed.map(c => c.id));
+  return listed.concat(saved.filter(c => !ids.has(c.id)).map(c => ({...c, added:true})));
+}
+function calendarsCard(){
+  if (A.calendar && !S.calList && !S.calListErr && !S.calLoading){ S.calLoading = true; fetchCalendarList().finally(()=>{ S.calLoading = false; render(); }); }
+  const rows = calRows(), on = rows.filter(c => c.use).length;
+  let list;
+  if (isScopeErr(S.calListErr) && A.grantCalendar) list = calendarPermissionCard();
+  else if (S.calListErr && !rows.length) list = `<div class="banner err"><span>${esc(calErrorText(S.calListErr))}</span><button class="btn sm" data-act="cal-list">Retry</button></div>`;
+  else if (!S.calList && !rows.length) list = `<div class="note">Looking up your calendars…</div>`;
+  else list = rows.map((c,i) => `<div class="calrow">
+      <input type="checkbox" id="sc-use-${i}" data-scal="${esc(c.id)}" data-k="use" ${c.use?"checked":""} ${S.readOnly?"disabled":""}>
+      <label for="sc-use-${i}"><b>${esc(c.name)}</b><div class="small muted">${esc(c.id.length>44?c.id.slice(0,42)+"…":c.id)}${c.added?" · added by address":""}</div></label>
+      ${c.use ? `<div class="opts"><label class="check"><input type="checkbox" data-scal="${esc(c.id)}" data-k="studio" ${c.studio?"checked":""}> Sessions here are at the studio (rent applies)</label>
+      <label class="check"><input type="checkbox" data-scal="${esc(c.id)}" data-k="mineOnly" ${c.mineOnly?"checked":""}> Shared calendar: only count events I created</label></div>` : ""}
+    </div>`).join("");
+  return `<section class="card" id="calendars"><div class="card-h"><h2>Calendars</h2><span class="small muted">${on} read</span></div>
+    <p class="small muted">Tick every calendar you book sessions on. Sessions are read from all of them together.</p>
+    ${list}
+    <div class="form"><div class="field full"><label for="sc-add">Add a calendar someone shared with you</label>
+      <div style="display:flex;gap:8px"><input id="sc-add" style="flex:1;min-width:0" placeholder="name@gmail.com or calendar address"><button class="btn sm" data-act="cal-add" ${S.readOnly?"disabled":""}>Add</button></div>
+      <span class="hint">Not in the list above? Paste its address (Google Calendar › the calendar's settings › Calendar ID). It has to be shared with ${esc(P("myEmail") || (S.account && S.account.email) || "the Google account you sign in with")}.</span></div></div>
+  </section>`;
+}
+let calSaveT;
+function saveCalendars(next){
+  S.prof = {...S.prof, calendars:next};
+  render();
+  clearTimeout(calSaveT);
+  calSaveT = setTimeout(() => saveProfile({calendars:next}).then(() => loadCalendar(true)).catch(()=>{}), 600);
+}
+function setCal(id, k, v){
+  const rows = calRows(); const c = rows.find(x => x.id === id); if (!c) return;
+  c[k] = v; if (k === "use" && !v){ c.studio = false; c.mineOnly = false; }
+  saveCalendars(rows.filter(x => x.use).map(x => ({id:x.id, name:x.name, use:true, studio:!!x.studio, mineOnly:!!x.mineOnly})));
+}
+async function addCalendar(el){
+  const raw = val("sc-add").trim(); if (!raw){ toast("Paste the calendar's address"); return; }
+  const id = raw.replace(/^.*[?&]src=([^&]+).*$/, (m, x) => decodeURIComponent(x));
+  if ((P("calendars")||[]).some(c => c.id === id && c.use)){ toast("That calendar is already read"); return; }
+  el.disabled = true; el.textContent = "Checking…";
+  let name = id;
+  try {
+    const p = await callCal("list_events", {calendarId:id, pageSize:1, startTime:new Date(Date.now()-30*DAY).toISOString(), endTime:new Date().toISOString()});
+    const known = (S.calList||[]).find(c => c.id === id);
+    name = (known && known.summary) || (p.summary && p.summary !== id ? p.summary : id);
+  } catch(err){
+    el.disabled = false; el.textContent = "Add";
+    toast(isScopeErr(err) ? calErrorText(err) : "Couldn't open that calendar. Ask its owner to share it with you, then try again.");
+    return;
+  }
+  const next = (P("calendars")||[]).filter(c => c.id !== id).concat([{id, name, use:true, studio:false, mineOnly:false}]);
+  saveCalendars(next);
+  toast("Added " + name + ". Reading its sessions…");
 }
 function renderSetup(){
   if (!S.wiz) S.wiz = wizDefaults();
@@ -953,7 +1014,7 @@ function renderSettings(){
   const bs = S.billingStatus;
   return `<div class="grid2"><section class="card"><div class="card-h"><h2>Setup</h2><button class="btn sm" data-act="rerun">Change setup</button></div>
     <dl class="kv"><dt>Name on messages</dt><dd>${esc(P("trainerName")||"–")}</dd>
-      <dt>Calendars read</dt><dd>${cals.map(c=>esc(c.name)+(c.studio?" (studio)":"")+(c.mineOnly?" (mine only)":"")).join("<br>")||"–"}</dd>
+      <dt>Calendars read</dt><dd>${cals.map(c=>esc(c.name)+(c.studio?" (studio)":"")+(c.mineOnly?" (mine only)":"")).join("<br>")||"–"} <a href="#calendars" data-act="goto-settings" data-anchor="calendars" class="small">Change</a></dd>
       <dt>Studio rent</dt><dd>${esc(rentTxt)}${r.mode==="perSession"||r.mode==="percent" ? (r.appliesTo==="all"?", every session":", studio calendars") : ""}</dd>
       <dt>New clients start as</dt><dd>${BILLING[d.billing].long}, ${money(d.rate)}/session, ${d.packageSize}-pack</dd>
       <dt>Counting from</dt><dd>${esc(parseDay(P("historyStart")).toLocaleDateString(undefined,{month:"short", day:"numeric", year:"numeric"}))}</dd></dl>
@@ -975,6 +1036,7 @@ function renderSettings(){
     ${(P("ignoredTitles")||[]).length ? `<h3>Names marked "not a client"</h3><div class="list">${(P("ignoredTitles")||[]).map((t,i)=>`<div><span>${esc(t)}</span><button class="btn sm" data-act="unignore" data-i="${i}">Restore</button></div>`).join("")}</div>` : ""}
     <div class="actions"><button class="btn primary" data-act="save-settings" ${S.readOnly?"disabled":""}>Save</button></div>
   </section></div>
+  ${calendarsCard()}
   <div class="grid2">${noticesCard()}${taxSettingsCard()}</div>
   ${studiosSettingsCard()}
   <div class="grid2">
@@ -1495,6 +1557,7 @@ async function onClick(e){
     case "signout": if (A.signOut) A.signOut(); break;
     case "refresh": loadCalendar(true); break;
     case "cal-list": S.calList = null; S.calListErr = null; render(); break;
+    case "cal-add": await addCalendar(el); break;
     case "mprev": S.month = mPrev(S.month); render(); break;
     case "mnext": if (S.month < M.curM) S.month = mNext(S.month); render(); break;
     case "ov-mode": setOvMode(el.getAttribute("data-k"), M); render(); break;
@@ -1652,6 +1715,7 @@ function onChange(e){
   }
   if (t.id === "ed-bill" || t.id === "sp-mode") applyBillVisibility();
   if (t.name === "w-rent") applyRentVisibility();
+  if (t.hasAttribute && t.hasAttribute("data-scal")){ setCal(t.getAttribute("data-scal"), t.getAttribute("data-k"), t.checked); return; }
   if (t.hasAttribute && t.hasAttribute("data-wcal")){
     const i = +t.getAttribute("data-wcal"), k = t.getAttribute("data-k");
     S.wiz.name = val("w-name") || S.wiz.name; S.wiz.historyStart = val("w-start") || S.wiz.historyStart;
