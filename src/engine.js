@@ -520,7 +520,9 @@ export function clientView(M, clientId){
     const slots = Math.max(0, st.current.size - done.length - cur.uncounted);
     v.pack = { size: st.current.size, done, booked: st.future.slice(0, slots).map(s => s.date.toISOString()), uncounted: cur.uncounted };
     // Earlier packages that are used up but not paid yet, each with every session, so the client sees what they owe for.
-    v.owed = pk.map((p, j) => ({p, j})).filter(({p, j}) => j < ci && !p.paidDate).map(({p, j}) => ({ size: num(p.size), ...pkgDone(j) }));
+    // A paid earlier package the trainer marked `onLink` is listed too, tagged with its `paidNote` ("Paid in cash").
+    v.owed = pk.map((p, j) => ({p, j})).filter(({p, j}) => j < ci && (!p.paidDate || p.onLink))
+      .map(({p, j}) => ({ size: num(p.size), ...pkgDone(j), ...(p.paidDate ? { paid: p.paidNote || "Paid" } : {}) }));
     if (v.owed.length) v.pack.unpaid = !(pk[ci] || {}).paidDate;
     v.nextPack = { done: st.past.filter(s => s.over).map(s => s.date.toISOString()), booked: st.future.slice(slots, slots + 8).map(s => s.date.toISOString()) };
     const inPack = st.past.filter(s => s.pkg === ci || s.over);
