@@ -129,13 +129,15 @@ function saveProfile(patch){
 }
 function saveClient(c){
   const body = {...c}; delete body.id; body.updatedAt = new Date().toISOString();
-  const i = S.clients.findIndex(x => x.id === c.id);
-  if (i >= 0) S.clients[i] = c; else S.clients.push(c);
-  render();
+  const all = S.allClients || S.clients, i = all.findIndex(x => x.id === c.id);
+  if (i >= 0) all[i] = c; else all.push(c);
+  setClients(all); render();
   return queued("c:"+c.id, () => A.setClient(c.id, plain(body))).catch(storeFail);
 }
+/* Billing screens see S.clients; programs-only clients (billed by someone else) live only in S.allClients, for Programs. */
+function setClients(list){ S.allClients = list; S.clients = list.filter(c => !c.programsOnly); }
 function removeClient(id){
-  S.clients = S.clients.filter(c => c.id !== id); render();
+  setClients((S.allClients || S.clients).filter(c => c.id !== id)); render();
   return queued("c:"+id, () => A.deleteClient(id)).catch(storeFail);
 }
 
@@ -216,7 +218,7 @@ async function loadCalendar(refresh){
 
 /* ---------- engine (shared with the server: src/engine.js) ---------- */
 const E = globalThis.TallyEngine;
-const engineData = () => ({profile:S.prof, clients:S.clients, events:S.events, now:new Date()});
+const engineData = () => ({profile:S.prof, clients:S.allClients || S.clients, events:S.events, now:new Date()});
 const compute = () => E.compute(engineData());
 const monthTotals = (M, k) => E.monthTotals(M, k);
 const projectMonth = (M, k) => E.projectMonth(M, k);
@@ -1090,7 +1092,7 @@ function exportReconcile(){
 /* ---------- export / restore ---------- */
 function backupObject(){
   const prof = {...(S.prof||{})};
-  return {app:"trainer-tally", schema:SCHEMA, exportedAt:new Date().toISOString(), profile:prof, clients:S.clients.map(c => ({...c}))};
+  return {app:"trainer-tally", schema:SCHEMA, exportedAt:new Date().toISOString(), profile:prof, clients:(S.allClients || S.clients).map(c => ({...c}))};
 }
 const csvCell = v => { const s = String(v ?? ""); return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s; };
 const csv = rows => rows.map(r => r.map(csvCell).join(",")).join("\n") + "\n";
@@ -1539,7 +1541,7 @@ async function onClick(e){
     case "reset-no": S.confirmReset = false; render(); break;
     case "reset-yes": {
       S.confirmReset = false;
-      try { for (const c of [...S.clients]) await removeClient(c.id); await queued("profile", () => A.deleteProfile()); } catch(err){}
+      try { for (const c of [...(S.allClients || S.clients)]) await removeClient(c.id); await queued("profile", () => A.deleteProfile()); } catch(err){}
       S.prof = null; S.wiz = null; S.events = []; S.cal = {state:"idle", done:0, total:0}; render(); toast("Your data was deleted"); break;
     }
   }
@@ -1603,7 +1605,7 @@ async function start(adapter){
     render(); maybeStart();
   }, err => { S.loadError = err || new Error("load failed"); S.profLoaded = true; render(); });
   A.watchClients(list => {
-    S.clients = list; S.clientsLoaded = true;
+    setClients(list); S.clientsLoaded = true;
     if (S.modal && S.modal.id && ["edit","setup-pkg","add-pkg","msg"].includes(S.modal.type) && !client(S.modal.id)) closeModal();
     render(); maybeStart();
   }, err => { S.loadError = err || new Error("load failed"); S.clientsLoaded = true; render(); });

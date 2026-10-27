@@ -79,9 +79,9 @@ export function normalizeEvents(rows, profile){
   return evs.sort((a,b)=>a.date-b.date);
 }
 
-function buildMatcher(){
+function buildMatcher(clients = CTX.clients){
   const list = [];
-  for (const c of CTX.clients) for (const n of [c.name, ...(c.aliases||[])]){ const a = clean(n); if (a) list.push({a, id:c.id}); }
+  for (const c of clients) for (const n of [c.name, ...(c.aliases||[])]){ const a = clean(n); if (a) list.push({a, id:c.id}); }
   list.sort((x,y)=>y.a.length-x.a.length);
   return t => { for (const {a,id} of list){ if (t === a) return id; if (t.startsWith(a+" ") && t.slice(a.length+1).split(" ").length <= 2) return id; } return null; };
 }
@@ -113,12 +113,14 @@ function sessionRent(s, value, c){
   return 0;
 }
 export function compute({profile, clients, events, now} = {}){
-  CTX = {profile: profile || {}, clients: clients || [], events: events || []};
+  // Programs-only clients (someone else bills them) get their calendar sessions matched for Programs, but stay out of every billing total.
+  const everyone = clients || [], progOnly = new Set(everyone.filter(c => c.programsOnly).map(c => c.id));
+  CTX = {profile: profile || {}, clients: everyone.filter(c => !progOnly.has(c.id)), events: events || []};
   now = now || new Date(); const curM = mkey(now);
-  const match = buildMatcher();
+  const match = buildMatcher(everyone);
   const ignoreW = (P("ignoreWords")||[]).map(norm).filter(Boolean);
   const ignoredT = new Set((P("ignoredTitles")||[]).map(clean));
-  const byClient = {}; CTX.clients.forEach(c => byClient[c.id] = []);
+  const byClient = {}; everyone.forEach(c => byClient[c.id] = []);
   const unmatched = {};
   for (const e of CTX.events){
     const t = clean(e.title); if (!t) continue;
@@ -135,6 +137,9 @@ export function compute({profile, clients, events, now} = {}){
   }
   const stats = {};
   for (const c of CTX.clients) stats[c.id] = clientStats(c, byClient[c.id]||[], now, curM);
+  for (const c of everyone) if (progOnly.has(c.id)){ const list = byClient[c.id], past = list.filter(s => !s.future), future = list.filter(s => s.future);
+    stats[c.id] = {c, bill:"none", programsOnly:true, past, future, skipped:[], monthly:{}, invoices:[], balance:0, pace:0, status:"info", label:"Programs only",
+      last: past.length ? past[past.length-1].date : null, next: future[0] ? future[0].date : null}; }
   const recentCut = now - 120*DAY;
   const um = Object.values(unmatched).filter(u => u.count >= 2 && ((u.last && u.last >= recentCut) || u.next)).sort((a,b)=>b.count-a.count).slice(0,40);
   return {now, curM, stats, unmatched:um, byClient, ctx:CTX};
