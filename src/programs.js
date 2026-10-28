@@ -1412,7 +1412,6 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-board.pg-bdrag{scroll-snap-type:none}
 .pg-col.pg-drop .pg-col-add,.pg-col.pg-drop>.pg-sess{border-color:var(--accent)!important;box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 45%,transparent)}
 .pg-col.pg-drop .pg-colh{color:var(--accent)}
-.pg-sess.pg-swap{outline:2px dashed var(--accent);outline-offset:2px}
 .pg-dragtag{position:fixed;left:0;top:0;z-index:1000;pointer-events:none;background:var(--ink);color:var(--bg);font-size:13px;font-weight:600;padding:6px 10px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.25);white-space:nowrap}
 .pg-board{flex:0 0 auto;display:flex;gap:10px;overflow-x:auto;align-items:flex-start;padding:2px 2px 10px;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch}
 .pg-col{flex:0 0 330px;display:flex;flex-direction:column;gap:8px;min-width:0;scroll-snap-align:start}
@@ -1582,19 +1581,17 @@ function applyMove(si, kind, from, to){
 }
 /* ---------- drag a workout to another day (week board) ---------- */
 let SDRAG = null;
-/* Put session si on a day ("" = no day). Dropped on another workout: they swap days. */
-function moveSessionDay(si, day, otherSi){
-  mutate(p => { const ss = p.weeks[PG.week].sessions, s = ss[si], old = hasDay(s) ? +s.day : null;
-    if (day === "" || day == null) delete s.day; else s.day = +day;
-    const o = otherSi != null && otherSi !== si ? ss[otherSi] : null;
-    if (o){ if (old == null) delete o.day; else o.day = old; } });
+/* Put session si on a day ("" = no day). A day that already has a workout gets both, stacked. */
+function moveSessionDay(si, day){
+  mutate(p => { const s = p.weeks[PG.week].sessions[si];
+    if (day === "" || day == null) delete s.day; else s.day = +day; });
 }
 function sessDragStart(e, h){
   e.preventDefault();
   const card = h.closest(".pg-sess"), board = h.closest(".pg-board"); if (!card || !board) return;
   const label = document.createElement("div"); label.className = "pg-dragtag"; label.textContent = (card.querySelector(".pg-sname") || {}).value || "Workout";
   document.body.appendChild(label);
-  SDRAG = { si: +h.getAttribute("data-s"), id: e.pointerId, card, board, label, col: null, onCard: null, x: e.clientX, from: card.closest(".pg-col") };
+  SDRAG = { si: +h.getAttribute("data-s"), id: e.pointerId, card, board, label, col: null, x: e.clientX, from: card.closest(".pg-col") };
   card.classList.add("pg-sdragging"); board.classList.add("pg-bdrag"); document.body.classList.add("pg-is-dragging");
   try { h.setPointerCapture(e.pointerId); } catch (x){}
   sessDragMove(e);
@@ -1604,11 +1601,9 @@ function sessDragMove(e){
   const D = SDRAG; if (!D || e.pointerId !== D.id) return;
   D.x = e.clientX; D.label.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 10}px)`;
   const el = document.elementFromPoint(e.clientX, e.clientY), c0 = el && el.closest && el.closest(".pg-board .pg-col"), col = c0 && c0.closest(".pg-board") === D.board ? c0 : null;
-  const onCard = col && el.closest(".pg-board .pg-sess");
   if (D.col && D.col !== col) D.col.classList.remove("pg-drop");
-  if (D.onCard && D.onCard !== onCard) D.onCard.classList.remove("pg-swap");
-  D.col = col && col !== D.from ? col : null; D.onCard = onCard && onCard !== D.card && D.col ? onCard : null;
-  if (D.col) D.col.classList.add("pg-drop"); if (D.onCard) D.onCard.classList.add("pg-swap");
+  D.col = col && col !== D.from ? col : null;
+  if (D.col) D.col.classList.add("pg-drop");
   // scroll the board sideways near its edges
   const r = D.board.getBoundingClientRect(), v = e.clientX < r.left + 60 ? -16 : e.clientX > r.right - 60 ? 16 : 0;
   clearInterval(D.timer); if (v) D.timer = setInterval(() => { D.board.scrollLeft += v; }, 30);
@@ -1618,12 +1613,12 @@ function sessDragEnd(e){
   clearInterval(D.timer);
   window.removeEventListener("pointermove", sessDragMove); window.removeEventListener("pointerup", sessDragEnd); window.removeEventListener("pointercancel", sessDragEnd);
   D.label.remove(); document.body.classList.remove("pg-is-dragging"); D.card.classList.remove("pg-sdragging"); D.board.classList.remove("pg-bdrag");
-  if (D.col) D.col.classList.remove("pg-drop"); if (D.onCard) D.onCard.classList.remove("pg-swap");
+  if (D.col) D.col.classList.remove("pg-drop");
   if (e.type === "pointercancel" || !D.col) return;
   const day = D.col.getAttribute("data-day");
-  moveSessionDay(D.si, day, D.onCard ? +D.onCard.getAttribute("data-si") : null);
+  moveSessionDay(D.si, day);
   const name = (D.card.querySelector(".pg-sname") || {}).value || "Workout";
-  C.toast(D.onCard ? "Swapped days" : day === "" ? `${name}: no day` : `${name} → ${DOW[+day]}`);
+  C.toast(day === "" ? `${name}: no day` : `${name} → ${DOW[+day]}`);
 }
 function onPointerDown(e){
   const h = e.target.closest && e.target.closest("[data-drag]"); if (!h || (e.button && e.button !== 0) || !P()) return;
