@@ -934,7 +934,8 @@ function taxSettingsCard(){
 }
 function saveTimeZone(){
   let tz = ""; try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch(e){}
-  if (tz && P("timeZone") !== tz && !S.readOnly) saveProfile({timeZone: tz}).catch(()=>{});
+  // Only fill it in the first time: a laptop or phone set to another zone must not overwrite it.
+  if (tz && !P("timeZone") && !S.readOnly) saveProfile({timeZone: tz}).catch(()=>{});
   refreshOutbox();
 }
 
