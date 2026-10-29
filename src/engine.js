@@ -51,7 +51,8 @@ const rentCfg = () => ({...DEFAULTS.rent, ...(P("rent")||{})});
 const defs = () => ({...DEFAULTS.defaults, ...(P("defaults")||{})});
 
 /* Google Calendar events (each tagged with its calendar settings) -> session-ready events. */
-/* On shared ("mine only") calendars, keep only events the trainer (or a helper listed in extraCreators) made. */
+/* On shared ("mine only") calendars, keep only events the trainer (or a helper listed in extraCreators) made.
+ * A helper's events are tagged by normalizeEvents and only count for programs-only clients (the helper's own clients). */
 export function keepEvent(e, cal, profile){
   if (!e || e.status === "cancelled" || !e.start || !e.start.dateTime) return false;
   if (!cal.mineOnly) return true;
@@ -60,6 +61,14 @@ export function keepEvent(e, cal, profile){
   const extra = ((profile && profile.extraCreators) || []).map(x => String(x).toLowerCase().trim()).filter(Boolean);
   const creator = ((e.creator||{}).email||"").toLowerCase(), org = ((e.organizer||{}).email||"").toLowerCase();
   return creator === me || org === me || extra.includes(creator);
+}
+/* True when a shared-calendar event is kept only because a helper made it, not the trainer. */
+function byHelper(e, cal, profile){
+  if (!cal.mineOnly) return false;
+  const me = String((profile && profile.myEmail) || "").toLowerCase();
+  if (!me) return false;
+  const creator = ((e.creator||{}).email||"").toLowerCase(), org = ((e.organizer||{}).email||"").toLowerCase();
+  return creator !== me && org !== me;
 }
 /* The earliest date the trainer's history needs (history start, or an older billing / package start). */
 export function historyFrom(profile, clients){
@@ -74,7 +83,7 @@ export function normalizeEvents(rows, profile){
     if (!e || e.status === "cancelled" || !e.start || !e.start.dateTime) continue;
     const key = cal.id + ":" + e.id; if (seen.has(key)) continue; seen.add(key);
     if (!keepEvent(e, cal, profile)) continue;
-    evs.push({id:e.id, title:(e.summary||"").trim(), date:new Date(e.start.dateTime), cal:cal.id, calName:cal.name, studio:!!cal.studio});
+    evs.push({id:e.id, title:(e.summary||"").trim(), date:new Date(e.start.dateTime), cal:cal.id, calName:cal.name, studio:!!cal.studio, helper:byHelper(e, cal, profile)});
   }
   return evs.sort((a,b)=>a.date-b.date);
 }
@@ -136,6 +145,8 @@ export function compute({profile, clients, events, now} = {}){
     const words = norm(e.title).split(" ");
     const skip = ignoreW.some(w => words.includes(w));
     const id = match(t);
+    // A helper's events (e.g. a partner trainer on the studio calendar) are her sessions: they only fill in programs-only clients' days.
+    if (e.helper && !progOnly.has(id)) continue;
     if (!id){
       if (skip || ignoredT.has(t) || ignoredT.has(splitNumber(t).base)) continue;
       const u = unmatched[t] || (unmatched[t] = {title:e.title, key:t, count:0, past:0, last:null, next:null, dates:[]});
