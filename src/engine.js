@@ -51,24 +51,25 @@ const rentCfg = () => ({...DEFAULTS.rent, ...(P("rent")||{})});
 const defs = () => ({...DEFAULTS.defaults, ...(P("defaults")||{})});
 
 /* Google Calendar events (each tagged with its calendar settings) -> session-ready events. */
-/* On shared ("mine only") calendars, keep only events the trainer (or a helper listed in extraCreators) made.
- * A helper's events are tagged by normalizeEvents and only count for programs-only clients (the helper's own clients). */
-export function keepEvent(e, cal, profile){
-  if (!e || e.status === "cancelled" || !e.start || !e.start.dateTime) return false;
-  if (!cal.mineOnly) return true;
-  const me = String((profile && profile.myEmail) || "").toLowerCase();
-  if (!me) return true;
-  const extra = ((profile && profile.extraCreators) || []).map(x => String(x).toLowerCase().trim()).filter(Boolean);
-  const creator = ((e.creator||{}).email||"").toLowerCase(), org = ((e.organizer||{}).email||"").toLowerCase();
-  return creator === me || org === me || extra.includes(creator);
+/* Only events the trainer made count: created or organized by their own email, a personal calendar of theirs they read,
+ * or an account listed in extraCreators (someone who books for them). Anyone else's event, e.g. another trainer's on a
+ * shared studio calendar, only fills in a programs-only client's days. */
+const mail = x => String(x||"").toLowerCase().trim();
+function myAccounts(profile){
+  const me = mail(profile && profile.myEmail);
+  if (!me) return null;
+  const own = ((profile && profile.calendars) || []).map(c => mail(c.id)).filter(id => id.includes("@") && !id.endsWith("calendar.google.com"));
+  return new Set([me, ...own, ...((profile && profile.extraCreators) || []).map(mail)].filter(Boolean));
 }
-/* True when a shared-calendar event is kept only because a helper made it, not the trainer. */
-function byHelper(e, cal, profile){
-  if (!cal.mineOnly) return false;
-  const me = String((profile && profile.myEmail) || "").toLowerCase();
-  if (!me) return false;
-  const creator = ((e.creator||{}).email||"").toLowerCase(), org = ((e.organizer||{}).email||"").toLowerCase();
-  return creator !== me && org !== me;
+export function isMine(e, profile){
+  const acc = myAccounts(profile);
+  return !acc || acc.has(mail((e.creator||{}).email)) || acc.has(mail((e.organizer||{}).email));
+}
+export function keepEvent(e, cal, profile, clients){
+  if (!e || e.status === "cancelled" || !e.start || !e.start.dateTime) return false;
+  if (isMine(e, profile)) return true;
+  const po = (clients || []).filter(c => c.programsOnly);
+  return po.length > 0 && !!matchTitle(po, e.summary || "");
 }
 /* The earliest date the trainer's history needs (history start, or an older billing / package start). */
 export function historyFrom(profile, clients){
@@ -82,8 +83,7 @@ export function normalizeEvents(rows, profile){
   for (const [e, cal] of rows){
     if (!e || e.status === "cancelled" || !e.start || !e.start.dateTime) continue;
     const key = cal.id + ":" + e.id; if (seen.has(key)) continue; seen.add(key);
-    if (!keepEvent(e, cal, profile)) continue;
-    evs.push({id:e.id, title:(e.summary||"").trim(), date:new Date(e.start.dateTime), cal:cal.id, calName:cal.name, studio:!!cal.studio, helper:byHelper(e, cal, profile)});
+    evs.push({id:e.id, title:(e.summary||"").trim(), date:new Date(e.start.dateTime), cal:cal.id, calName:cal.name, studio:!!cal.studio, mine:isMine(e, profile)});
   }
   return evs.sort((a,b)=>a.date-b.date);
 }
@@ -145,8 +145,8 @@ export function compute({profile, clients, events, now} = {}){
     const words = norm(e.title).split(" ");
     const skip = ignoreW.some(w => words.includes(w));
     const id = match(t);
-    // A helper's events (e.g. a partner trainer on the studio calendar) are her sessions: they only fill in programs-only clients' days.
-    if (e.helper && !progOnly.has(id)) continue;
+    // Someone else's event (another trainer's on a shared calendar) is their session: it only fills in programs-only clients' days.
+    if (e.mine === false && !progOnly.has(id)) continue;
     if (!id){
       if (skip || ignoredT.has(t) || ignoredT.has(splitNumber(t).base)) continue;
       const u = unmatched[t] || (unmatched[t] = {title:e.title, key:t, count:0, past:0, last:null, next:null, dates:[]});
