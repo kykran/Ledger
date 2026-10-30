@@ -170,7 +170,9 @@ export function programTodos({ clients, programs, sessionsOf, now = new Date(), 
       out.push({ key, kind: w ? "short" : "noweek", clientId: c.id, progId: p.id, week: wk, from: new Date(start.getTime() + wk * 7 * DAY), to: new Date(start.getTime() + (wk * 7 + 6) * DAY), n: list.length, planned: have, dates: list.map(s => s.date) });
     }
   }
-  return out.filter(t => !skip.has(t.key)).sort((a, b) => (a.from || 0) - (b.from || 0));
+  // Whoever trains next comes first; clients with nothing left ahead go last.
+  const next = t => { const d = (t.dates || []).filter(x => x >= now).sort((a, b) => a - b)[0]; return d ? +d : Infinity; };
+  return out.filter(t => !skip.has(t.key)).sort((a, b) => next(a) - next(b) || (a.from || 0) - (b.from || 0));
 }
 
 /* Block colors: A-F get a fixed color (validated for color-blind separation in light and dark); later letters stay neutral.
