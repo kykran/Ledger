@@ -32,7 +32,7 @@ export async function syncUser(userId, { profile, clients, full = false } = {}){
     const needsFull = full || !have[cal.id] || have[cal.id] > want;
     const from = needsFull ? want : new Date(now - BACK_DAYS * DAY);
     try {
-      const evs = (await allEvents(access, cal.id, from, to)).filter(e => keepEvent(e, cal, profile));
+      const evs = (await allEvents(access, cal.id, from, to)).filter(e => keepEvent(e, cal, profile, clients));
       const rows = evs.map(e => ({ user_id: userId, calendar_id: cal.id, event_id: e.id, start_at: new Date(e.start.dateTime).toISOString(), data: trim(e), synced_at: runAt }));
       for (let i = 0; i < rows.length; i += 500){
         const { error } = await admin.from("calendar_events").upsert(rows.slice(i, i + 500));

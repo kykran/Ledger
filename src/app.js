@@ -360,8 +360,7 @@ function calendarsCard(){
   else list = rows.map((c,i) => `<div class="calrow">
       <input type="checkbox" id="sc-use-${i}" data-scal="${esc(c.id)}" data-k="use" ${c.use?"checked":""} ${S.readOnly?"disabled":""}>
       <label for="sc-use-${i}"><b>${esc(c.name)}</b><div class="small muted">${esc(c.id.length>44?c.id.slice(0,42)+"…":c.id)}${c.added?" · added by address":""}</div></label>
-      ${c.use ? `<div class="opts"><label class="check"><input type="checkbox" data-scal="${esc(c.id)}" data-k="studio" ${c.studio?"checked":""}> Sessions here are at the studio (rent applies)</label>
-      <label class="check"><input type="checkbox" data-scal="${esc(c.id)}" data-k="mineOnly" ${c.mineOnly?"checked":""}> Shared calendar: only count events I created</label></div>` : ""}
+      ${c.use ? `<div class="opts"><label class="check"><input type="checkbox" data-scal="${esc(c.id)}" data-k="studio" ${c.studio?"checked":""}> Sessions here are at the studio (rent applies)</label></div>` : ""}
     </div>`).join("");
   return `<section class="card" id="calendars"><div class="card-h"><h2>Calendars</h2><span class="small muted">${on} read</span></div>
     <p class="small muted">Tick every calendar you book sessions on. Sessions are read from all of them together.</p>
@@ -417,8 +416,7 @@ function renderSetup(){
     else cal = `<div>${w.cals.map((c,i) => `<div class="calrow">
         <input type="checkbox" id="wc-use-${i}" data-wcal="${i}" data-k="use" ${c.use?"checked":""}>
         <label for="wc-use-${i}"><b>${esc(c.name)}</b><div class="small muted">${esc(c.id.length>44?c.id.slice(0,42)+"…":c.id)}</div></label>
-        ${c.use ? `<div class="opts"><label class="check"><input type="checkbox" data-wcal="${i}" data-k="studio" ${c.studio?"checked":""}> Sessions here are at the studio (rent applies)</label>
-        <label class="check"><input type="checkbox" data-wcal="${i}" data-k="mineOnly" ${c.mineOnly?"checked":""}> Shared calendar: only count events I created</label></div>` : ""}
+        ${c.use ? `<div class="opts"><label class="check"><input type="checkbox" data-wcal="${i}" data-k="studio" ${c.studio?"checked":""}> Sessions here are at the studio (rent applies)</label></div>` : ""}
       </div>`).join("")}</div>`;
     body = `<div class="card"><h2>Which calendars hold your sessions?</h2>
       <p class="small muted">Tick every calendar you put client sessions on. Name each event after the client (for example "Maria" or "PT Maria") and the tally does the rest.</p>
@@ -1014,7 +1012,7 @@ function renderSettings(){
   const bs = S.billingStatus;
   return `<div class="grid2"><section class="card"><div class="card-h"><h2>Setup</h2><button class="btn sm" data-act="rerun">Change setup</button></div>
     <dl class="kv"><dt>Name on messages</dt><dd>${esc(P("trainerName")||"–")}</dd>
-      <dt>Calendars read</dt><dd>${cals.map(c=>esc(c.name)+(c.studio?" (studio)":"")+(c.mineOnly?" (mine only)":"")).join("<br>")||"–"} <a href="#calendars" data-act="goto-settings" data-anchor="calendars" class="small">Change</a></dd>
+      <dt>Calendars read</dt><dd>${cals.map(c=>esc(c.name)+(c.studio?" (studio)":"")).join("<br>")||"–"} <a href="#calendars" data-act="goto-settings" data-anchor="calendars" class="small">Change</a></dd>
       <dt>Studio rent</dt><dd>${esc(rentTxt)}${r.mode==="perSession"||r.mode==="percent" ? (r.appliesTo==="all"?", every session":", studio calendars") : ""}</dd>
       <dt>New clients start as</dt><dd>${BILLING[d.billing].long}, ${money(d.rate)}/session, ${d.packageSize}-pack</dd>
       <dt>Counting from</dt><dd>${esc(parseDay(P("historyStart")).toLocaleDateString(undefined,{month:"short", day:"numeric", year:"numeric"}))}</dd></dl>
@@ -1029,7 +1027,7 @@ function renderSettings(){
       <div class="field full"><label for="st-renew">Renewal message</label><textarea id="st-renew">${esc(P("renewalTemplate"))}</textarea><span class="hint">{first} {left} {size} {price} {me}</span></div>
       <div class="field full"><label for="st-inv">Monthly bill message</label><textarea id="st-inv">${esc(P("invoiceTemplate"))}</textarea><span class="hint">{first} {month} {amount} {details} {me}</span></div>
       <div class="field full"><label for="st-ign">Skip events containing these words</label><input id="st-ign" value="${esc((P("ignoreWords")||[]).join(", "))}"><span class="hint">Comma separated. A session titled "Maria cancel" won't count.</span></div>
-      <div class="field full"><label for="st-extra">On shared calendars, also count events created by</label><input id="st-extra" type="email" value="${esc((P("extraCreators")||[]).join(", "))}" placeholder="name@gmail.com"><span class="hint">For someone who books sessions for you. Comma separated.</span></div>
+      <div class="field full"><label for="st-extra">Also count events created by</label><input id="st-extra" type="email" value="${esc((P("extraCreators")||[]).join(", "))}" placeholder="name@gmail.com"><span class="hint">Only events you make count. Add any other email that books your sessions, like a client who sends you invites. Comma separated.</span></div>
       <div class="field full"><label for="st-norent">No studio rent when the title includes</label><input id="st-norent" value="${esc((P("noRentWords")||[]).join(", "))}"><span class="hint">For sessions away from the studio, e.g. "Sarah home" or "Mike - online". Still counted as a session.</span></div>
       <div class="field"><label for="st-th">Renewal flag at</label><input id="st-th" type="number" min="0" value="${esc(P("threshold"))}"></div>
     </div>
