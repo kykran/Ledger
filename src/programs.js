@@ -631,11 +631,19 @@ function deltaFor(s, r){
 }
 const deltaBadge = d => d ? `<span class="pg-delta ${d.dir}" title="Top set vs last time">${d.dir === "up" ? "▲" : d.dir === "down" ? "▼" : "="} ${esc(d.text)}</span>` : "";
 /* Most recent earlier day this client did an exercise with the same name: "70×8, 70×8, 75×6" (weight × reps). */
+/* Lines typed with a note are kept on the workout (session.lines[rowId]); "Last time" shows them as typed. */
+const hasWords = line => /[a-z]{2,}/i.test(String(line || "").replace(/\b(bw|bodyweight|body weight|lbs?|kgs?|reps?|sets?|of|at|secs?|seconds?)\b/gi, ""));
+function typedLineOf(progId, sid, rid){
+  for (const p of PG.progs || []){ if (progId && p.id !== progId) continue; for (const w of p.weeks || []) for (const x of w.sessions || []) if (x.id === sid) return (x.lines || {})[rid] || ""; }
+  return "";
+}
 function lastTime(name, excludeSid){
   const key = String(name || "").trim().toLowerCase(); if (!key) return "";
   const by = {};
   for (const l of PG.logs[PG.clientId] || []){ if (l.session_id === excludeSid || String(l.ex_name || "").trim().toLowerCase() !== key || (!l.done && l.reps == null && l.weight == null)) continue; const d = String(l.logged_on).slice(0, 10); (by[d] = by[d] || []).push(l); }
   const day = Object.keys(by).sort().pop(); if (!day) return "";
+  const first = by[day][0], line = typedLineOf(first.program_id, first.session_id, first.row_id);
+  if (line) return fmtDay(day) + ": " + line;
   return fmtDay(day) + ": " + by[day].sort((a, b) => a.set_no - b.set_no).map(l => l.weight != null ? `${l.weight}×${l.reps ?? "?"}${secsU(l)}` : l.timed ? `${l.reps ?? "?"}s` : `${l.reps ?? "?"} bw`).join(", ");
 }
 function recordBar(s, si){
@@ -693,14 +701,17 @@ function recordRows(p, s, si, r, ri){
 /* Show the line as it was typed ("3x8@44", "44x8 44x8 44x8") while it still matches what's saved; otherwise the saved sets. */
 const typedLines = {};
 function shownLine(s, r, have){
-  const t = typedLines[s.id + "|" + r.id], same = t != null && JSON.stringify(parseSetLog(t, planOf(r)).map(x => [x.reps, x.weight, !!x.timed])) === JSON.stringify(have.map(x => [x.reps, x.weight, !!x.timed]));
+  const t = typedLines[s.id + "|" + r.id] ?? (s.lines && s.lines[r.id]), same = t != null && JSON.stringify(parseSetLog(t, planOf(r)).map(x => [x.reps, x.weight, !!x.timed])) === JSON.stringify(have.map(x => [x.reps, x.weight, !!x.timed]));
   return same ? t : fmtSetLog(have);
 }
 /* Save a typed line: sets 1..n done with what was typed; anything logged past n is cleared. */
 function commitLine(si, ri, value){
   const p = P(); if (!p) return;
   const s = p.weeks[PG.week].sessions[si], r = s && s.rows[ri]; if (!r) return;
-  const list = parseSetLog(value, planOf(r)); typedLines[s.id + "|" + r.id] = String(value || "").trim();
+  const list = parseSetLog(value, planOf(r)), line = String(value || "").trim(); typedLines[s.id + "|" + r.id] = line;
+  // A line with a note in it ("35x6 clean set. 35x5 added pause") is kept as typed, so the note stays.
+  const hasNote = hasWords(line);
+  if (hasNote ? (s.lines || {})[r.id] !== line : s.lines && r.id in s.lines){ if (hasNote) (s.lines = s.lines || {})[r.id] = line; else delete s.lines[r.id]; saveSoon(p); }
   const before = loggedSets(s, r), same = JSON.stringify(before) === JSON.stringify(list);
   if (same) return;
   const old = (PG.logs[PG.clientId] || []).filter(l => l.session_id === s.id && l.row_id === r.id).reduce((m, l) => Math.max(m, l.set_no), 0);

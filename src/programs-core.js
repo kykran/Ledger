@@ -358,6 +358,7 @@ export function workoutEmail({ first, trainer, session, weekLabel, when, link })
 export function parseSetLog(str, plan = {}){
   let t = String(str || "").toLowerCase().replace(/×|\*/g, "x").replace(/\b(lbs?|kgs?|reps?)\b/g, " ").replace(/(\d)\s*(?:seconds?|secs?|s)(?=x|@|\s|$)/g, "$1s").replace(/\s*x\s*/g, "x").replace(/\s+/g, " ").trim();
   if (!t) return [];
+  t = dropNotes(t); if (!t) return [];
   // A number ending in s is seconds: "30s", "3x30s", "3x30s@25", "45s 45s 30s". Bare numbers on a timed exercise are seconds too.
   if (/\ds(?=x|@|\s|$)/.test(t) || plan.timed) return parseTimed(t, plan);
   // Only a plain planned weight ("50", "50 lb") is a load to compare against; "+5 lb" or "RPE 7" isn't.
@@ -382,6 +383,19 @@ export function parseSetLog(str, plan = {}){
     if (out.length >= 12) break;
   }
   return out.slice(0, 12).map((x, k) => ({ reps: x.reps ?? planReps(k), weight: x.weight }));
+}
+/* Words after a set are a note ("35x6 clean set. 35x5 added pause"): only the sets count.
+ * Once a note starts, everything up to the next weight x reps chunk is part of it, numbers included ("pause 2s"). */
+const SET_TOK = /^[\d.]+s?(?:x[\d.]+s?){0,2}(?:@[\d.]+)?[,;:.!]*$/, GRAMMAR = new Set(["@", "at", "set", "sets", "of", "bw", "bodyweight", "body", "weight"]);
+function dropNotes(t){
+  if (!/[a-z]/.test(t.replace(/\b(bw|bodyweight|body weight|at|sets?|of)\b/g, "").replace(/\d+(?:\.\d+)?s\b/g, "").replace(/x/g, ""))) return t;
+  const keep = []; let note = false;
+  for (const w of t.split(" ")){
+    if (SET_TOK.test(w) && (!note || w.includes("x"))){ note = false; keep.push(w.replace(/[,;:.!]+$/, "")); continue; }
+    if (!note && GRAMMAR.has(w.replace(/[,;:.!]+$/, ""))){ keep.push(w); continue; }
+    note = true;
+  }
+  return keep.join(" ").trim();
 }
 function parseTimed(t, plan){
   const bw = /\b(bw|bodyweight|body weight)\b/.test(t); t = t.replace(/\b(bw|bodyweight|body weight)\b/g, " ").trim();
