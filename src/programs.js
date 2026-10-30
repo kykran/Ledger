@@ -1341,15 +1341,38 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-cal-gap:hover,.pg-cal-gap:focus-visible{border-color:var(--accent)}
 /* One workout open on the calendar: its day widens and comes forward, the other days narrow to summaries. */
 .pg-cal-days.editing:has(.pg-cal-d.open){grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr)}
-.pg-cal-days.editing .pg-cal-d.open{grid-column:span 4;padding:8px;border-color:var(--accent);box-shadow:0 10px 28px rgba(0,0,0,.28),0 0 0 1px var(--accent);position:relative;z-index:1;background:var(--surface)}
-.pg-cal-days.editing .pg-cal-d:not(.open){font-size:11px}
-.pg-cal-days.editing .pg-cal-d:not(.open) .pg-cal-s{opacity:.8;font-size:11px;padding:5px 6px}
+.pg-cal-days.editing .pg-cal-d.open{grid-column:span 3;padding:8px;border-color:var(--accent);box-shadow:0 10px 28px rgba(0,0,0,.28),0 0 0 1px var(--accent);position:relative;z-index:1;background:var(--surface)}
+.pg-cal-days.editing .pg-cal-d:not(.open) .pg-cal-s{opacity:.85}
 .pg-cal-days.editing .pg-cal-d:not(.open) .pg-cal-s:hover{opacity:1}
 .pg-cal-open{display:flex;flex-direction:column;gap:6px;min-width:0}
 .pg-cal-obar{display:flex;align-items:center;gap:6px;justify-content:flex-end}
 .pg-cal-obar .small{margin-right:auto}
 .pg-cal-open .pg-sess{margin:0;box-shadow:none;border:0;padding:4px 2px}
 .pg-cal-open .pg-sess .card-h{flex-wrap:wrap;gap:6px}
+.pg-cal-open .pg-sess .card-h>.pg-row{flex:1 1 100%;flex-wrap:wrap}
+.pg-cal-open .pg-sess .pg-sname{flex:1 1 160px;min-width:0}
+.pg-cal-open,.pg-cal-open .pg-sess{max-width:100%;overflow-x:hidden}
+/* Edit workout on the calendar: the builder rows stack like the Plan board's cards, so nothing scrolls sideways. */
+.pg-cal-open .pg-sess:not(.rec) .pg-qa-hint,.pg-cal-open .pg-sess:not(.rec) .pg-done,.pg-cal-open .pg-sess:not(.rec) .pg-emptyhint{display:none}
+.pg-cal-open .pg-sess:not(.rec) .tablewrap{overflow:visible;margin:0;padding:0}
+.pg-cal-open .pg-sess:not(.rec) .pg-rows,.pg-cal-open .pg-sess:not(.rec) .pg-rows tbody{display:block;width:100%}
+.pg-cal-open .pg-sess:not(.rec) .pg-rows thead{display:none}
+.pg-cal-open .pg-sess:not(.rec) tr.pg-g{display:grid;grid-template-columns:16px 72px 56px minmax(0,1fr) 22px;grid-template-areas:"grip blk name name del" "grip sr wt note del" "grip log log log del";gap:4px 5px;align-items:center;padding:5px 0 5px 6px;border-bottom:1px solid var(--line);box-shadow:inset 3px 0 0 var(--g,transparent)}
+.pg-cal-open .pg-sess:not(.rec) tr.pg-g:last-child{border-bottom:0}
+.pg-cal-open .pg-sess:not(.rec) tr.pg-g>td{padding:0!important;border:0!important;min-width:0!important;box-shadow:none!important}
+.pg-cal-open .pg-sess:not(.rec) tr.pg-g>td:nth-child(1){grid-area:grip}.pg-cal-open .pg-sess:not(.rec) tr.pg-g>td:nth-child(2){grid-area:blk}.pg-cal-open .pg-sess:not(.rec) tr.pg-g>td:nth-child(3){grid-area:name}
+.pg-cal-open .pg-sess:not(.rec) tr.pg-g>td:nth-child(4){grid-area:sr}.pg-cal-open .pg-sess:not(.rec) tr.pg-g>td:nth-child(5){grid-area:wt}.pg-cal-open .pg-sess:not(.rec) tr.pg-g>td:nth-child(6){grid-area:note}.pg-cal-open .pg-sess:not(.rec) tr.pg-g>td:nth-child(7){grid-area:del}
+.pg-cal-open .pg-sess:not(.rec) tr.pg-g .pg-in{width:100%!important}
+.pg-cal-open .pg-sess:not(.rec) tr.pg-g>td.pg-logged{grid-area:log;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12.5px;color:var(--muted)}
+.pg-cal-open .pg-sess:not(.rec) .pg-grip{font-size:15px;padding:4px 2px}
+.pg-cal-open .pg-sess:not(.rec) .pg-bgrip,.pg-cal-open .pg-sess:not(.rec) .pg-bgrip-sp{width:16px;height:24px}
+.pg-cal-open .pg-sess:not(.rec) .pg-link,.pg-cal-open .pg-sess:not(.rec) .pg-link-sp{width:22px;height:22px}
+.pg-cal-open .pg-sess:not(.rec) .gchip{min-width:24px;font-size:11px}
+.pg-cal-open .pg-sess:not(.rec) tr.pg-g td:nth-child(7) .btn{padding:2px 4px}
+.pg-cal-open .pg-sess:not(.rec) .pg-qa{flex-wrap:nowrap;gap:6px}
+.pg-cal-open .pg-sess:not(.rec) .pg-qa-box{flex:1;min-width:0}
+.pg-cal-open .pg-sess:not(.rec) .pg-ss{padding:5px 7px}
+.pg-cal-open .pg-sess:not(.rec) tr.pg-g{grid-template-columns:16px 96px 64px minmax(0,1fr) 22px}
 .pg-cal-left{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
 .pg-cal-left .pg-cal-s{width:auto;min-width:160px;max-width:240px}
 @media (max-width:760px){

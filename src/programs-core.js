@@ -93,12 +93,20 @@ export function lineChart(points, { unit = "", height = 150, decimals = 1 } = {}
   const path = pts.map((p, i) => (i ? "L" : "M") + X(xs[i]).toFixed(1) + " " + Y(p.value).toFixed(1)).join(" ");
   const idx = pts.length <= 2 ? pts.map((_, i) => i) : [0, Math.floor((pts.length - 1) / 2), pts.length - 1];
   const xl = [...new Set(idx)].map(i => `<text x="${X(xs[i]).toFixed(1)}" y="${H - 6}" text-anchor="middle" class="lc-ax">${md(pts[i].date)}</text>`).join("");
-  const dots = pts.map((p, i) => `<g class="lc-pt"><circle cx="${X(xs[i]).toFixed(1)}" cy="${Y(p.value).toFixed(1)}" r="14" class="lc-hit"/><circle cx="${X(xs[i]).toFixed(1)}" cy="${Y(p.value).toFixed(1)}" r="4" class="lc-dot"/><title>${md(p.date)}: ${fmt(p.value)}${unit}${p.label ? " · " + p.label : ""}</title></g>`).join("");
+  const mon = d => new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const dots = pts.map((p, i) => `<circle cx="${X(xs[i]).toFixed(1)}" cy="${Y(p.value).toFixed(1)}" r="4" class="lc-dot"/>`).join("");
+  // Hover or tap anywhere over a date: its number and date pop up. Each point owns the band halfway to its neighbours.
+  const tips = pts.map((p, i) => {
+    const x = X(xs[i]), y = Y(p.value), a = i ? (X(xs[i - 1]) + x) / 2 : L, b = i < pts.length - 1 ? (x + X(xs[i + 1])) / 2 : W - R;
+    const rp = /^(\d+) reps?$/.exec(p.label || ""), txt = `${fmt(p.value)}${unit}${rp ? " × " + rp[1] : p.label ? " · " + p.label : ""} · ${mon(p.date)}`, w = txt.length * 6.6 + 16, h = 22;
+    const tx = Math.max(2, Math.min(W - w - 2, x - w / 2)), ty = y - h - 10 < 0 ? y + 10 : y - h - 10;
+    return `<g class="lc-pt" tabindex="0" aria-label="${txt}"><rect x="${a.toFixed(1)}" y="0" width="${Math.max(1, b - a).toFixed(1)}" height="${H}" class="lc-hit"/><line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${T}" y2="${H - B}" class="lc-cross"/><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="6" class="lc-on"/><g class="lc-tip"><rect x="${tx.toFixed(1)}" y="${ty.toFixed(1)}" width="${w.toFixed(1)}" height="${h}" rx="6"/><text x="${(tx + w / 2).toFixed(1)}" y="${(ty + 15).toFixed(1)}" text-anchor="middle">${txt}</text></g></g>`;
+  }).join("");
   const last = pts[pts.length - 1];
   const lastLbl = `<text x="${Math.min(W - R, X(xs[xs.length - 1]) + 0).toFixed(1)}" y="${(Y(last.value) - 10).toFixed(1)}" text-anchor="end" class="lc-val">${fmt(last.value)}${unit}</text>`;
-  return `<svg class="lc" viewBox="0 0 ${W} ${H}" role="img" aria-label="Trend, latest ${fmt(last.value)}${unit}">${grid}<path d="${path}" class="lc-line"/>${dots}${lastLbl}${xl}</svg>`;
+  return `<svg class="lc" viewBox="0 0 ${W} ${H}" role="img" aria-label="Trend, latest ${fmt(last.value)}${unit}">${grid}<path d="${path}" class="lc-line"/>${dots}${lastLbl}${xl}${tips}</svg>`;
 }
-export const LINECHART_CSS = `.lc{display:block;width:100%;height:auto;overflow:visible}.lc-grid{stroke:var(--line);stroke-width:1}.lc-ax{fill:var(--muted);font-size:11px;font-family:inherit}.lc-line{fill:none;stroke:var(--accent);stroke-width:2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}.lc-dot{fill:var(--accent);stroke:var(--surface);stroke-width:2}.lc-hit{fill:transparent}.lc-pt:hover .lc-dot{r:6}.lc-val{fill:var(--ink);font-size:12px;font-weight:600;font-family:inherit}.lc-empty{color:var(--muted);font-size:13px;padding:18px 0;text-align:center}`;
+export const LINECHART_CSS = `.lc{display:block;width:100%;height:auto;overflow:visible}.lc-grid{stroke:var(--line);stroke-width:1}.lc-ax{fill:var(--muted);font-size:11px;font-family:inherit}.lc-line{fill:none;stroke:var(--accent);stroke-width:2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}.lc-dot{fill:var(--accent);stroke:var(--surface);stroke-width:2}.lc-hit{fill:transparent;cursor:crosshair}.lc-pt{outline:none}.lc-cross,.lc-on,.lc-tip{opacity:0;pointer-events:none}.lc-cross{stroke:var(--muted);stroke-width:1;stroke-dasharray:3 3;vector-effect:non-scaling-stroke}.lc-on{fill:var(--accent);stroke:var(--surface);stroke-width:2}.lc-tip rect{fill:var(--ink)}.lc-tip text{fill:var(--bg);font-size:12px;font-weight:600;font-family:inherit}.lc-pt:hover .lc-cross,.lc-pt:hover .lc-on,.lc-pt:hover .lc-tip,.lc-pt:focus .lc-cross,.lc-pt:focus .lc-on,.lc-pt:focus .lc-tip{opacity:1}.lc:has(.lc-pt:hover,.lc-pt:focus) .lc-val{opacity:0}.lc-val{fill:var(--ink);font-size:12px;font-weight:600;font-family:inherit}.lc-empty{color:var(--muted);font-size:13px;padding:18px 0;text-align:center}`;
 
 /* Video for an exercise: YouTube / Vimeo links embed, direct files play, anything else is a link. */
 export function videoEmbed(url){
