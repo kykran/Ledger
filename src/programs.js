@@ -650,7 +650,7 @@ function recordBar(s, si){
   const R = recOf(s); let done = 0, total = 0;
   for (const r of s.rows || []){ if (!r.name) continue; const d = setsDone(s, r); done += d.n; total += Math.max(setCount(r), d.total, (R.extra[r.id] || 0)); }
   return `<div class="pg-recbar"><label class="small">Date <input type="date" class="pg-in" data-pg="recdate" data-s="${si}" value="${esc(R.date)}" style="width:auto"></label>
-    <span class="small muted" id="pg-recstat-${esc(s.id)}">${done}/${total} sets · saves as you go</span>${micButton(si, s)}</div>${voiceCard(s)}`;
+    <span class="small muted" id="pg-recstat-${esc(s.id)}">${done}/${total} sets</span>${micButton(si, s)}</div>${voiceCard(s)}`;
 }
 /* ---------- voice logging ---------- */
 function micButton(si, s){
@@ -1531,6 +1531,18 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-login.on{border-color:color-mix(in srgb,var(--pos) 55%,var(--line));background:color-mix(in srgb,var(--pos) 7%,var(--bg))}
 .pg-logok{color:var(--pos);font-weight:700;font-size:13px;white-space:nowrap}
 .pg-logprev{min-height:1.3em;padding-bottom:4px}
+/* Record: tight rows, no empty gaps (Kyle 2026-10-30: "remove dead space"). */
+.pg-logprev:empty{display:none}
+.pg-sess.rec .pg-recrow td{padding:8px 0 2px 10px!important}
+.pg-sess.rec .pg-logname{position:relative;margin-bottom:4px;padding-right:24px;row-gap:0}
+.pg-sess.rec .pg-logname .pg-pen{position:absolute;right:0;top:2px}
+.pg-sess.rec .pg-logline{padding:0}
+.pg-sess.rec .pg-login{padding:6px 10px}
+.pg-sess.rec .pg-logline .btn.sm{padding:5px 10px}
+.pg-sess.rec .pg-logprev{padding:3px 0 2px;min-height:0}
+.pg-sess.rec .pg-recbar{padding:5px 10px;gap:4px 10px}
+.pg-sess.rec .pg-recbar .pg-in[type=date]{padding:3px 6px}
+.pg-sess.rec .pg-recbar .btn.sm{padding:3px 9px}
 .pg-recrow td{padding-top:0!important}
 .pg-recrow td:first-child{box-shadow:inset 4px 0 0 var(--g,transparent)}
 .pg-sets{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:2px 0 6px}
