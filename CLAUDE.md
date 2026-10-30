@@ -66,7 +66,7 @@ supabase/*.sql        schema, applied in order: schema, studio, automation, sign
 **Modes and views** (top bar of a program):
 - **Record** is the default. Each exercise is a single text line. Clicking the exercise name edits it in place, and the 🎙 button does voice logging.
 - **Plan** shows the **week board**: weeks stacked vertically, each a row of day columns. A week with nothing written yet always opens in Plan (`modeFor()` / `PG.draftWeek`).
-- **Days / Calendar.** Calendar scrolls through all weeks with a summary of each workout. Tapping "nothing written" creates a workout on that day in Plan.
+- **Days / Calendar.** Calendar scrolls through all weeks with a summary of each workout. Tapping a workout opens it in place in its day (larger, the only editable one; ✎ Edit workout switches that card to the plan builder), and the other days narrow (`PG.calOpen` + `PG.calAt` day key, `PG.calPlan`). Tapping "nothing written" creates a workout on that day in Plan.
 - Board features: day picker on each card, ⋯ menu, drag the ⠿ grip to another day; dropping onto a day that has a workout stacks both there (keyboard ← →), "⧉ Copy Day A" on booked empty days, and older undated workouts are auto-placed on their booked day.
 
 **Number formats. Kyle cares about these; don't change them:**

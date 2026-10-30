@@ -405,9 +405,14 @@ function renderCalendar(c, p){
   W.forEach((w, wi) => (w.sessions || []).forEach(x => { sess[x.id] = { s: x, wi }; }));
   const tk = today(), thisWeek = Math.floor((new Date(...tk.split("-").map((v, i) => i === 1 ? v - 1 : +v)) - start) / (7 * 86400000));
   const tm = dt => dt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).replace(":00", "").replace(/\s?(AM|PM)/i, (_, x) => x[0].toLowerCase());
-  const card = (x, wi, done, when) => {
+  // The workout open for editing sits in its day, larger; everything else on the calendar stays a read-only summary.
+  const openEd = (x, when) => { const at = sess[x.id], wi = at.wi, si = W[wi].sessions.indexOf(x), keep = MODE;
+    MODE = PG.calPlan ? "plan" : "record"; const ed = renderSession(p, wi, si, x); MODE = keep;
+    return `<div class="pg-cal-open" data-wk="${wi}" id="pg-co-${esc(x.id)}"><div class="pg-cal-obar">${when ? `<span class="small muted">${esc(when)}</span>` : ""}${PG.calPlan ? `<button class="btn sm primary" data-act="pg-cal-rec">✓ Done editing</button>` : ""}<button class="btn sm ghost" data-act="pg-cal-close" aria-label="Close ${esc(x.name)}">✕ Close</button></div>${ed}</div>`; };
+  const card = (x, wi, done, when, k) => {
+    if (PG.calOpen === x.id && PG.calAt === k && !p.shared && sess[x.id]) return openEd(x, when);
     const rows = (x.rows || []).filter(r => r.name), more = rows.length - 4;
-    return `<button class="pg-cal-s ${done ? "done" : ""} ${x.homework ? "hw" : ""}" data-act="pg-cal-go" data-w="${wi}" data-sid="${esc(x.id)}" aria-label="Open ${esc(x.name)}">
+    return `<button class="pg-cal-s ${done ? "done" : ""} ${x.homework ? "hw" : ""}" data-act="pg-cal-go" data-w="${wi}" data-sid="${esc(x.id)}" data-k="${esc(k)}" aria-label="Open ${esc(x.name)}">
       <span class="pg-cal-t">${done ? `<i aria-hidden="true">✓</i>` : ""}${when ? `<span class="muted">${esc(when)}</span> ` : ""}<b>${esc(x.name)}</b></span>
       ${rows.slice(0, 4).map(r => `<span class="pg-cal-ex ${grpClass(r.group)}"><span class="gchip">${esc(r.group || "·")}</span><span class="pg-cal-n">${esc(r.name)}</span><span class="muted">${esc(fmtSetsReps(r))}</span></span>`).join("")}
       ${more > 0 ? `<span class="small muted">+${more} more</span>` : rows.length ? "" : `<span class="small muted">empty</span>`}</button>`;
@@ -421,20 +426,20 @@ function renderCalendar(c, p){
     const used = new Set(), from = new Date(start.getTime() + wi * 7 * 86400000);
     const days = Array.from({ length: 7 }, (_, k) => {
       const dt = new Date(from.getFullYear(), from.getMonth(), from.getDate() + k), key = ymd(dt), items = [];
-      for (const sid of logged[key] || []){ const hit = sess[sid]; if (hit && !used.has(sid)){ used.add(sid); items.push(card(hit.s, hit.wi, true, "")); } }
-      for (const x of w.sessions || []) if (hasDay(x) && +x.day === dt.getDay() && !used.has(x.id) && (x.rows || []).some(r => r.name)){ const a = (byDay[key] || [])[0]; used.add(x.id); items.push(card(x, wi, false, a ? tm(a) : "")); }
+      for (const sid of logged[key] || []){ const hit = sess[sid]; if (hit && !used.has(sid)){ used.add(sid); items.push(card(hit.s, hit.wi, true, "", key)); } }
+      for (const x of w.sessions || []) if (hasDay(x) && +x.day === dt.getDay() && !used.has(x.id) && (x.rows || []).some(r => r.name)){ const a = (byDay[key] || [])[0]; used.add(x.id); items.push(card(x, wi, false, a ? tm(a) : "", key)); }
       for (const a of byDay[key] || []){
         const hit = sessionForDate(p, dt, appts);
-        if (hit && !used.has(hit.session.id)){ used.add(hit.session.id); items.push(card(hit.session, wi, false, tm(a))); }
+        if (hit && !used.has(hit.session.id)){ used.add(hit.session.id); items.push(card(hit.session, wi, false, tm(a), key)); }
         else if (!hit && !items.length) items.push(`<button class="pg-cal-gap" data-act="pg-cal-write" data-w="${wi}" data-d="${dt.getDay()}" aria-label="Write a workout for ${esc(dt.toDateString())}"><span class="muted">${esc(tm(a))}</span> nothing written</button>`);
       }
-      return `<div class="pg-cal-d ${items.length ? "has" : ""} ${key === tk ? "today" : ""} ${key < tk ? "past" : ""}"><div class="pg-cal-dn"><span>${dt.toLocaleDateString(undefined, { weekday: "short" })}</span><b>${dt.getDate()}</b></div>${items.join("")}${pasteBtn(p, dt.getDay(), dt.toDateString(), wi)}</div>`;
+      return `<div class="pg-cal-d ${items.length ? "has" : ""} ${items.some(h => h.startsWith('<div class="pg-cal-open"')) ? "open" : ""} ${key === tk ? "today" : ""} ${key < tk ? "past" : ""}"><div class="pg-cal-dn"><span>${dt.toLocaleDateString(undefined, { weekday: "short" })}</span><b>${dt.getDate()}</b></div>${items.join("")}${pasteBtn(p, dt.getDay(), dt.toDateString(), wi)}</div>`;
     }).join("");
     const left = (w.sessions || []).filter(x => !used.has(x.id) && (x.rows || []).some(r => r.name));
-    const strip = (label, list) => list.length ? `<div class="pg-cal-left"><span class="small muted">${label}</span>${list.map(x => card(x, wi, false, "")).join("")}</div>` : "";
+    const strip = (label, list) => list.length ? `<div class="pg-cal-left"><span class="small muted">${label}</span>${list.map(x => card(x, wi, false, "", "left" + wi)).join("")}</div>` : "";
     const end = new Date(from.getFullYear(), from.getMonth(), from.getDate() + 6), fmt = dt => dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
     return `<section class="card pg-cal-w ${wi === thisWeek ? "now" : ""} ${w.ghost ? "ghost" : ""}" id="pg-cw-${wi}" data-cw="${wi}"><div class="card-h"><h3>${esc(w.label || "Week " + (wi + 1))} <span class="small muted">${fmt(from)} – ${fmt(end)}</span>${wi === thisWeek ? ` <span class="tag">this week</span>` : ""}${w.ghost ? ` <span class="small muted">not written yet</span>` : ""}</h3>${p.shared && w.ghost ? "" : `<button class="btn sm ghost" data-act="pg-cal-go" data-w="${wi}">${w.ghost ? "Write week" : "Edit week"}</button>`}</div>
-      <div class="pg-cal-days">${days}</div>
+      <div class="pg-cal-days ${days.includes('pg-cal-d has open') ? "editing" : ""}">${days}</div>
       ${strip("Not on the calendar yet", left.filter(x => !x.homework))}${strip("Homework", left.filter(x => x.homework))}</section>`;
   }).join("");
   if (PG.scrollTo === "week" || PG.calFor !== p.id){ PG.calFor = p.id; PG.scrollTo = null;
@@ -1048,7 +1053,8 @@ async function onClick(el, e){
     case "pg-edrow": { const r = p.weeks[wi].sessions[si].rows[ri]; PG.editRow = PG.editRow === r.id ? null : r.id; redraw();
       if (PG.editRow){ const n = inWk(`.pg-edit input[data-f="sr"][data-s="${si}"][data-r="${ri}"]`); if (n){ n.focus(); try { n.select(); } catch (x){} } } break; }
     case "pg-edrow-done": PG.editRow = null; redraw(); break;
-    case "pg-editsess": { PG.mode = "plan"; try { localStorage.setItem("tt.pg.mode", "plan"); } catch (x){} PG.editRow = null; const sid = p.weeks[wi].sessions[si].id; redraw();
+    case "pg-editsess": if (PG.layout === "cal" && PG.calOpen){ PG.calPlan = true; PG.editRow = null; redraw(); break; }
+      { PG.mode = "plan"; try { localStorage.setItem("tt.pg.mode", "plan"); } catch (x){} PG.editRow = null; const sid = p.weeks[wi].sessions[si].id; redraw();
       const el = document.getElementById("pg-s-" + sid); if (el) el.scrollIntoView({ block: "start", behavior: "smooth" }); break; }
     case "pg-mode": if (el.getAttribute("data-v") === "record" && p && modeFor(p.weeks[wi]) === "plan" && !(p.weeks[wi].sessions || []).some(written)){ C.toast("Write a workout first, then record it here"); }
       { // from the floating switch, land on the workout you were looking at (else today's) instead of the top of the page
@@ -1113,8 +1119,16 @@ async function onClick(el, e){
       let cur = secs.findIndex(x => x.getBoundingClientRect().bottom > top + 40); if (cur < 0) cur = secs.length - 1;
       const to = d === 0 ? (document.querySelector("#main .pg-cal-w.now") || secs[0]) : secs[Math.max(0, Math.min(secs.length - 1, cur + d))];
       window.scrollBy({ top: to.getBoundingClientRect().top - top, behavior: "smooth" }); break; }
-    case "pg-cal-go": { const sid = el.getAttribute("data-sid"), go = () => { padWeeks(P(), +el.getAttribute("data-w")); PG.layout = "days"; try { localStorage.setItem("tt.pg.layout", "days"); } catch (x){} PG.week = +el.getAttribute("data-w"); PG.scrollTo = sid ? null : "top"; PG.repeat = null; redraw(); };
+    case "pg-cal-go": if (el.getAttribute("data-sid") && PG.layout === "cal" && !p.shared){ // open it right there in its day; tap another to switch
+        const sid = el.getAttribute("data-sid"); PG.calOpen = sid; PG.calAt = el.getAttribute("data-k"); PG.calPlan = false; PG.week = +el.getAttribute("data-w"); PG.repeat = null; redraw();
+        setTimeout(() => { const o = document.getElementById("pg-co-" + sid), d = o && o.closest(".pg-cal-d"), row = d && d.closest(".pg-cal-days");
+          if (row && row.scrollWidth > row.clientWidth) row.scrollLeft = d.offsetLeft - row.offsetLeft - 4;
+          if (o){ const r = o.getBoundingClientRect(); if (r.top < 80 || r.top > innerHeight * 0.6) o.scrollIntoView({ block: "start", behavior: "smooth" }); } }, 30);
+        break; }
+      { const sid = el.getAttribute("data-sid"), go = () => { padWeeks(P(), +el.getAttribute("data-w")); PG.layout = "days"; try { localStorage.setItem("tt.pg.layout", "days"); } catch (x){} PG.week = +el.getAttribute("data-w"); PG.scrollTo = sid ? null : "top"; PG.repeat = null; redraw(); };
       if (sid) zoom(el, go, () => document.getElementById("pg-s-" + sid)); else go(); break; }
+    case "pg-cal-close": PG.calOpen = null; PG.calPlan = false; redraw(); break;
+    case "pg-cal-rec": PG.calPlan = false; redraw(); break;
     case "pg-log": PG.logFor = { w: wi, s: si }; logSheet(); break;
     case "pg-logsave": {
       const s = p.weeks[PG.logFor.w].sessions[PG.logFor.s], date = valIn("lg-date") || today(), byKey = {};
@@ -1325,12 +1339,24 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-cal-ex .muted{padding-left:4px;flex:0 0 auto}
 .pg-cal-gap{all:unset;cursor:pointer;font-size:12px;border:1px dashed var(--line);border-radius:8px;padding:6px 7px;color:var(--ink)}
 .pg-cal-gap:hover,.pg-cal-gap:focus-visible{border-color:var(--accent)}
+/* One workout open on the calendar: its day widens and comes forward, the other days narrow to summaries. */
+.pg-cal-days.editing:has(.pg-cal-d.open){grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr)}
+.pg-cal-days.editing .pg-cal-d.open{grid-column:span 4;padding:8px;border-color:var(--accent);box-shadow:0 10px 28px rgba(0,0,0,.28),0 0 0 1px var(--accent);position:relative;z-index:1;background:var(--surface)}
+.pg-cal-days.editing .pg-cal-d:not(.open){font-size:11px}
+.pg-cal-days.editing .pg-cal-d:not(.open) .pg-cal-s{opacity:.8;font-size:11px;padding:5px 6px}
+.pg-cal-days.editing .pg-cal-d:not(.open) .pg-cal-s:hover{opacity:1}
+.pg-cal-open{display:flex;flex-direction:column;gap:6px;min-width:0}
+.pg-cal-obar{display:flex;align-items:center;gap:6px;justify-content:flex-end}
+.pg-cal-obar .small{margin-right:auto}
+.pg-cal-open .pg-sess{margin:0;box-shadow:none;border:0;padding:4px 2px}
+.pg-cal-open .pg-sess .card-h{flex-wrap:wrap;gap:6px}
 .pg-cal-left{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
 .pg-cal-left .pg-cal-s{width:auto;min-width:160px;max-width:240px}
 @media (max-width:760px){
   .pg-cal-days{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;padding-bottom:4px;margin:0 -4px;padding-left:4px;padding-right:4px}
   .pg-cal-d{flex:0 0 52px;scroll-snap-align:start;min-height:76px}
   .pg-cal-d.has{flex-basis:172px}
+  .pg-cal-d.open{flex-basis:calc(100vw - 52px)}
   .pg-cal-dn{flex-direction:column;gap:0;align-items:flex-start}
   .pg-cal-d.has .pg-cal-dn{flex-direction:row;gap:5px;align-items:baseline}
 }
