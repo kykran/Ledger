@@ -1,10 +1,13 @@
 // /api/program — a client's private program page (no sign-in; the unguessable link token is the key).
-//   GET  ?t=TOKEN                      -> the client's programs, exercise videos, their logs and measurements
+//   GET  ?t=TOKEN                      -> the client's programs, exercise videos, their logs and measurements,
+//                                         plus their sessions (left in the package, or this month) and booked dates. Never prices.
 //   POST {t, action:"log", program_id, session_id, logged_on, sets:[{row_id, set_no, reps, weight, done}]}
-//        Only sessions the trainer marked as homework can be logged.
+//        Only sessions the trainer marked as homework can be logged; logged_on is the day the client did it.
 //   POST {t, action:"weight", weight, taken_on}   -> adds a bodyweight entry
 import { admin, send, readJson } from "./_lib.js";
 import { clientProgramView, findSession, timedPlan } from "../src/programs-core.js";
+import { modelFor } from "./_sync.js";
+import { clientView } from "../src/engine.js";
 
 const TOKEN = /^[A-Za-z0-9_-]{16,64}$/;
 const day = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s || "")) ? String(s) : new Date().toISOString().slice(0, 10);
@@ -44,6 +47,8 @@ export default async function handler(req, res){
         for (const s of signed || []) if (s.signedUrl) videoUrls[s.path] = s.signedUrl;
       }
       const v = clientProgramView({ client: cl.data, trainerName: prof.data && prof.data.data && prof.data.data.trainerName, programs, exercises, logs: logs.data, measurements: meas.data, videoUrls });
+      // Sessions left / this month, from the calendar. The page still works if this fails.
+      try { const model = await modelFor(uid), b = model && clientView(model.M, cid); if (b){ b.timeZone = model.profile.timeZone || process.env.TZ; v.sessions = b; } } catch (e){}
       admin.from("program_links").update({ last_viewed_at: new Date().toISOString() }).eq("token", t).then(() => {}, () => {});
       return send(res, 200, v);
     }
