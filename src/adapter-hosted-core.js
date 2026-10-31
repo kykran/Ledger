@@ -195,6 +195,46 @@ export const adapter = {
     async revoke(clientId){ const { error } = await sb.from("client_links").update({ revoked_at: new Date().toISOString() }).eq("user_id", session.user.id).eq("client_id", clientId).is("revoked_at", null); if (error) throw fail(error); }
   },
 
+  // Client app (/c/<key>): one row per client with a 4-digit code. Devices that signed in stay signed in until it's turned off.
+  access: {
+    url: k => location.origin + "/c/" + k,
+    async get(clientId){
+      const { data, error } = await sb.from("client_access").select("key,code,code_expires_at,last_login_at").eq("user_id", session.user.id).eq("client_id", clientId).is("revoked_at", null).maybeSingle();
+      if (error) throw fail(error);
+      return data ? { key: data.key, url: adapter.access.url(data.key), code: data.code, expiresAt: data.code_expires_at, lastLoginAt: data.last_login_at } : null;
+    },
+    async make(clientId){
+      const r = crypto.getRandomValues(new Uint32Array(1))[0] % 10000, code = String(r).padStart(4, "0");
+      const expires = new Date(Date.now() + 30 * 86400000).toISOString();
+      const cur = await adapter.access.get(clientId);
+      if (cur){
+        const { error } = await sb.from("client_access").update({ code, code_expires_at: expires, fails: 0, locked_until: null }).eq("key", cur.key).eq("user_id", session.user.id);
+        if (error) throw fail(error);
+        return { ...cur, code, expiresAt: expires };
+      }
+      await sb.from("client_access").delete().eq("user_id", session.user.id).eq("client_id", clientId);
+      const b = crypto.getRandomValues(new Uint8Array(9));
+      const key = btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      const { error } = await sb.from("client_access").insert({ key, user_id: session.user.id, client_id: clientId, code, code_expires_at: expires });
+      if (error) throw fail(error);
+      return { key, url: adapter.access.url(key), code, expiresAt: expires, lastLoginAt: null };
+    },
+    // Deleting the row signs out every device (they cascade) and stops the link.
+    async off(clientId){ const { error } = await sb.from("client_access").delete().eq("user_id", session.user.id).eq("client_id", clientId); if (error) throw fail(error); }
+  },
+
+  // Session dates clients flagged from their app ("canceled early", "never happened"). Open ones, plus ones sorted in the last 2 weeks.
+  flags: {
+    async list(){
+      const since = new Date(Date.now() - 14 * 86400000).toISOString();
+      const { data, error } = await sb.from("session_flags").select("*").eq("user_id", session.user.id).or(`resolved_at.is.null,resolved_at.gte.${since}`).order("created_at", { ascending: false });
+      if (error) throw fail(error);
+      return data || [];
+    },
+    async resolve(id, reply){ const { error } = await sb.from("session_flags").update({ resolved_at: new Date().toISOString(), reply: reply || "" }).eq("user_id", session.user.id).eq("id", id); if (error) throw fail(error); },
+    async reopen(id){ const { error } = await sb.from("session_flags").update({ resolved_at: null, reply: "" }).eq("user_id", session.user.id).eq("id", id); if (error) throw fail(error); }
+  },
+
   // Studios this trainer has joined, with the statement the studio's owner computed for them.
   studio: {
     url: "/studio.html",

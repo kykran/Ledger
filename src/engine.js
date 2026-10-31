@@ -625,7 +625,8 @@ export function clientView(M, clientId){
   if (st.sharedPkg && M.stats[st.sharedPkg.id]){ const v = clientView(M, st.sharedPkg.id); CTX = M.ctx;
     return {...v, first: firstName(c.name), sharedWith: firstName(st.sharedPkg.name), next: st.future.slice(0, 6).map(s => s.date.toISOString())}; }
   const PAST = st.pkPast || st.past, FUT = st.pkFuture || st.future;
-  const v = {first: firstName(c.name), trainer: P("trainerName") || "", billing: st.bill,
+  // due: whether a package (or a monthly bill) is open. Never the amount.
+  const v = {first: firstName(c.name), trainer: P("trainerName") || "", billing: st.bill, due: st.bill === "package" ? !!(st.unpaid && st.unpaid.length) : st.balance > 0.5,
     next: st.future.slice(0, 6).map(s => s.date.toISOString()), recent: st.past.slice(-6).reverse().map(s => s.date.toISOString()),
     updated: now.toISOString()};
   if (st.bill === "package" && st.current){ v.left = Math.max(0, st.remaining); v.size = st.current.size; v.used = Math.min(st.current.size, st.current.usedIn); v.over = Math.max(0, -st.remaining);
@@ -647,7 +648,7 @@ export function clientView(M, clientId){
     // A paid earlier package the trainer marked `onLink` is listed too, tagged with its `paidNote` ("Paid in cash").
     v.owed = pk.map((p, j) => ({p, j})).filter(({p, j}) => j < ci && (!p.paidDate || p.onLink))
       .map(({p, j}) => ({ size: num(p.size), ...pkgDone(j), ...(p.paidDate ? { paid: p.paidNote || "Paid" } : {}) }));
-    if (v.owed.length) v.pack.unpaid = !(pk[ci] || {}).paidDate;
+    v.pack.unpaid = !(pk[ci] || {}).paidDate;
     v.nextPack = { done: PAST.filter(s => s.over).map(s => s.date.toISOString()), booked: FUT.slice(slots, slots + 8).map(s => s.date.toISOString()) };
     const inPack = PAST.filter(s => s.pkg === ci || s.over);
     if (inPack.length > v.recent.length) v.recent = inPack.slice().reverse().map(s => s.date.toISOString());

@@ -5,12 +5,13 @@
 import { pid, newRow, newSession, newWeek, newProgram, copySession, copyWeek, repeatSession, repeatWeek, setCount,
   bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, timedPlan, sessionForDate, weekZero, weekStartDay, sessionBrief, findSession, parseTrueCoach, truecoachToProgram, topSet, liftDelta, STANDARD_LIFTS, standardLiftHistory } from "./programs-core.js";
 import { STARTER_EXERCISES } from "./exercise-seed.js";
+import { accessBlock, accessAct, loadAccess } from "./client-access.js";
 import { createVoice, voiceContext, VOICE_CSS } from "./programs-voice.js";
 
 let C = null; // context from app.js
 let VOICE = null; // mic + /api/voice, when the adapter has it
 const PG = { ready: null, loading: false, view: "clients", clientId: null, progId: null, week: 0, sub: "program",
-  lib: null, progs: null, logs: {}, meas: {}, clip: null, repeat: null, confirm: null, save: "", libQ: "", lift: "", link: {}, edEx: null, videoUrls: {},
+  lib: null, progs: null, logs: {}, meas: {}, clip: null, repeat: null, confirm: null, save: "", libQ: "", lift: "", link: {}, access: {}, edEx: null, videoUrls: {},
   shared: [], sharedLib: [], sharing: false, shareList: null, ss: {}, qa: null, filled: {}, layout: "days", scrollTo: null, mode: "record", recs: {} };
 try { const v = localStorage.getItem("tt.pg.layout"); if (v === "cal" || v === "days") PG.layout = v; const m = localStorage.getItem("tt.pg.mode"); if (m === "plan" || m === "record") PG.mode = m; } catch (x){}
 /* Record mode is the default: every session shows a line to log each exercise. Plan mode is for writing the program.
@@ -230,7 +231,7 @@ function renderClient(){
   const head = `<div class="pg-top"><button class="btn sm" data-act="pg-back">← All clients</button>
     <div class="who" style="margin-right:auto">${C.avatar(c)}<b style="font-size:16px">${esc(c.name)}</b></div>
     <div class="seg" role="group" aria-label="Client view">${[["program", "Program"], ["progress", "Progress"]].map(([v, l]) => `<button data-act="pg-sub" data-v="${v}" aria-pressed="${PG.sub === v}">${l}</button>`).join("")}</div>
-    ${c.shared ? `<span class="tag">shared by ${esc(c.ownerName || "another trainer")}</span>` : `<button class="btn sm" data-act="pg-share">${link ? "Client link" : "Share with client"}</button>`}</div>`;
+    ${c.shared ? `<span class="tag">shared by ${esc(c.ownerName || "another trainer")}</span>` : `<button class="btn sm" data-act="pg-share">${C.A.access ? "Client app" : link ? "Client link" : "Share with client"}</button>`}</div>`;
   const first = esc(c.name.split(" ")[0]), wm = c.workoutEmail || "off";
   /* Notes and workout emails fold into one line; open it when you need it. */
   const wmLabel = { off: "off", evening: "evening before", morning: "morning of" }[wm] || wm;
@@ -503,7 +504,7 @@ function renderSession(p, wi, si, s, dates){
     return `<tr class="pg-g ${grpClass(r.group)}" data-r="${ri}"><td class="pg-gripcell"><button class="pg-grip" data-drag="row" data-s="${si}" data-r="${ri}" title="Drag to move this exercise" aria-label="Move ${label}. Drag, or use arrow keys">⠿</button></td>
       <td><div class="pg-grpcell">${segStart[ri] ? `<button class="pg-bgrip" data-drag="block" data-s="${si}" data-r="${ri}" title="Drag to move block ${segStart[ri]}" aria-label="Move block ${segStart[ri]}. Drag, or use arrow keys">⇕</button>` : `<span class="pg-bgrip-sp"></span>`}<span class="gchip pg-lbl ${grpClass(r.group)}">${esc(r.group || "")}</span>${ri > 0 ? (() => { const on = letterOf(r.group) && letterOf(r.group) === letterOf(s.rows[ri - 1].group);
         return `<button class="pg-link ${on ? "on" : ""}" data-act="pg-link" data-s="${si}" data-r="${ri}" aria-pressed="${on}" title="${on ? "Linked as a superset with the exercise above. Click to unlink" : "Superset with the exercise above"}" aria-label="${on ? "Unlink " + label + " from the superset" : "Superset " + label + " with the exercise above"}">${LINK_SVG}</button>`; })() : `<span class="pg-link-sp"></span>`}</div></td>
-      <td><div class="pg-exname"><input class="pg-in" list="pg-exlist" data-pg="row" data-s="${si}" data-r="${ri}" data-f="name" value="${esc(r.name)}" placeholder="Exercise" aria-label="Exercise">${hasVid ? `<button class="btn sm ghost" data-act="pg-vid" data-id="${esc(ex.id)}" title="Watch video" aria-label="Watch video">▶</button>` : ""}</div></td>
+      <td><div class="pg-exname"><input class="pg-in" list="pg-exlist" data-pg="row" data-s="${si}" data-r="${ri}" data-f="name" value="${esc(r.name)}" placeholder="Exercise" aria-label="Exercise">${hasVid ? `<button class="btn sm ghost" data-act="pg-vid" data-id="${esc(ex.id)}" title="Watch video" aria-label="Watch video">▶</button>` : ex && !p.shared ? `<button class="btn sm ghost pg-planonly pg-addvid" data-act="pg-exedit" data-id="${esc(ex.id)}" title="Add a video for this exercise" aria-label="Add a video for ${label}">+▶</button>` : ""}</div></td>
       <td><input class="pg-in pg-sr" data-pg="row" data-s="${si}" data-r="${ri}" data-f="sr" value="${esc(fmtSetsReps(r))}" placeholder="3x8" style="width:112px" aria-label="Sets x reps, e.g. 3x8 or 3x8,8,6" title="Type 3x8, 3x8,8,6, 4x8-10, 3x30s or 3x8 each"></td><td>${f("weight", "Weight", "72px")}</td><td>${f("note", "Note")}</td>
       <td>${sum}<button class="btn sm ghost" data-act="pg-delrow" data-s="${si}" data-r="${ri}" aria-label="Remove row">✕</button></td>${dates && done.n ? (() => { const t = topSet((PG.logs[PG.clientId] || []).filter(l => l.session_id === s.id && l.row_id === r.id && l.done)); return `<td class="pg-logged"><span class="pg-loggedtxt">✓ ${done.n} set${done.n === 1 ? "" : "s"}${t ? ` · top ${t.weight != null ? t.weight + "×" : ""}${t.reps ?? "?"}${secsU(t)}${t.weight == null && !t.timed ? " bw" : ""}` : ""}</span>${deltaBadge(dl)}</td>`; })() : ""}</tr>${recOn && r.name ? recordRows(p, s, si, r, ri) : ""}`;
   }).join("");
@@ -513,7 +514,7 @@ function renderSession(p, wi, si, s, dates){
   return `<section class="card pg-sess ${s.homework ? "hw" : ""} ${recS ? "rec" : ""} ${board ? "pg-mini" : ""}" id="pg-s-${esc(s.id)}" data-si="${si}">
     ${board ? boardHead(p, si, s, dates, cKey, rep) : `<div class="card-h"><div class="pg-row" style="flex:1"><input class="pg-in pg-sname" data-pg="sess" data-s="${si}" data-f="name" value="${esc(s.name)}" aria-label="Session name">
       <label class="check small pg-planonly"><input type="checkbox" data-pg="sess" data-s="${si}" data-f="homework" ${s.homework ? "checked" : ""}> Homework <span class="muted">(client can log)</span></label></div>
-      <div class="pg-acts">${recS ? `<button class="btn sm" data-act="pg-editsess" data-s="${si}" title="Switch to Plan to rewrite this workout">✎ Edit workout</button>` : ""}${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress" data-s="${si}">✦ Progress</button>` : ""}${!p.shared && C.A.programs.emailWorkout ? `<button class="btn sm" data-act="pg-mail" data-s="${si}" title="Email this workout to the client now">✉ Email</button>` : ""}<button class="btn sm" data-act="pg-copysess" data-s="${si}">⧉ Copy</button>
+      <div class="pg-acts">${hwSwitch(si, s)}${recS ? `<button class="btn sm" data-act="pg-editsess" data-s="${si}" title="Switch to Plan to rewrite this workout">✎ Edit workout</button>` : ""}${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress" data-s="${si}">✦ Progress</button>` : ""}${!p.shared && C.A.programs.emailWorkout ? `<button class="btn sm" data-act="pg-mail" data-s="${si}" title="Email this workout to the client now">✉ Email</button>` : ""}<button class="btn sm" data-act="pg-copysess" data-s="${si}">⧉ Copy</button>
         ${rep ? "" : `<button class="btn sm pg-planonly" data-act="pg-repeat" data-s="${si}">Repeat…</button>`}
         <button class="btn sm ghost pg-planonly" data-act="pg-up" data-s="${si}" aria-label="Move up" ${si ? "" : "disabled"}>↑</button>
         ${PG.confirm === cKey ? `<button class="btn sm danger" data-act="pg-delsess" data-s="${si}">Delete?</button>` : `<button class="btn sm ghost pg-planonly" data-act="pg-confirm" data-k="${cKey}">Delete</button>`}</div></div>`}
@@ -528,6 +529,12 @@ function renderSession(p, wi, si, s, dates){
   </section>`;
 }
 
+/* A canceled session becomes homework the client can do on their own (their app says so), and can be switched back. */
+function hwSwitch(si, s){
+  if (s.homework) return s.wasSession ? `<span class="tag pg-hwtag">canceled · homework</span><button class="btn sm" data-act="pg-unhw" data-s="${si}" title="Make it a session with you again">↩ Back to a session</button>` : "";
+  return written(s) ? `<button class="btn sm" data-act="pg-tohw" data-s="${si}" title="Session canceled? The client gets it as homework">Canceled → homework</button>` : "";
+}
+
 /* Card header on the board: name, which day, and a small menu for the rest. */
 function boardHead(p, si, s, dates, cKey, rep){
   const open = PG.more === s.id || PG.confirm === cKey;
@@ -537,9 +544,10 @@ function boardHead(p, si, s, dates, cKey, rep){
       ${!p.shared && C.A.programs.emailWorkout ? `<button class="btn sm" data-act="pg-mail" data-s="${si}">✉ Email it</button>` : ""}
       ${rep ? "" : `<button class="btn sm" data-act="pg-repeat" data-s="${si}">Repeat…</button>`}
       <label class="check small"><input type="checkbox" data-pg="sess" data-s="${si}" data-f="homework" ${s.homework ? "checked" : ""}> Homework</label>
+      ${hwSwitch(si, s)}
       ${PG.confirm === cKey ? `<button class="btn sm danger" data-act="pg-delsess" data-s="${si}">Delete workout?</button>` : `<button class="btn sm ghost" data-act="pg-confirm" data-k="${cKey}">Delete</button>`}</div>` : "";
   return `<div class="pg-mhead"><button class="pg-sgrip" data-drag="sess" data-s="${si}" title="Drag to another day (or focus and use ← →)" aria-label="Move ${esc(s.name)} to another day. Drag, or use the left and right arrow keys">⠿</button><input class="pg-in pg-sname" data-pg="sess" data-s="${si}" data-f="name" value="${esc(s.name)}" aria-label="Workout name">${day}
-    <button class="btn sm ghost pg-cpy ${PG.clip && PG.clip.type === "session" && PG.clip.from === s.id ? "on" : ""}" data-act="pg-copysess" data-s="${si}" title="Copy, then paste on any day" aria-label="Copy ${esc(s.name)}">⧉</button><button class="btn sm ghost pg-dots" data-act="pg-more" data-id="${esc(s.id)}" aria-expanded="${open}" aria-label="More for ${esc(s.name)}">⋯</button></div>${s.homework ? `<span class="tag pg-hwtag">homework</span>` : ""}${menu}`;
+    <button class="btn sm ghost pg-cpy ${PG.clip && PG.clip.type === "session" && PG.clip.from === s.id ? "on" : ""}" data-act="pg-copysess" data-s="${si}" title="Copy, then paste on any day" aria-label="Copy ${esc(s.name)}">⧉</button><button class="btn sm ghost pg-dots" data-act="pg-more" data-id="${esc(s.id)}" aria-expanded="${open}" aria-label="More for ${esc(s.name)}">⋯</button></div>${s.homework ? `<span class="tag pg-hwtag">${s.wasSession ? "canceled · homework" : "homework"}</span>` : ""}${menu}`;
 }
 
 /* ---------- quick add ---------- */
@@ -821,7 +829,7 @@ function exSheet(){
     <div class="field"><label for="ex-sets">Default sets</label><input id="ex-sets" value="${esc(e.sets ?? "")}"></div>
     <div class="field"><label for="ex-reps">Default reps</label><input id="ex-reps" value="${esc(e.reps ?? "")}"></div>
     <div class="field full"><label for="ex-cues">Coaching cues</label><textarea id="ex-cues" rows="3">${esc(e.cues || "")}</textarea></div>
-    <div class="field full"><label for="ex-url">Video link</label><input id="ex-url" type="url" value="${esc(e.videoUrl || "")}" placeholder="YouTube or Vimeo link (unlisted is fine)"></div>
+    <div class="field full"><label for="ex-url">Video link</label><input id="ex-url" type="url" data-pg="exurl" value="${esc(e.videoUrl || "")}" placeholder="Paste a YouTube or Vimeo link (unlisted is fine)"><span class="hint">Saved to your library, so it plays under this exercise in every client's app. <a href="https://www.youtube.com/results?search_query=${encodeURIComponent((e.name || "") + " exercise form")}" target="_blank" rel="noopener">Find one on YouTube ↗</a></span></div>
     <div class="field full"><label for="ex-file">Or upload a video</label><input id="ex-file" type="file" accept="video/*"><span class="hint">${e.videoPath ? "A video is uploaded. Choosing a new file replaces it." : "Up to 50 MB. Short phone clips work well."}</span></div>
   </div>
   <datalist id="ex-muscles">${[...new Set((PG.lib || []).map(x => x.muscle).filter(Boolean))].map(m => `<option value="${esc(m)}">`).join("")}</datalist>
@@ -896,13 +904,17 @@ async function tcImport(){
   } catch (e){ T.busy = null; T.error = "Couldn't save the import: " + (e.message || "try again"); tcSheet(); }
 }
 
+/* Client app (4-digit code + link) first. The older no-login program link stays below for anyone already using it. */
 function shareSheet(){
-  const c = client(PG.clientId), l = PG.link[c.id];
-  sheet("Share with " + c.name.split(" ")[0], `<p class="small">A private page with ${esc(c.name.split(" ")[0])}'s program and exercise videos. No login. They can check off sets and record reps and weight on sessions marked <b>Homework</b>, and log their bodyweight.</p>
-    ${l ? `<div class="field"><label for="pg-link">Link</label><input id="pg-link" readonly value="${esc(l.url)}"></div>
-      <div class="actions"><button class="btn primary" data-act="pg-linkcopy">Copy link</button><a class="btn" href="${esc(l.url)}" target="_blank" rel="noopener">Open</a><button class="btn danger" data-act="pg-linkoff">Turn off link</button></div>
-      <p class="small muted">Turning it off stops the link working. You can make a new one any time.</p>`
-    : `<div class="actions"><button class="btn primary" data-act="pg-linkmake">Create link</button></div>`}`);
+  const c = client(PG.clientId), l = PG.link[c.id], nm = esc(c.name.split(" ")[0]);
+  if (C.A.access) loadAccess(C.A, PG.access, c.id, () => { if (document.getElementById("pg-share-sheet")) shareSheet(); });
+  const old = l ? `<div class="field"><label for="pg-link">Link</label><input id="pg-link" readonly value="${esc(l.url)}"></div>
+      <div class="actions"><button class="btn" data-act="pg-linkcopy">Copy link</button><a class="btn" href="${esc(l.url)}" target="_blank" rel="noopener">Open</a><button class="btn danger" data-act="pg-linkoff">Turn off link</button></div>`
+    : `<div class="actions"><button class="btn" data-act="pg-linkmake">Create link</button></div>`;
+  sheet(C.A.access ? nm + "'s app" : "Share with " + nm, `<div id="pg-share-sheet"></div>${C.A.access ? accessBlock(c, PG.access[c.id], { prefix: "pg-ca-" }) + `<details class="pg-oldlink"><summary class="small muted">Program link without a code${l ? " (on)" : ""}</summary>
+      <p class="small">A private page with ${nm}'s program and videos. Anyone with the link can open it.</p>${old}</details>`
+    : `<p class="small">A private page with ${nm}'s program and exercise videos. No login. They can check off sets and record reps and weight on sessions marked <b>Homework</b>, and log their bodyweight.</p>${old}
+      <p class="small muted">Turning it off stops the link working. You can make a new one any time.</p>`}`);
 }
 
 /* ---------- AI assistant ---------- */
@@ -1047,6 +1059,8 @@ async function onClick(el, e){
     case "pg-clipx": PG.clip = null; redraw(); break;
     case "pg-pastesess": if (PG.clip && PG.clip.type === "session") mutate(p => p.weeks[wi].sessions.push(copySession(PG.clip.data))); break;
     case "pg-delsess": mutate(p => p.weeks[wi].sessions.splice(si, 1)); break;
+    case "pg-tohw": mutate(p => { const x = p.weeks[wi].sessions[si]; x.homework = true; x.wasSession = true; }); C.toast("Now homework. They'll see it in their app"); break;
+    case "pg-unhw": mutate(p => { const x = p.weeks[wi].sessions[si]; x.homework = false; delete x.wasSession; }); C.toast("Back to a session"); break;
     case "pg-up": if (si > 0) mutate(p => { const ss = p.weeks[wi].sessions; [ss[si - 1], ss[si]] = [ss[si], ss[si - 1]]; }); break;
     case "pg-repeat": PG.repeat = el.getAttribute("data-week") ? { week: true, n: 3 } : { s: si, n: 3 }; redraw(); break;
     case "pg-repeat-x": PG.repeat = null; redraw(); break;
@@ -1190,6 +1204,7 @@ async function onClick(el, e){
       break; }
     case "pg-delmeas": { const id = el.getAttribute("data-id"), cid = PG.clientId; PG.meas[cid] = PG.meas[cid].filter(m => String(m.id) !== id); redraw(); C.A.programs.deleteMeasurement(id).catch(() => C.toast("Couldn't delete")); break; }
     case "pg-share": shareSheet(); break;
+    case "pg-ca-make": case "pg-ca-copy": case "pg-ca-off": await accessAct(el, { A: C.A, store: PG.access, clientOf: client, redraw: shareSheet, toast: C.toast, prefix: "pg-ca-" }); break;
     case "pg-mail": {
       const c = client(PG.clientId), s = p.weeks[wi].sessions[si];
       if (!c.email){ C.toast(`Add ${c.name.split(" ")[0]}'s email first (Workout emails, above)`); const f = document.querySelector('#main [data-pg="cemail"]'); if (f) f.focus(); break; }
@@ -1227,6 +1242,7 @@ function onInput(t){
   const f = t.getAttribute("data-f"), si = +t.getAttribute("data-s"), ri = +t.getAttribute("data-r");
   if (k === "libq"){ PG.libQ = t.value; const pos = t.selectionStart; redraw(); const n = document.getElementById("pg-libq"); if (n){ n.focus(); try { n.setSelectionRange(pos, pos); } catch (x){} } return true; }
   if (k === "calc" || k === "who"){ updateBfPreview(); return true; }
+  if (k === "exurl"){ const pv = document.getElementById("ex-prev"); if (pv) pv.innerHTML = t.value.trim() ? videoEmbed(t.value.trim()) : ""; return true; }
   if (k === "qa"){ if (PG.qa && PG.qa.si !== +t.getAttribute("data-s")) PG.qa = null; if (PG.qa) PG.qa.hi = 0; qaRender(+t.getAttribute("data-s")); return true; }
   if (k === "logline"){ const p = P(), r = p && p.weeks[PG.week].sessions[si].rows[ri], el = r && document.getElementById("pg-lp-" + r.id);
     if (el) el.textContent = t.value.trim() ? prevText(parseSetLog(t.value, planOf(r))) || "Type weight x reps for each set, e.g. 215x5 215x5 225x4" : (lastTime(r.name, p.weeks[PG.week].sessions[si].id) ? "Last time " + lastTime(r.name, p.weeks[PG.week].sessions[si].id) : ""); return true; }
@@ -1275,7 +1291,7 @@ function onChange(t){
   if (k === "lift"){ PG.lift = t.value; redraw(); return true; }
   if (k === "who"){ const c = client(PG.clientId); C.saveClient({ ...c, sex: valIn("pg-sex"), birthYear: num(valIn("pg-by")) }).catch(() => {}); return true; }
   const p = P(); if (!p) return true;
-  if (k === "sess" && t.type === "checkbox"){ mutate(p => p.weeks[PG.week].sessions[si].homework = t.checked); return true; }
+  if (k === "sess" && t.type === "checkbox"){ mutate(p => { const x = p.weeks[PG.week].sessions[si]; x.homework = t.checked; if (!t.checked) delete x.wasSession; }); return true; }
   if (k === "row" && t.getAttribute("data-f") === "sr"){ setTimeout(() => redraw(), 0); return true; } // show it tidied: "8,8,6" -> "3x8,8,6"
   // Wait a tick so focus has moved to the next field first; the redraw then keeps you there.
   if (k === "row" && t.getAttribute("data-f") === "name"){ setTimeout(() => mutate(p => { const r = p.weeks[PG.week].sessions[si].rows[ri]; if (!r) return; fillFromLibrary(r); ensureInLibrary([r]); }), 0); return true; }
