@@ -41,9 +41,13 @@ const P = () => PG.progs && [...PG.progs, ...PG.shared].find(p => p.id === PG.pr
 const libById = () => Object.fromEntries([...(PG.sharedLib || []), ...(PG.lib || [])].map(e => [e.id, e]));
 const libByName = () => Object.fromEntries((PG.lib || []).map(e => [e.name.trim().toLowerCase(), e]));
 /* Programs other trainers shared with me show up as virtual clients: "sh:<owner>:<their client id>". */
-const sharedClients = () => { const out = {}; for (const p of PG.shared){ const id = "sh:" + p.ownerId + ":" + p.clientId; out[id] = out[id] || { id, name: p.clientName || "Client", shared: true, ownerId: p.ownerId, ownerName: p.ownerName, realId: p.clientId }; } return Object.values(out); };
-const client = id => (C.S.allClients || C.S.clients).find(c => c.id === id) || sharedClients().find(c => c.id === id);
-const progsOf = c => c.shared ? PG.shared.filter(p => p.ownerId === c.ownerId && p.clientId === c.realId) : (PG.progs || []).filter(p => p.clientId === c.id);
+/* If I have my own client with the same name (both trainers see Claire), the shared program shows under my client instead, so we both work in one program. */
+const nameKey = n => String(n || "").trim().toLowerCase();
+const myClients = () => C.S.allClients || C.S.clients || [];
+const twinOf = p => p.clientName ? myClients().find(c => [c.name, ...(c.aliases || [])].some(n => nameKey(n) === nameKey(p.clientName))) : null;
+const sharedClients = () => { const out = {}; for (const p of PG.shared){ if (twinOf(p)) continue; const id = "sh:" + p.ownerId + ":" + p.clientId; out[id] = out[id] || { id, name: p.clientName || "Client", shared: true, ownerId: p.ownerId, ownerName: p.ownerName, realId: p.clientId }; } return Object.values(out); };
+const client = id => myClients().find(c => c.id === id) || sharedClients().find(c => c.id === id);
+const progsOf = c => c.shared ? PG.shared.filter(p => p.ownerId === c.ownerId && p.clientId === c.realId) : [...PG.shared.filter(p => twinOf(p) === c), ...(PG.progs || []).filter(p => p.clientId === c.id)];
 /* Plan mode can show several weeks at once: lookups prefer the week you're working in (PG.week). */
 const inWk = sel => document.querySelector(`#main [data-wk="${PG.week}"] ${sel}`) || document.querySelector(`#main ${sel}`);
 function wkFrom(el){ const w = el && el.closest && el.closest("[data-wk]"); if (w) PG.week = +w.getAttribute("data-wk"); }
@@ -90,8 +94,9 @@ async function loadClient(id){
   try {
     const sc = client(id);
     if (sc && sc.shared){ const all = []; for (const p of progsOf(sc)) all.push(...await C.A.programs.programLogs(sc.ownerId, p.id)); PG.logs[id] = all; PG.meas[id] = []; return redraw(); }
-    const [logs, meas] = await Promise.all([C.A.programs.logs(id), C.A.programs.measurements(id)]);
-    PG.logs[id] = logs; PG.meas[id] = meas;
+    const twins = sc ? progsOf(sc).filter(p => p.shared) : [];
+    const [logs, meas, ...theirs] = await Promise.all([C.A.programs.logs(id), C.A.programs.measurements(id), ...twins.map(p => C.A.programs.programLogs(p.ownerId, p.id))]);
+    PG.logs[id] = [...logs, ...theirs.flat()]; PG.meas[id] = meas;
   } catch (e){ C.toast("Couldn't load this client's logs"); PG.logs[id] = PG.logs[id] || []; PG.meas[id] = PG.meas[id] || []; }
   if (C.A.programs.link) C.A.programs.link.get(id).then(l => { PG.link[id] = l || false; if (PG.clientId === id) redraw(); }).catch(() => {});
   redraw();
@@ -101,7 +106,7 @@ async function loadClient(id){
 function todos(M){
   M = M || (C.getModel && C.getModel());
   if (!M || !PG.progs) return [];
-  return programTodos({ clients: (C.S.allClients || C.S.clients), programs: PG.progs, now: M.now || new Date(), dismissed: (C.S.prof && C.S.prof.programsDismissed) || [],
+  return programTodos({ clients: myClients(), programs: [...PG.shared.filter(twinOf).map(p => ({ ...p, clientId: twinOf(p).id })), ...(PG.progs || [])], now: M.now || new Date(), dismissed: (C.S.prof && C.S.prof.programsDismissed) || [],
     sessionsOf: id => { const st = M.stats && M.stats[id]; return st ? [...st.past, ...st.future] : []; } });
 }
 const shortD = d => d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -249,7 +254,7 @@ function renderProgram(c, progs){
   const W = p.weeks || [], wi = Math.min(PG.week, Math.max(0, W.length - 1)); PG.week = wi;
   const week = W[wi];
   const clip = PG.clip;
-  const progSel = progs.length > 1 ? `<select class="pg-in" data-pg="progsel">${progs.map(x => `<option value="${esc(x.id)}" ${x.id === p.id ? "selected" : ""}>${esc(x.name)}${x.status === "archived" ? " (archived)" : ""}</option>`).join("")}</select>` : "";
+  const progSel = progs.length > 1 ? `<select class="pg-in" data-pg="progsel">${progs.map(x => `<option value="${esc(x.id)}" ${x.id === p.id ? "selected" : ""}>${esc(x.name)}${x.shared ? " · shared by " + esc(x.ownerName || "another trainer") : ""}${x.status === "archived" ? " (archived)" : ""}</option>`).join("")}</select>` : "";
   const layoutSeg = `<div class="seg pg-layout" role="group" aria-label="Program view">${[["days", "Today"], ["cal", "Calendar"]].map(([v, l]) => `<button data-act="pg-layout" data-v="${v}" aria-pressed="${PG.layout === v}">${l}</button>`).join("")}</div>`;
   MODE = modeFor(week);
   const modeSeg = `<div class="seg pg-layout" role="group" aria-label="Mode">${[["record", "Record"], ["plan", "Plan"]].map(([v, l]) => `<button data-act="pg-mode" data-v="${v}" aria-pressed="${MODE === v}" title="${v === "record" ? "Log what the client did" : "Write and edit the program"}">${l}</button>`).join("")}</div>`;
@@ -945,7 +950,7 @@ function aiSheet(){
 }
 async function aiRun(){
   const X = PG.ai, c = client(PG.clientId), p = P();
-  const body = { action: X.mode, clientId: c.shared ? c.realId : c.id, ownerId: c.shared ? c.ownerId : undefined, programId: p ? p.id : undefined };
+  const body = { action: X.mode, clientId: p && p.shared ? p.clientId : c.id, ownerId: p && p.shared ? p.ownerId : undefined, programId: p ? p.id : undefined };
   if (X.mode === "create") body.brief = { weeks: valIn("ai-weeks"), daysPerWeek: valIn("ai-days"), homework: valIn("ai-hw"), equipment: valIn("ai-eq"), goal: valIn("ai-goal"), notes: valIn("ai-notes") };
   if (X.mode === "progress"){ X.notes = valIn("ai-notes"); body.week = X.week; body.session = X.session; body.direction = X.direction || ""; body.notes = X.notes; if (!X.direction && !X.notes){ C.toast("Pick a direction or describe it"); return; } }
   X.step = "loading"; aiSheet();
