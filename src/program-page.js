@@ -1,5 +1,5 @@
 /* A client's private program page: their program and videos, homework logging, bodyweight and progress charts. */
-import { clientProgramView, weekZero, setCount, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, repsFor, timedPlan } from "./programs-core.js";
+import { clientProgramView, weekZero, setCount, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, repsFor, timedPlan, liftSeries, liftLabel } from "./programs-core.js";
 
 const $m = document.getElementById("m");
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -9,7 +9,7 @@ const demo = q.get("demo");
 const today = () => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
 const fmt = d => { const [y, m, dd] = d.split("-").map(Number); return new Date(y, m - 1, dd).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }); };
 const CHECK = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>`;
-document.head.insertAdjacentHTML("beforeend", `<style>${LINECHART_CSS}${VIDEO_CSS}${GROUP_CSS}.ex.g{border-left:4px solid var(--g);padding-left:10px;margin-left:-2px}</style>`);
+document.head.insertAdjacentHTML("beforeend", `<style>${LINECHART_CSS}${VIDEO_CSS}${GROUP_CSS}.ex.g{border-left:4px solid var(--g);padding-left:10px;margin-left:-2px}.lifts{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}.liftnum{font-size:26px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums}.liftnum small{font-size:13px;font-weight:600;color:var(--muted)}</style>`);
 
 let V = null, demoStore = null;
 const st = { prog: 0, week: null, tab: "program", open: {}, draft: {}, lift: "" };
@@ -75,7 +75,13 @@ function renderProgress(){
   const names = Object.keys(H).sort((a, b) => Object.keys(H[b]).length - Object.keys(H[a]).length || a.localeCompare(b));
   if (!st.lift || !H[st.lift]) st.lift = names[0] || "";
   const lift = st.lift ? Object.entries(H[st.lift]).map(([date, value]) => ({ date, value })) : [];
-  return `<section class="card"><h3>Log your weight</h3>
+  // Lift charts the trainer turned on for this client, in their choice of Weight or Est. 1RM.
+  const isE = V.liftMetric === "e1rm", top = x => `${x.weight} × ${x.reps ?? "?"}`;
+  const cards = (V.lifts || []).map(key => { const h = liftSeries(V.logs, key, isE ? "e1rm" : "weight"), last = h[h.length - 1]; if (!last) return "";
+    return `<section class="card"><div class="sess-h"><h2>${esc(liftLabel(key))}</h2><span class="muted small">${esc(fmt(last.date))}</span></div>
+      <div class="liftnum">${isE ? `${last.value}<small> est. 1RM</small>` : top(last)}</div><div class="muted small">${isE ? "From " + top(last) + " · " : ""}${h.length} session${h.length === 1 ? "" : "s"}</div>
+      ${h.length > 1 ? lineChart(h.map(x => ({ date: x.date, value: x.value, label: isE ? top(x) : x.reps ? x.reps + " reps" : "" })), { height: 150, width: 340, best: true }) : ""}</section>`; }).join("");
+  return `${cards ? `<div class="lifts">${cards}</div>` : ""}<section class="card"><h3>Log your weight</h3>
       <div class="row"><input type="number" id="bw" inputmode="decimal" step="0.1" placeholder="Weight" style="width:120px"><input type="date" id="bw-d" value="${today()}"><button class="btn primary" data-act="bw">Save</button></div></section>
     <section class="card"><div class="sess-h"><h2>Bodyweight</h2><span class="muted small">${w.length ? "latest " + w[w.length - 1].value : ""}</span></div>${lineChart(w)}</section>
     ${bf.length ? `<section class="card"><div class="sess-h"><h2>Body fat</h2><span class="muted small">latest ${bf[bf.length - 1].value}%</span></div>${lineChart(bf, { unit: "%" })}</section>` : ""}
@@ -128,7 +134,7 @@ document.addEventListener("change", e => {
 async function load(quiet){
   if (demo){
     if (!demoStore){ const { buildProgramsDemo } = await import("./programs-demo.js"); demoStore = buildProgramsDemo(); }
-    V = clientProgramView({ client: { name: "Maya Chen", sex: "female", birthYear: new Date().getFullYear() - 34 }, trainerName: "Alex", programs: demoStore.programs.filter(p => p.clientId === demo), exercises: demoStore.exercises, logs: demoStore.logs, measurements: demoStore.measurements });
+    V = clientProgramView({ client: { name: "Maya Chen", progressShare: true, progressLifts: ["Trap Bar Deadlift", "Bulgarian Split Squat"], sex: "female", birthYear: new Date().getFullYear() - 34 }, trainerName: "Alex", programs: demoStore.programs.filter(p => p.clientId === demo), exercises: demoStore.exercises, logs: demoStore.logs, measurements: demoStore.measurements });
     return render();
   }
   try {

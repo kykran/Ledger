@@ -76,37 +76,61 @@ export function liftHistory(logs){
 }
 
 /* Small dependency-free SVG line chart. points: [{date:"YYYY-MM-DD", value, label?}]. One series, one axis. */
-export function lineChart(points, { unit = "", height = 150, decimals = 1 } = {}){
+let lcSeq = 0;
+/* Round tick values (100, 150, 200) instead of 97.7 / 152.3. */
+function niceTicks(lo, hi){
+  const raw = (hi - lo) / 3, mag = Math.pow(10, Math.floor(Math.log10(raw || 1))), step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(x => x >= raw) || raw;
+  const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(6)); return out;
+}
+/* Smooth curve through every point that never overshoots it (monotone cubic). */
+function smoothPath(P){
+  if (P.length < 3) return P.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" ");
+  const n = P.length, d = [], m = [];
+  for (let i = 0; i < n - 1; i++) d.push((P[i + 1][1] - P[i][1]) / ((P[i + 1][0] - P[i][0]) || 1e-6));
+  m[0] = d[0]; m[n - 1] = d[n - 2];
+  for (let i = 1; i < n - 1; i++) m[i] = d[i - 1] * d[i] <= 0 ? 0 : 2 / (1 / d[i - 1] + 1 / d[i]);
+  let out = "M" + P[0][0].toFixed(1) + " " + P[0][1].toFixed(1);
+  for (let i = 0; i < n - 1; i++){
+    const h = (P[i + 1][0] - P[i][0]) / 3;
+    out += ` C${(P[i][0] + h).toFixed(1)} ${(P[i][1] + m[i] * h).toFixed(1)} ${(P[i + 1][0] - h).toFixed(1)} ${(P[i + 1][1] - m[i + 1] * h).toFixed(1)} ${P[i + 1][0].toFixed(1)} ${P[i + 1][1].toFixed(1)}`;
+  }
+  return out;
+}
+export function lineChart(points, { unit = "", height = 150, width = 600, decimals = 1, best: showBest = false } = {}){
   const pts = (points || []).filter(p => p && isFinite(p.value)).sort((a, b) => a.date.localeCompare(b.date));
   if (!pts.length) return `<div class="lc-empty">No entries yet.</div>`;
-  const W = 600, H = height, L = 44, R = 12, T = 12, B = 24;
+  const W = width, H = height, L = 36, R = 14, T = 22, B = 20, gid = "lcg" + (++lcSeq);
   const xs = pts.map(p => new Date(p.date + "T12:00:00").getTime());
   const x0 = Math.min(...xs), x1 = Math.max(...xs), span = Math.max(1, x1 - x0);
   let lo = Math.min(...pts.map(p => p.value)), hi = Math.max(...pts.map(p => p.value));
-  if (hi - lo < 1e-9){ lo -= 1; hi += 1; } const pad = (hi - lo) * 0.15; lo -= pad; hi += pad;
+  // Hug the data so progress reads as a climb, not a flat line.
+  if (hi - lo < 1e-9){ lo -= 1; hi += 1; } const pad = (hi - lo) * 0.06; lo -= pad; hi += pad;
   const X = t => pts.length === 1 ? (L + W - R) / 2 : L + (t - x0) / span * (W - L - R);
   const Y = v => T + (hi - v) / (hi - lo) * (H - T - B);
   const fmt = v => (Math.round(v * Math.pow(10, decimals)) / Math.pow(10, decimals)).toLocaleString("en-US");
   const md = d => { const [, m, dd] = d.split("-").map(Number); return m + "/" + dd; };
-  const ticks = [lo + (hi - lo) * 0.15, (lo + hi) / 2, hi - (hi - lo) * 0.15];
-  const grid = ticks.map(v => `<line x1="${L}" x2="${W - R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" class="lc-grid"/><text x="${L - 6}" y="${(Y(v) + 3.5).toFixed(1)}" text-anchor="end" class="lc-ax">${fmt(v)}</text>`).join("");
-  const path = pts.map((p, i) => (i ? "L" : "M") + X(xs[i]).toFixed(1) + " " + Y(p.value).toFixed(1)).join(" ");
+  const grid = niceTicks(lo, hi).map(v => `<line x1="${L}" x2="${W - R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" class="lc-grid"/><text x="${L - 6}" y="${(Y(v) + 3.5).toFixed(1)}" text-anchor="end" class="lc-ax">${fmt(v)}</text>`).join("");
+  const P = pts.map((p, i) => [X(xs[i]), Y(p.value)]), line = smoothPath(P);
+  const area = `${line} L${P[P.length - 1][0].toFixed(1)} ${H - B} L${P[0][0].toFixed(1)} ${H - B} Z`;
   const idx = pts.length <= 2 ? pts.map((_, i) => i) : [0, Math.floor((pts.length - 1) / 2), pts.length - 1];
-  const xl = [...new Set(idx)].map(i => `<text x="${X(xs[i]).toFixed(1)}" y="${H - 6}" text-anchor="middle" class="lc-ax">${md(pts[i].date)}</text>`).join("");
+  const xl = [...new Set(idx)].map((i, k, a) => `<text x="${X(xs[i]).toFixed(1)}" y="${H - 5}" text-anchor="${a.length > 1 && k === 0 ? "start" : a.length > 1 && k === a.length - 1 ? "end" : "middle"}" class="lc-ax">${md(pts[i].date)}</text>`).join("");
   const mon = d => new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  const dots = pts.map((p, i) => `<circle cx="${X(xs[i]).toFixed(1)}" cy="${Y(p.value).toFixed(1)}" r="4" class="lc-dot"/>`).join("");
+  const best = pts.reduce((b, p, i) => p.value >= pts[b].value ? i : b, 0);
+  const dots = pts.length > 24 ? "" : pts.map((p, i) => i === pts.length - 1 ? "" : `<circle cx="${P[i][0].toFixed(1)}" cy="${P[i][1].toFixed(1)}" r="2.6" class="lc-dot"/>`).join("");
   // Hover or tap anywhere over a date: its number and date pop up. Each point owns the band halfway to its neighbours.
   const tips = pts.map((p, i) => {
-    const x = X(xs[i]), y = Y(p.value), a = i ? (X(xs[i - 1]) + x) / 2 : L, b = i < pts.length - 1 ? (x + X(xs[i + 1])) / 2 : W - R;
+    const [x, y] = P[i], a = i ? (P[i - 1][0] + x) / 2 : L, b = i < pts.length - 1 ? (x + P[i + 1][0]) / 2 : W - R;
     const rp = /^(\d+) reps?$/.exec(p.label || ""), txt = `${fmt(p.value)}${unit}${rp ? " × " + rp[1] : p.label ? " · " + p.label : ""} · ${mon(p.date)}`, w = txt.length * 6.6 + 16, h = 22;
     const tx = Math.max(2, Math.min(W - w - 2, x - w / 2)), ty = y - h - 10 < 0 ? y + 10 : y - h - 10;
     return `<g class="lc-pt" tabindex="0" aria-label="${txt}"><rect x="${a.toFixed(1)}" y="0" width="${Math.max(1, b - a).toFixed(1)}" height="${H}" class="lc-hit"/><line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${T}" y2="${H - B}" class="lc-cross"/><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="6" class="lc-on"/><g class="lc-tip"><rect x="${tx.toFixed(1)}" y="${ty.toFixed(1)}" width="${w.toFixed(1)}" height="${h}" rx="6"/><text x="${(tx + w / 2).toFixed(1)}" y="${(ty + 15).toFixed(1)}" text-anchor="middle">${txt}</text></g></g>`;
   }).join("");
-  const last = pts[pts.length - 1];
-  const lastLbl = `<text x="${Math.min(W - R, X(xs[xs.length - 1]) + 0).toFixed(1)}" y="${(Y(last.value) - 10).toFixed(1)}" text-anchor="end" class="lc-val">${fmt(last.value)}${unit}</text>`;
-  return `<svg class="lc" viewBox="0 0 ${W} ${H}" role="img" aria-label="Trend, latest ${fmt(last.value)}${unit}">${grid}<path d="${path}" class="lc-line"/>${dots}${lastLbl}${xl}${tips}</svg>`;
+  const last = pts[pts.length - 1], [lx, ly] = P[P.length - 1];
+  const end = `<circle cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="9" class="lc-halo"/><circle cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="4.5" class="lc-end"/>`;
+  const pr = showBest && best !== pts.length - 1 && pts.length > 2 ? `<circle cx="${P[best][0].toFixed(1)}" cy="${P[best][1].toFixed(1)}" r="4" class="lc-best"/>` : "";
+  const lastLbl = `<text x="${Math.min(W - R, lx).toFixed(1)}" y="${Math.max(12, ly - 12).toFixed(1)}" text-anchor="end" class="lc-val">${fmt(last.value)}${unit}</text>`;
+  return `<svg class="lc" viewBox="0 0 ${W} ${H}" role="img" aria-label="Trend, latest ${fmt(last.value)}${unit}"><defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="lc-g0"/><stop offset="1" class="lc-g1"/></linearGradient></defs>${grid}<path d="${area}" fill="url(#${gid})" class="lc-area"/><path d="${line}" class="lc-line" pathLength="1"/>${dots}${pr}${end}${lastLbl}${xl}${tips}</svg>`;
 }
-export const LINECHART_CSS = `.lc{display:block;width:100%;height:auto;overflow:visible}.lc-grid{stroke:var(--line);stroke-width:1}.lc-ax{fill:var(--muted);font-size:11px;font-family:inherit}.lc-line{fill:none;stroke:var(--accent);stroke-width:2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}.lc-dot{fill:var(--accent);stroke:var(--surface);stroke-width:2}.lc-hit{fill:transparent;cursor:crosshair}.lc-pt{outline:none}.lc-cross,.lc-on,.lc-tip{opacity:0;pointer-events:none}.lc-cross{stroke:var(--muted);stroke-width:1;stroke-dasharray:3 3;vector-effect:non-scaling-stroke}.lc-on{fill:var(--accent);stroke:var(--surface);stroke-width:2}.lc-tip rect{fill:var(--ink)}.lc-tip text{fill:var(--bg);font-size:12px;font-weight:600;font-family:inherit}.lc-pt:hover .lc-cross,.lc-pt:hover .lc-on,.lc-pt:hover .lc-tip,.lc-pt:focus .lc-cross,.lc-pt:focus .lc-on,.lc-pt:focus .lc-tip{opacity:1}.lc:has(.lc-pt:hover,.lc-pt:focus) .lc-val{opacity:0}.lc-val{fill:var(--ink);font-size:12px;font-weight:600;font-family:inherit}.lc-empty{color:var(--muted);font-size:13px;padding:18px 0;text-align:center}`;
+export const LINECHART_CSS = `.lc{display:block;width:100%;height:auto;overflow:visible}.lc-grid{stroke:var(--line);stroke-width:1;stroke-dasharray:2 4;vector-effect:non-scaling-stroke}.lc-ax{fill:var(--muted);font-size:11px;font-family:inherit}.lc-g0{stop-color:var(--accent);stop-opacity:.38}.lc-g1{stop-color:var(--accent);stop-opacity:0}.lc-area{animation:lc-fade .9s ease-out both}.lc-line{fill:none;stroke:var(--accent);stroke-width:3;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke;stroke-dasharray:1;stroke-dashoffset:0;animation:lc-draw 1s cubic-bezier(.3,.7,.3,1) both}.lc-dot{fill:var(--surface);stroke:var(--accent);stroke-width:1.5;vector-effect:non-scaling-stroke}.lc-end{fill:var(--accent);stroke:var(--surface);stroke-width:2;vector-effect:non-scaling-stroke}.lc-halo{fill:var(--accent);opacity:.22;transform-box:fill-box;transform-origin:center;animation:lc-pulse 2.4s ease-out 1s infinite}.lc-best{fill:var(--pos,var(--accent));stroke:var(--surface);stroke-width:2;vector-effect:non-scaling-stroke}@keyframes lc-draw{from{stroke-dashoffset:1}}@keyframes lc-fade{from{opacity:0}}@keyframes lc-pulse{0%{transform:scale(.6);opacity:.35}70%,100%{transform:scale(1.6);opacity:0}}@media (prefers-reduced-motion:reduce){.lc-line,.lc-area,.lc-halo{animation:none}}.lc-hit{fill:transparent;cursor:crosshair}.lc-pt{outline:none}.lc-cross,.lc-on,.lc-tip{opacity:0;pointer-events:none}.lc-cross{stroke:var(--muted);stroke-width:1;stroke-dasharray:3 3;vector-effect:non-scaling-stroke}.lc-on{fill:var(--accent);stroke:var(--surface);stroke-width:2}.lc-tip rect{fill:var(--ink)}.lc-tip text{fill:var(--bg);font-size:12px;font-weight:600;font-family:inherit}.lc-pt:hover .lc-cross,.lc-pt:hover .lc-on,.lc-pt:hover .lc-tip,.lc-pt:focus .lc-cross,.lc-pt:focus .lc-on,.lc-pt:focus .lc-tip{opacity:1}.lc:has(.lc-pt:hover,.lc-pt:focus) .lc-val{opacity:0}.lc-val{fill:var(--ink);font-size:13px;font-weight:700;font-family:inherit}.lc-empty{color:var(--muted);font-size:13px;padding:18px 0;text-align:center}`;
 
 /* Video for an exercise: YouTube / Vimeo links embed, direct files play, anything else is a link. */
 export function videoEmbed(url){
@@ -141,7 +165,9 @@ export function clientProgramView({ client, trainerName, programs, exercises, lo
     first: String(client.name || "").trim().split(/[\s+&]/)[0] || "there", trainer: trainerName || "",
     programs: active.map(strip), exercises: ex,
     logs: (logs || []).map(l => ({ p: l.program_id, s: l.session_id, r: l.row_id, n: l.set_no, reps: l.reps != null ? Number(l.reps) : null, weight: l.weight != null ? Number(l.weight) : null, timed: !!l.timed, done: !!l.done, date: String(l.logged_on).slice(0, 10), by: l.source, ex: l.ex_name })),
-    measurements: meas, updated: new Date().toISOString()
+    measurements: meas, updated: new Date().toISOString(),
+    // The trainer can turn on lift charts for the client's page, with the same lifts and Weight / Est. 1RM choice as their own Progress tab.
+    lifts: client.progressShare ? (Array.isArray(client.progressLifts) ? client.progressLifts : DEFAULT_LIFTS) : null, liftMetric: client.progressMetric === "e1rm" ? "e1rm" : "weight"
   };
 }
 
@@ -592,6 +618,25 @@ export function standardLiftHistory(logs){
     out[L.key] = Object.values(days).sort((a, b) => a.date.localeCompare(b.date));
   }
   return out;
+}
+
+/* Estimated 1-rep max (Epley). A single is itself; past 15 reps the estimate means little, so none. */
+export const e1rm = (w, r) => w == null || !r || r < 1 || r > 15 ? null : r === 1 ? w : Math.round(w * (1 + r / 30));
+export const DEFAULT_LIFTS = ["bench", "squat", "dead"];
+export const liftLabel = key => (STANDARD_LIFTS.find(x => x.key === key) || {}).label || key;
+/* One lift over time. key is a standard lift ("bench") or an exercise name. Per day, the heaviest set,
+ * or with metric "e1rm" the set with the best estimated 1RM. Takes trainer logs (ex_name, logged_on) or client-page logs (ex, date).
+ * Returns [{date, weight, reps, value}] where value is what to chart. */
+export function liftSeries(logs, key, metric = "weight"){
+  const L = STANDARD_LIFTS.find(x => x.key === key), want = String(key || "").trim().toLowerCase();
+  const test = L ? L.test : nm => nm === want, days = {};
+  for (const l of logs || []){
+    const name = l.ex_name ?? l.ex, w = n(l.weight), r = n(l.reps); if (w == null || !name || l.timed || l.done === false || !test(String(name).trim().toLowerCase())) continue;
+    const v = metric === "e1rm" ? e1rm(w, r) : w; if (v == null) continue;
+    const d = String(l.logged_on ?? l.date).slice(0, 10), cur = days[d];
+    if (!cur || v > cur.value || (v === cur.value && (r || 0) > (cur.reps || 0))) days[d] = { date: d, weight: w, reps: r, value: v };
+  }
+  return Object.values(days).sort((a, b) => a.date.localeCompare(b.date));
 }
 
 /* ---------- pre-session brief ----------
