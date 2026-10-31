@@ -92,7 +92,13 @@ export function demoProgramsAdapter(){
       async list(pid){ return (this.shares[pid] || []).map(e => ({ shared_email: e })); },
       async add(p, email){ (this.shares[p.id] = this.shares[p.id] || []).push(email.trim().toLowerCase()); },
       async remove(pid, email){ this.shares[pid] = (this.shares[pid] || []).filter(e => e !== email); },
-      async withMe(){ return { programs: [], exercises: [] }; },
+      // ?demo&shared: another trainer shared her Maya program, and I have my own Maya too, so it shows under my Maya.
+      async withMe(){
+        if (typeof location === "undefined" || !/[?&]shared\b/.test(location.search)) return { programs: [], exercises: [] };
+        const src = P.programs[0], prog = { ...c(src), id: "prog-shared", clientId: "maya-t", name: "Studio block", ownerId: "tat", ownerName: "Tatjana", shared: true, clientName: "Maya Chen" };
+        if (!P.logs.some(l => l.program_id === prog.id)) P.logs.push(...P.logs.filter(l => l.program_id === src.id).map(l => ({ ...l, program_id: prog.id, client_id: "maya-t", weight: l.weight == null ? null : +l.weight + 100 })));
+        return { programs: [prog], exercises: [] };
+      },
       async leave(){}
     },
     async saveLogs(rows){ for (const r of rows){ const i = P.logs.findIndex(l => key(l) === key(r)); const row = { ...c(r), source: "trainer" }; if (i >= 0) P.logs[i] = row; else P.logs.push(row); } },
