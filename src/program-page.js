@@ -3,7 +3,7 @@
  * Two ways in: the program link (/p/<token>), or the client app (/c/<key>), where the client signs in once with a 4-digit code
  * and can tap any session date to flag it for the trainer. ?demo=maya&app shows the client app on sample data (any code works). */
 import { sessionCards, sessionsLine } from "./sessions-view.js";
-import { clientProgramView, weekZero, setCount, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, repsFor, timedPlan } from "./programs-core.js";
+import { clientProgramView, sessionForDate, weekZero, setCount, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, repsFor, timedPlan } from "./programs-core.js";
 
 const $m = document.getElementById("m");
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -18,7 +18,7 @@ const CHECK = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 
 document.head.insertAdjacentHTML("beforeend", `<style>${LINECHART_CSS}${VIDEO_CSS}${GROUP_CSS}.ex.g{border-left:4px solid var(--g);padding-left:10px;margin-left:-2px}</style>`);
 
 let V = null, demoStore = null, SI = null;
-const st = { prog: 0, week: null, tab: "program", open: {}, draft: {}, lift: "", doing: null, flag: null };
+const st = { prog: 0, week: null, tab: "program", open: {}, draft: {}, lift: "", doing: null, doingOn: null, flag: null, view: "list", calOpen: null };
 const flagMap = () => Object.fromEntries((V.flags || []).map(f => [f.at, f]));
 
 function toast(msg){ const t = document.createElement("div"); t.className = "toast"; t.setAttribute("role", "status"); t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 2600); }
@@ -90,9 +90,47 @@ function renderProgram(){
   const wk = p.weeks[Math.min(st.week, p.weeks.length - 1)];
   const pick = V.programs.length > 1 ? `<select data-act="prog" aria-label="Program">${V.programs.map((x, i) => `<option value="${i}" ${i === st.prog ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : `<h3>${esc(p.name)}</h3>`;
   const tabs = `<div class="tabs" role="tablist">${p.weeks.map((w, i) => `<button role="tab" aria-selected="${i === st.week}" data-act="week" data-i="${i}">${esc(w.label || "Week " + (i + 1))}</button>`).join("")}</div>`;
+  const views = `<div class="seg sm" role="group" aria-label="Show as">${[["list", "List"], ["cal", "Calendar"]].map(([k, l]) => `<button data-act="view" data-k="${k}" aria-pressed="${st.view === k}">${l}</button>`).join("")}</div>`;
+  const top = sessionsStrip() + `<div class="ptop">${pick}${views}</div>`;
+  if (st.view === "cal") return top + tabs + renderCal(p, Math.min(st.week, p.weeks.length - 1));
   const studio = wk ? wk.sessions.filter(s => !s.homework) : [];
-  return sessionsStrip() + renderHomework(p) + pick + tabs + (studio.length ? studio.map(s => renderSession(p, s)).join("") : `<div class="card"><div class="empty">${V.trainer ? `Your sessions with ${esc(V.trainer)}` : "Your sessions"} show here once they're written.</div></div>`);
+  return sessionsStrip() + renderHomework(p) + `<div class="ptop">${pick}${views}</div>` + tabs + (studio.length ? studio.map(s => renderSession(p, s)).join("") : `<div class="card"><div class="empty">${V.trainer ? `Your sessions with ${esc(V.trainer)}` : "Your sessions"} show here once they're written.</div></div>`);
 }
+/* Calendar: one week, a row per day. Sessions with the trainer sit on their booked days (same matching as the trainer's Calendar),
+ * homework sits on the day it was done, and homework not done yet waits under the week. Tap one to open it right there. */
+const ymd = d => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+function bookedDates(){
+  const v = V.sessions; if (!v) return [];
+  const all = [...(v.recent || []), ...(v.next || [])];
+  if (v.pack) all.push(...v.pack.done, ...v.pack.booked);
+  for (const O of v.owed || []) all.push(...O.done);
+  if (v.nextPack) all.push(...v.nextPack.done, ...v.nextPack.booked);
+  for (const m of v.months || []) all.push(...m.done.map(x => x.at), ...m.booked.map(x => x.at));
+  return [...new Set(all)].map(x => new Date(x));
+}
+function renderCal(p, wi){
+  const w = p.weeks[wi]; if (!w || !p.startDate) return `<div class="card"><div class="empty">Nothing on the calendar yet.</div></div>`;
+  const z = weekZero(p), days = Array.from({ length: 7 }, (_, i) => new Date(z.getFullYear(), z.getMonth(), z.getDate() + wi * 7 + i));
+  const booked = bookedDates(), now = today();
+  const hw = (w.sessions || []).filter(s => s.homework && s.rows.length);
+  const doneOn = {}; for (const l of V.logs) if (l.p === p.id && hw.some(s => s.id === l.s)) (doneOn[l.s] = doneOn[l.s] || new Set()).add(l.date);
+  const item = (s, key, label) => { const open = st.calOpen === key;
+    return open ? `<div class="cal-open">${renderSession(p, s, key)}<button class="btn wide" data-act="calclose">Close</button></div>`
+      : `<button class="cal-it ${s.homework ? "hw" : "studio"}" data-act="calgo" data-k="${esc(key)}"><b>${esc(s.name)}</b><span>${esc(label)}</span></button>`; };
+  const rows = days.map(d => {
+    const k = ymd(d), bk = booked.filter(b => ymd(b) === k);
+    const its = [];
+    for (const b of bk){ const hit = sessionForDate(p, b, booked); const t = b.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+      its.push(hit && hit.weekIndex === wi ? item(hit.session, k + "|" + hit.session.id, `With ${V.trainer || "your trainer"} · ${t}`) : `<div class="cal-it studio flat"><b>Session</b><span>With ${esc(V.trainer || "your trainer")} · ${esc(t)}</span></div>`); }
+    for (const s of hw) if (doneOn[s.id] && doneOn[s.id].has(k)) its.push(item(s, k + "|" + s.id, "Homework · done"));
+    return `<div class="cal-day ${k === now ? "today" : ""} ${its.length ? "" : "empty"}"><div class="cal-d"><b>${d.toLocaleDateString("en-US", { weekday: "short" })}</b><span>${d.getDate()}</span></div><div class="cal-its">${its.join("") || `<span class="muted small">Rest</span>`}</div></div>`;
+  }).join("");
+  const todo = hw.filter(s => !doneOn[s.id]);
+  return `<section class="card cal"><div class="cal-h"><button class="btn sm" data-act="calwk" data-d="-1" ${wi ? "" : "disabled"} aria-label="Previous week">‹</button><b>${esc(fmtR(days[0], days[6]))}</b><button class="btn sm" data-act="calwk" data-d="1" ${wi < p.weeks.length - 1 ? "" : "disabled"} aria-label="Next week">›</button></div>${rows}</section>
+    ${todo.length ? `<h3>Homework to do this week</h3><div class="cal-todo">${todo.map(s => item(s, "todo|" + s.id, "On your own · any day")).join("")}</div>` : ""}`;
+}
+const fmtR = (a, b) => a.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " – " + b.toLocaleDateString("en-US", a.getMonth() === b.getMonth() ? { day: "numeric" } : { month: "short", day: "numeric" });
+
 /* Sessions left (or this month) and the next booking, tapping through to the Sessions tab. */
 function sessionsStrip(){
   if (!V.sessions) return "";
@@ -108,7 +146,9 @@ function renderHomework(p){
   return `<h3>Homework · on your own</h3>${list.map(s => renderSession(p, s)).join("")}<h3 style="margin-top:6px">Sessions with ${esc(V.trainer || "your trainer")}</h3>`;
 }
 
-function renderSession(p, s){
+/* calKey "YYYY-MM-DD|sid": opened from the Calendar on that day. A homework done that day can be changed there. */
+function renderSession(p, s, calKey){
+  const calDay = calKey && /^\d{4}-/.test(calKey) ? calKey.slice(0, 10) : null;
   const logged = logsFor(p.id, s.id), any = Object.values(logged);
   const doneOn = any.length ? any.map(l => l.date).sort().pop() : null;
   const draft = st.draft[s.id] || (st.draft[s.id] = {});
@@ -135,8 +175,9 @@ function renderSession(p, s){
     ${s.notes ? `<div class="note">${esc(s.notes)}</div>` : ""}
     ${exs || `<div class="empty">No exercises yet.</div>`}
     ${s.homework && s.rows.length ? (doing
-      ? `<div class="row"><label class="lbl" for="d-${s.id}">Done on</label><input type="date" id="d-${s.id}" value="${today()}" max="${today()}"><button class="btn" data-act="stop" style="margin-left:auto">Cancel</button><button class="btn primary" data-act="save" data-s="${s.id}">Save workout</button></div>`
-      : `<button class="btn primary wide" data-act="do" data-s="${s.id}">${doneOn ? "Do it again" : "Do this workout"}</button>`) : ""}
+      ? `<div class="row"><label class="lbl" for="d-${s.id}">Done on</label><input type="date" id="d-${s.id}" value="${st.doingOn || today()}" max="${today()}"><button class="btn" data-act="stop" style="margin-left:auto">Cancel</button><button class="btn primary" data-act="save" data-s="${s.id}">Save workout</button></div>`
+      : doneOn ? `<div class="row"><button class="btn" data-act="edit" data-s="${s.id}" data-d="${esc(calDay && any.some(l => l.date === calDay) ? calDay : doneOn)}" style="flex:1">Change what I logged</button><button class="btn primary" data-act="do" data-s="${s.id}" style="flex:1">Do it again</button></div>`
+      : `<button class="btn primary wide" data-act="do" data-s="${s.id}">Do this workout</button>`) : ""}
   </section>`;
 }
 
@@ -199,8 +240,15 @@ document.addEventListener("click", async e => {
   }
   if (a === "tab"){ st.tab = el.getAttribute("data-k"); render(); }
   else if (a === "week"){ st.week = +el.getAttribute("data-i"); render(); }
-  else if (a === "do"){ const sid = el.getAttribute("data-s"); st.doing = sid; st.draft[sid] = {}; render(); const c = document.getElementById("s-" + sid); if (c) c.scrollIntoView({ block: "start", behavior: "smooth" }); }
-  else if (a === "stop"){ st.doing = null; render(); }
+  else if (a === "do" || a === "edit"){ const sid = el.getAttribute("data-s"); st.doing = sid; st.doingOn = a === "edit" ? el.getAttribute("data-d") : null;
+    // Changing a logged workout starts from what was saved (one entry per set, so saving again replaces it).
+    st.draft[sid] = {}; if (a === "edit"){ const L = logsFor(V.programs[st.prog].id, sid); for (const [k, l] of Object.entries(L)) st.draft[sid][k] = { reps: l.reps, weight: l.weight, done: l.done }; }
+    render(); const c = document.getElementById("s-" + sid); if (c) c.scrollIntoView({ block: "start", behavior: "smooth" }); }
+  else if (a === "stop"){ st.doing = null; st.doingOn = null; render(); }
+  else if (a === "view"){ st.view = el.getAttribute("data-k"); st.calOpen = null; st.doing = null; render(); }
+  else if (a === "calwk"){ st.week = Math.max(0, st.week + +el.getAttribute("data-d")); st.calOpen = null; st.doing = null; render(); }
+  else if (a === "calgo"){ st.calOpen = el.getAttribute("data-k"); st.doing = null; render(); const c = document.querySelector(".cal-open"); if (c) c.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
+  else if (a === "calclose"){ st.calOpen = null; st.doing = null; render(); }
   else if (a === "open"){ const k = el.getAttribute("data-k"); st.open[k] = !st.open[k]; render(); }
   else if (a === "done"){ const s = el.getAttribute("data-s"), k = el.getAttribute("data-k"); const d = (st.draft[s][k] = st.draft[s][k] || {}); d.done = !d.done; el.setAttribute("aria-pressed", String(d.done)); }
   else if (a === "save"){
@@ -208,7 +256,7 @@ document.addEventListener("click", async e => {
     const sets = Object.entries(d).map(([k, v]) => { const [row_id, n] = k.split("|"); return { row_id, set_no: +n, reps: v.reps ?? null, weight: v.weight ?? null, done: !!v.done || (v.reps != null && v.reps !== "") }; });
     if (!sets.length){ toast("Fill in a set first"); return; }
     el.disabled = true; el.textContent = "Saving…";
-    try { await post({ action: "log", program_id: p.id, session_id: sid, logged_on: document.getElementById("d-" + sid).value, sets }); st.draft[sid] = {}; st.doing = null; toast("Workout saved. Nice work!"); await load(true); }
+    try { await post({ action: "log", program_id: p.id, session_id: sid, logged_on: document.getElementById("d-" + sid).value, sets }); st.draft[sid] = {}; st.doing = null; st.doingOn = null; if (st.calOpen) st.calOpen = null; toast("Workout saved. Nice work!"); await load(true); }
     catch (x){ toast(x.message); el.disabled = false; el.textContent = "Save workout"; }
   }
   else if (a === "bw"){

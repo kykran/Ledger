@@ -94,6 +94,21 @@
     .reasons{display:flex;flex-direction:column;gap:6px}
     .reasons button{border:1.5px solid var(--line);background:var(--bg);border-radius:12px;padding:11px 14px;text-align:left;font-weight:600;cursor:pointer}
     .reasons button[aria-checked="true"]{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--bg))}
+    .ptop{display:flex;justify-content:space-between;align-items:center;gap:10px} .ptop h3{margin:0}
+    .seg.sm{flex:none} .seg.sm button{padding:5px 12px;font-size:13px}
+    .cal{gap:0;padding:6px 12px}
+    .cal-h{display:flex;justify-content:space-between;align-items:center;padding:6px 0 10px}
+    .cal-h .btn.sm{padding:4px 12px;font-size:18px;line-height:1}
+    .cal-day{display:flex;gap:12px;padding:9px 0;border-top:1px solid var(--line);align-items:flex-start}
+    .cal-d{width:38px;flex:none;display:flex;flex-direction:column;align-items:center;line-height:1.15;color:var(--muted);padding-top:3px}
+    .cal-d b{font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:600} .cal-d span{font-size:19px;font-weight:700;color:var(--ink)}
+    .cal-day.today .cal-d span{color:var(--accent)} .cal-day.today .cal-d b{color:var(--accent)}
+    .cal-day.empty .cal-its{padding-top:9px}
+    .cal-its{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+    .cal-it{display:flex;flex-direction:column;align-items:flex-start;gap:1px;width:100%;text-align:left;border:1px solid var(--line);border-left:4px solid var(--accent);background:var(--bg);border-radius:10px;padding:8px 11px;cursor:pointer;font:inherit;color:inherit}
+    .cal-it.hw{border-left-color:var(--good)} .cal-it span{font-size:12.5px;color:var(--muted)} .cal-it.flat{cursor:default;opacity:.75}
+    .cal-open{display:flex;flex-direction:column;gap:8px} .cal-open .card{padding:12px}
+    .cal-todo{display:flex;flex-direction:column;gap:8px}
     textarea{font:inherit;color:inherit;border:1px solid var(--line);background:var(--bg);border-radius:10px;padding:9px 10px;font-size:16px;width:100%;resize:vertical}
   </style>
 </head>
