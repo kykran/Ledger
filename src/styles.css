@@ -302,3 +302,8 @@ tr.total td{border-top:2px solid var(--line)}
 .nm-same select{border:1px solid var(--line);background:var(--bg);border-radius:9px;padding:8px 10px;min-width:0;flex:1 1 180px}
 .nm-card .check{align-items:flex-start}
 .nm-card .check input{margin-top:3px}
+/* Questions clients flagged from their app */
+.fl-reply{font:inherit;font-size:13px;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 9px;min-width:0;width:220px;max-width:100%}
+.aitem.fl-done{opacity:.6}
+.ca-top{border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:14px;display:flex;flex-direction:column;gap:8px}
+.ca-top h3{margin:0}.ca-top .actions,.ca-top p{margin:0}

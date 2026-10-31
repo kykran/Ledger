@@ -135,7 +135,7 @@ export function clientProgramView({ client, trainerName, programs, exercises, lo
   const meas = (measurements || []).map(m => ({ date: String(m.taken_on).slice(0, 10), weight: m.weight != null ? Number(m.weight) : null,
     bodyFat: m.body_fat != null ? Number(m.body_fat) : bodyFat4(m, sex, ageOn(by, m.taken_on)), source: m.source })).sort((a, b) => a.date.localeCompare(b.date));
   const strip = p => ({ id: p.id, name: p.name, startDate: p.startDate, weekStart: p.weekStart, weeks: (p.weeks || []).map(w => ({ id: w.id, label: w.label,
-    sessions: (w.sessions || []).map(s => ({ id: s.id, name: s.name, homework: !!s.homework, notes: s.notes || "",
+    sessions: (w.sessions || []).map(s => ({ id: s.id, name: s.name, homework: !!s.homework, ...(s.wasSession && s.homework ? { wasSession: true } : {}), ...(s.day != null && s.day !== "" ? { day: +s.day } : {}), notes: s.notes || "",
       rows: (s.rows || []).filter(r => r.name || r.exId).map(r => ({ id: r.id, exId: r.exId && ex[r.exId] ? r.exId : null, name: (r.exId && ex[r.exId] && ex[r.exId].name) || r.name, group: r.group || "", sets: r.sets || "", reps: r.reps || "", weight: r.weight || "", note: r.note || "" })) })) })) });
   return {
     first: String(client.name || "").trim().split(/[\s+&]/)[0] || "there", trainer: trainerName || "",

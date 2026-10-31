@@ -58,7 +58,7 @@ const S = {
   prof:null, profLoaded:false, clients:[], clientsLoaded:false, account:null,
   events:[], cal:{state:"idle", done:0, total:0, error:null, at:null}, calList:null, calListErr:null, calLoading:false, detectedEmail:"",
   tab:"overview", month:null, modal:null, readOnly:false, screen:"loading", wiz:null, rerunning:false,
-  confirmReset:false, day:null, trendMode:"net", trendView:"income", restore:null, billingStatus:null, outbox:null, sim:{increase:5, mode:"amount", lose:0, ids:null}, links:{}
+  confirmReset:false, day:null, trendMode:"net", trendView:"income", restore:null, billingStatus:null, outbox:null, sim:{increase:5, mode:"amount", lose:0, ids:null}, links:{}, access:{}, flags:null
 };
 
 /* ---------- helpers ---------- */
@@ -533,7 +533,7 @@ function renderOverviewMonth(M){
 }
 function overviewRest(M){
   const A2 = attention(M);
-  return `${todoCard(M)}
+  return `${flagsCard()}${todoCard(M)}
   <div class="grid2">
     <section class="card" data-tour="attention"><div class="card-h"><h2>Needs attention</h2><span class="small muted">${A2.length ? A2.length + " client" + (A2.length===1?"":"s") : ""}</span></div>
       ${A2.length ? `<div class="alist">${A2.map(attnRow).join("")}</div>` : `<div class="empty">Everyone is paid up with sessions left.</div>`}
@@ -936,6 +936,30 @@ function saveTimeZone(){
   let tz = ""; try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch(e){}
   if (tz && P("timeZone") !== tz && !S.readOnly) saveProfile({timeZone: tz}).catch(()=>{});
   refreshOutbox();
+  refreshFlags();
+}
+
+/* ---------- client app (code + link) and questions clients flagged ---------- */
+const CA = () => A.access && globalThis.TallyAccess;
+function clientAppBlock(c){
+  if (!CA()) return "";
+  CA().loadAccess(A, S.access, c.id, () => { if (S.modal && S.modal.id === c.id) renderModal(); });
+  return `<section class="ca-top"><h3>Client app</h3>${CA().accessBlock(c, S.access[c.id], {readOnly: S.readOnly})}</section>`;
+}
+async function refreshFlags(){ if (!A.flags) return; try { S.flags = await A.flags.list(); } catch(e){ S.flags = []; } if (S.tab === "overview" && !S.modal) render(); }
+function flagsCard(){
+  const list = (S.flags || []).filter(f => S.allClients.some(c => c.id === f.client_id));
+  if (!list.length) return "";
+  const open = list.filter(f => !f.resolved_at), done = list.filter(f => f.resolved_at);
+  const when = iso => { const d = new Date(iso); return d.toLocaleDateString(undefined, {weekday:"short", month:"short", day:"numeric"}) + " · " + fmtT(d); };
+  const row = f => { const c = S.allClients.find(x => x.id === f.client_id);
+    return `<div class="aitem ${f.resolved_at ? "fl-done" : ""}"><div class="top">${avatar(c)}<a href="#" class="n" style="font-weight:600;color:var(--ink);text-decoration:none" data-act="edit" data-id="${esc(c.id)}">${esc(c.name)}</a>${f.resolved_at ? `<span class="chip ok">Sorted</span>` : `<span class="chip low">${esc(f.reason)}</span>`}</div>
+      <div class="meta">Session ${esc(when(f.session_at))}${f.resolved_at ? ` · ${esc(f.reason)}` : ""}${f.note ? ` · “${esc(f.note)}”` : ""}${f.reply ? ` · You: “${esc(f.reply)}”` : ""}</div>
+      <div class="rowacts">${f.resolved_at ? `<button class="btn sm ghost" data-act="fl-undo" data-fid="${esc(f.id)}">Undo</button>`
+        : `<input class="fl-reply" id="fl-r-${esc(f.id)}" placeholder="Reply ${esc(firstName(c.name))} will see (optional)" aria-label="Reply to ${esc(firstName(c.name))}"><button class="btn sm primary" data-act="fl-ok" data-fid="${esc(f.id)}">Sorted</button>`}</div></div>`; };
+  return `<section class="card"><div class="card-h"><h2>Questions from clients</h2><span class="small muted">${open.length ? open.length + " to look at" : "all sorted"}</span></div>
+    <p class="small muted" style="margin:0 0 8px">A client tapped a session date in their app. Fix the calendar or package if needed, then mark it sorted.</p>
+    <div class="alist">${[...open, ...done].map(row).join("")}</div></section>`;
 }
 
 /* ---------- client page links ---------- */
@@ -1310,7 +1334,7 @@ function renderModal(){
     if (!c){ closeModal(); return; }
     const b = c.billing || "package";
     title = m.id ? c.name : "New client";
-    body = `<div class="form">
+    body = `${m.id ? clientAppBlock(c) : ""}<div class="form">
       <div class="field full"><label for="ed-name">Name</label><input id="ed-name" value="${esc(c.name)}"><span class="hint">Match it to how the client appears on your calendar</span></div>
       <div class="field full"><label for="ed-alias">Other calendar names</label><input id="ed-alias" value="${esc((c.aliases||[]).join(", "))}"><span class="hint">Comma separated, e.g. "Mike, Michael R"</span></div>
       <div class="field full"><label for="ed-bill">How they pay</label><select id="ed-bill">${Object.keys(BILLING).map(k=>`<option value="${k}" ${b===k?"selected":""}>${BILLING[k].long}</option>`).join("")}</select><span class="hint" id="ed-bill-hint">${esc(BILLING[b].hint)}</span></div>
@@ -1541,6 +1565,7 @@ async function onClick(e){
   const act = el.getAttribute("data-act"), id = el.getAttribute("data-id");
   if (act === "close-scrim" && e.target !== el) return;
   if (act.startsWith("pg-") && PROGS()){ if (el.tagName === "A") e.preventDefault(); PROGS().onClick(el, e); return; }
+  if (act.startsWith("ca-") && CA()){ await CA().accessAct(el, {A, store: S.access, clientOf: id => S.allClients.find(c => c.id === id), redraw: () => S.modal ? renderModal() : render(), toast}); return; }
   if (el.tagName === "A" && el.getAttribute("href") === "#") e.preventDefault();
   const M = S.M;
   switch (act){
@@ -1592,6 +1617,9 @@ async function onClick(e){
     case "ob-skip": { try { await A.outbox.skip(el.getAttribute("data-oid")); } catch(err){} if (S.modal && S.modal.type === "outbox") closeModal(); await refreshOutbox(); break; }
     case "link-make": { const cid = el.getAttribute("data-cid"); el.disabled = true; try { S.links[cid] = await A.links.create(cid); } catch(err){ toast(err.message || "Couldn't create the link"); } renderModal(); break; }
     case "link-off": { const cid = el.getAttribute("data-cid"); try { await A.links.revoke(cid); S.links[cid] = false; toast("Link turned off"); } catch(err){ toast("Couldn't turn it off"); } renderModal(); break; }
+    case "fl-ok": { const fid = el.getAttribute("data-fid"), r = document.getElementById("fl-r-" + fid); el.disabled = true;
+      try { await A.flags.resolve(fid, r ? r.value.trim() : ""); toast("Marked sorted"); } catch(err){ toast("Couldn't save. Try again."); } await refreshFlags(); render(); break; }
+    case "fl-undo": { try { await A.flags.reopen(el.getAttribute("data-fid")); } catch(err){ toast("Couldn't undo"); } await refreshFlags(); render(); break; }
     case "link-copy": { const t = document.getElementById("cl-link"); try { await navigator.clipboard.writeText(t.value); toast("Link copied"); } catch(x){ t.select(); } break; }
     case "wiz-back": readWizStep(); S.wiz.step--; render(); break;
     case "wiz-cancel": S.wiz = null; S.rerunning = false; S.prof = {...S.prof, setupDone:true}; render(); break;
