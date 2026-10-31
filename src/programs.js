@@ -3,7 +3,7 @@
  * app.js calls attach(ctx) once and then render()/onClick()/onChange()/onInput() while the Programs tab is open.
  * Data goes through ctx.A.programs (see adapter-hosted.js / programs-demo.js). */
 import { pid, newRow, newSession, newWeek, newProgram, copySession, copyWeek, repeatSession, repeatWeek, setCount,
-  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, timedPlan, sessionForDate, weekZero, weekStartDay, sessionBrief, findSession, parseTrueCoach, truecoachToProgram, topSet, liftDelta, STANDARD_LIFTS, standardLiftHistory } from "./programs-core.js";
+  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, timedPlan, sessionForDate, weekZero, weekStartDay, sessionBrief, findSession, parseTrueCoach, truecoachToProgram, topSet, liftDelta, STANDARD_LIFTS, standardLiftHistory, liftSeries, liftLabel, DEFAULT_LIFTS } from "./programs-core.js";
 import { STARTER_EXERCISES } from "./exercise-seed.js";
 import { createVoice, voiceContext, VOICE_CSS } from "./programs-voice.js";
 
@@ -738,6 +738,8 @@ function putSet(si, ri, no, patch, now){
 }
 
 /* ---------- progress: measurements, body fat, lifts, log history ---------- */
+/* Lift picks, Weight / Est. 1RM and "show on client's page" live on the client, so they stick across devices and reach the client's page. */
+function setProgress(patch){ const c = client(PG.clientId); if (!c || c.shared) return; Object.assign(c, patch); redraw(); C.saveClient({ ...c }).catch(() => C.toast("Couldn't save that. Check your connection.")); }
 function renderProgress(c){
   const meas = PG.meas[c.id], logs = PG.logs[c.id];
   if (!meas || !logs) return `<div class="card"><div class="empty">Loading…</div></div>`;
@@ -750,22 +752,28 @@ function renderProgress(c){
   const bPts = rows.map(m => ({ date: String(m.taken_on).slice(0, 10), value: bfOf(m) })).filter(p => p.value != null);
   const H = liftHistory(logs), names = Object.keys(H).sort((a, b) => H[b].length - H[a].length || a.localeCompare(b));
   if (!PG.lift || !H[PG.lift]) PG.lift = names[0] || "";
-  const lift = H[PG.lift] || [];
+  const lift = PG.lift ? liftSeries(logs, PG.lift, c.progressMetric === "e1rm" ? "e1rm" : "weight") : [];
   const prev = bfOf({ triceps: valIn("pg-m-tri"), abdomen: valIn("pg-m-abd"), suprailiac: valIn("pg-m-sup"), thigh: valIn("pg-m-thi"), taken_on: today() });
   const byDay = {};
   for (const l of logs){ const k = String(l.logged_on).slice(0, 10) + "|" + l.session_id; const e = byDay[k] || (byDay[k] = { day: String(l.logged_on).slice(0, 10), session: l.session_id, sets: 0, done: 0, client: false, ex: new Set() }); e.sets++; if (l.done) e.done++; if (l.source === "client") e.client = true; e.ex.add(l.ex_name); }
   const sessName = sid => { for (const p of PG.progs || []) for (const w of p.weeks || []) for (const s of w.sessions || []) if (s.id === sid) return (w.label ? w.label + " · " : "") + s.name; return "Session"; };
   const hist = Object.values(byDay).sort((a, b) => b.day.localeCompare(a.day)).slice(0, 15);
-  const SL = standardLiftHistory(logs);
   const fmtTop = x => x ? (x.weight != null ? `${x.weight}` : "bw") + (x.reps != null ? ` × ${x.reps}${secsU(x)}` : "") : "–";
-  const liftCards = STANDARD_LIFTS.map(L => { const h = SL[L.key], last = h[h.length - 1], prevS = h[h.length - 2];
-    const best = h.reduce((b, x) => !b || x.weight > b.weight || (x.weight === b.weight && (x.reps || 0) >= (b.reps || 0)) ? x : b, null), d = liftDelta(last, prevS);
-    return `<section class="card pg-liftcard"><div class="card-h"><h2>${L.label}</h2>${last ? `<span class="small muted">${fmtDay(last.date)}</span>` : ""}</div>
-      ${last ? `<div class="pg-liftnum"><b>${fmtTop(last)}</b>${d ? `<span class="pg-delta ${d.dir}">${esc(d.text)}</span>` : ""}</div>
-        <div class="small muted">Best ${fmtTop(best)}${best && best.date !== last.date ? " · " + fmtDay(best.date) : ""} · ${h.length} session${h.length === 1 ? "" : "s"}</div>
-        ${h.length > 1 ? lineChart(h.map(x => ({ date: x.date, value: x.weight, label: x.reps ? x.reps + " reps" : "" })), { height: 110 }) : ""}`
-      : `<div class="empty small">No ${L.label.toLowerCase()} logged yet.</div>`}</section>`; }).join("");
-  return `<div class="pg-lifts">${liftCards}</div><div class="grid2">
+  /* Lift cards: the main lifts by default; the trainer picks which, and Weight or Est. 1RM. Both stick per client. */
+  const isE = c.progressMetric === "e1rm", metric = isE ? "e1rm" : "weight", lifts = Array.isArray(c.progressLifts) ? c.progressLifts : DEFAULT_LIFTS;
+  const dE = (a, b) => { if (!a || !b) return null; const v = a.value - b.value; return { dir: v > 0 ? "up" : v < 0 ? "down" : "same", text: v ? (v > 0 ? "+" : "−") + Math.abs(v) + " lb" : "same as last time" }; };
+  const liftCards = lifts.map(key => { const h = liftSeries(logs, key, metric), last = h[h.length - 1], prevS = h[h.length - 2], label = liftLabel(key);
+    const best = h.reduce((b, x) => !b || x.value > b.value || (x.value === b.value && (x.reps || 0) >= (b.reps || 0)) ? x : b, null), d = isE ? dE(last, prevS) : liftDelta(last, prevS);
+    return `<section class="card pg-liftcard"><div class="card-h"><h2>${esc(label)}</h2><span class="pg-liftwhen">${last ? `<span class="small muted">${fmtDay(last.date)}</span>` : ""}<button class="btn sm ghost pg-liftx" data-act="pg-lift-rm" data-k="${esc(key)}" title="Hide this lift" aria-label="Hide ${esc(label)}">✕</button></span></div>
+      ${last ? `<div class="pg-liftnum"><b>${isE ? `${last.value}<span class="pg-liftu"> est. 1RM</span>` : fmtTop(last)}</b>${d ? `<span class="pg-delta ${d.dir}">${esc(d.text)}</span>` : ""}</div>
+        <div class="small muted">${isE ? `From ${fmtTop(last)} · Best ${best.value}` : `Best ${fmtTop(best)}`}${best && best.date !== last.date ? " · " + fmtDay(best.date) : ""} · ${h.length} session${h.length === 1 ? "" : "s"}</div>
+        ${h.length > 1 ? lineChart(h.map(x => ({ date: x.date, value: x.value, label: isE ? x.weight + " × " + x.reps : x.reps ? x.reps + " reps" : "" })), { height: 150, width: 340, best: true }) : ""}`
+      : `<div class="empty small">No ${esc(label.toLowerCase())} logged yet.</div>`}</section>`; }).join("");
+  const addable = [...STANDARD_LIFTS.map(L => [L.key, L.label]), ...names.map(n => [n, n])].filter(([k]) => !lifts.includes(k));
+  const liftBar = `<div class="pg-liftbar"><div class="seg" role="group" aria-label="Chart lifts by"><button data-act="pg-metric" data-v="weight" aria-pressed="${!isE}">Weight</button><button data-act="pg-metric" data-v="e1rm" aria-pressed="${isE}" title="Estimated one-rep max from each set's weight and reps (Epley)">Est. 1RM</button></div>
+    ${addable.length ? `<select class="pg-in pg-liftadd" data-pg="liftadd" aria-label="Add a lift"><option value="">+ Add a lift</option>${addable.map(([k, l]) => `<option value="${esc(k)}">${esc(l)}</option>`).join("")}</select>` : ""}
+    <label class="pg-liftshare small"><input type="checkbox" data-pg="liftshare" ${c.progressShare ? "checked" : ""}> Show on ${esc(c.name.split(" ")[0])}'s page</label></div>`;
+  return `${liftBar}<div class="pg-lifts">${liftCards}</div><div class="grid2">
     <section class="card"><div class="card-h"><h2>Bodyweight</h2><span class="small muted">${wPts.length ? `latest ${wPts[wPts.length - 1].value}` : ""}</span></div>${lineChart(wPts, { unit: "" })}</section>
     <section class="card"><div class="card-h"><h2>Body fat (4-site)</h2><span class="small muted">${bPts.length ? `latest ${bPts[bPts.length - 1].value}%` : ""}</span></div>${lineChart(bPts, { unit: "%" })}
       ${!sex || !by ? `<p class="small muted">Add ${esc(c.name.split(" ")[0])}'s sex and birth year below so body fat can be calculated.</p>` : ""}</section>
@@ -784,7 +792,7 @@ function renderProgress(c){
     <div class="pg-row"><button class="btn primary" data-act="pg-addmeas">Save measurement</button><span class="small" id="pg-bf">${prev != null ? `Body fat ≈ <b>${prev}%</b>` : "Body fat appears when all four sites, sex and birth year are filled in."}</span></div>
   </section>
   <section class="card"><div class="card-h"><h2>Lifts over time</h2>${names.length ? `<select class="pg-in" data-pg="lift" aria-label="Exercise">${names.map(n => `<option ${n === PG.lift ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>` : ""}</div>
-    ${names.length ? lineChart(lift.map(x => ({ date: x.date, value: x.weight, label: x.reps ? x.reps + " reps" : "" })), { unit: "", decimals: 1 }) + `<p class="small muted">Heaviest logged set each day.</p>` : `<div class="empty">Logged weights show up here. Use “Log” on a session, or have ${esc(c.name.split(" ")[0])} log homework from their link.</div>`}
+    ${names.length ? (lift.length ? lineChart(lift.map(x => ({ date: x.date, value: x.value, label: isE ? x.weight + " × " + x.reps : x.reps ? x.reps + " reps" : "" })), { unit: "", decimals: 1, width: 1000, height: 240, best: true }) : `<div class="empty small">No sets with reps to estimate a 1RM from.</div>`) + `<p class="small muted">${isE ? "Best estimated 1RM each day, from weight and reps." : "Heaviest logged set each day."}</p>` : `<div class="empty">Logged weights show up here. Use “Log” on a session, or have ${esc(c.name.split(" ")[0])} log homework from their link.</div>`}
     ${names.length > 1 ? `<div class="tablewrap"><table><thead><tr><th>Exercise</th><th class="num">First</th><th class="num">Latest</th><th class="num">Best</th><th>Last logged</th></tr></thead><tbody>${names.slice(0, 12).map(n => { const h = H[n], best = Math.max(...h.map(x => x.weight)); return `<tr><td>${esc(n)}</td><td class="num">${h[0].weight}</td><td class="num">${h[h.length - 1].weight}</td><td class="num" style="font-weight:600">${best}</td><td class="small">${fmtDay(h[h.length - 1].date)}</td></tr>`; }).join("")}</tbody></table></div>` : ""}
   </section>
   <div class="grid2">
@@ -1027,6 +1035,9 @@ async function onClick(el, e){
       loadClient(PG.clientId); redraw(); if (!f) window.scrollTo({ top: 0 }); break; }
     case "pg-back": PG.clientId = null; redraw(); break;
     case "pg-sub": PG.sub = el.getAttribute("data-v"); redraw(); break;
+    case "pg-metric": setProgress({ progressMetric: el.getAttribute("data-v") }); break;
+    case "pg-lift-rm": { const c = client(PG.clientId), cur = Array.isArray(c.progressLifts) ? c.progressLifts : DEFAULT_LIFTS, next = cur.filter(k => k !== el.getAttribute("data-k"));
+      setProgress({ progressLifts: next }); if (!next.length) C.toast("All lifts hidden. Add one back from “+ Add a lift”."); break; }
     case "pg-new": case "pg-newprog": {
       const name = act === "pg-new" ? (valIn("pg-newname").trim() || "Program") : "New program";
       const np = { id: pid("p"), weekStart: profWeekStart(), ...newProgram(PG.clientId, name) };
@@ -1273,6 +1284,8 @@ function onChange(t){
     if (v !== (c.email || "")) C.saveClient({ ...c, email: v }).then(() => C.toast("Email saved")).catch(() => {}); return true; }
   if (k === "cnotes"){ const c = client(PG.clientId); if (c && !c.shared && (c.programNotes || "") !== t.value){ C.saveClient({ ...c, programNotes: t.value.trim() }).then(() => C.toast("Notes saved")).catch(() => {}); } return true; }
   if (k === "lift"){ PG.lift = t.value; redraw(); return true; }
+  if (k === "liftadd"){ if (!t.value) return true; const c = client(PG.clientId), cur = Array.isArray(c.progressLifts) ? c.progressLifts : DEFAULT_LIFTS; setProgress({ progressLifts: [...cur.filter(x => x !== t.value), t.value] }); return true; }
+  if (k === "liftshare"){ setProgress({ progressShare: t.checked }); C.toast(t.checked ? "Lift charts now show on the client's page" : "Lift charts hidden from the client's page"); return true; }
   if (k === "who"){ const c = client(PG.clientId); C.saveClient({ ...c, sex: valIn("pg-sex"), birthYear: num(valIn("pg-by")) }).catch(() => {}); return true; }
   const p = P(); if (!p) return true;
   if (k === "sess" && t.type === "checkbox"){ mutate(p => p.weeks[PG.week].sessions[si].homework = t.checked); return true; }
@@ -1458,12 +1471,18 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-delta{display:inline-flex;align-items:center;gap:3px;font-size:12px;font-weight:600;padding:1px 7px;border-radius:999px;white-space:nowrap;background:var(--surface2);color:var(--muted)}
 .pg-delta.up{color:var(--pos);background:color-mix(in srgb,var(--pos) 13%,transparent)}
 .pg-delta.down{color:var(--neg,#c0392b);background:color-mix(in srgb,var(--neg,#c0392b) 12%,transparent)}
-.pg-lifts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.pg-lifts{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;align-items:start}
 .pg-liftcard{gap:6px}
 .pg-liftcard h2{font-size:15px}
 .pg-liftnum{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
 .pg-liftnum b{font-size:26px;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
 @media (max-width:900px){.pg-lifts{grid-template-columns:1fr}}
+.pg-liftbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:-4px}
+.pg-liftadd{width:auto;max-width:220px}
+.pg-liftshare{display:inline-flex;gap:6px;align-items:center;margin-left:auto;cursor:pointer}
+.pg-liftwhen{display:inline-flex;align-items:center;gap:4px}
+.pg-liftx{padding:0 6px!important;opacity:.45}.pg-liftx:hover,.pg-liftx:focus-visible{opacity:1}
+.pg-liftu{font-size:13px;font-weight:600;color:var(--muted);letter-spacing:0}
 /* ---------- week board ---------- */
 .pg-wkblock{display:flex;flex-direction:column;gap:6px;scroll-margin-top:64px;padding-top:6px;border-top:1px solid var(--line)}
 .pg-wkblock:first-of-type{border-top:0}
