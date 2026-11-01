@@ -45,6 +45,10 @@ export function clean(s){
   while (w.length > 1 && TRAIL.has(w[w.length-1])) w.pop();
   return w.join(" ");
 }
+/* A half-hour session (30 minutes or so on the calendar) counts as half a session everywhere: packages, pay, rent and counts. */
+export const W = s => s && s.half ? 0.5 : 1;
+export const wsum = list => (list||[]).reduce((a, s) => a + W(s), 0);
+export const fmtN = n => { const r = Math.round(Math.abs(n)*2)/2, w = Math.floor(r), sg = n < 0 && r ? "-" : ""; return sg + (r % 1 ? (w ? w + "½" : "½") : String(r)); };
 export const firstName = n => String(n||"").trim().split(/[\s+&]/)[0] || "there";
 const P = k => (CTX.profile && CTX.profile[k] !== undefined && CTX.profile[k] !== null) ? CTX.profile[k] : DEFAULTS[k];
 const rentCfg = () => ({...DEFAULTS.rent, ...(P("rent")||{})});
@@ -74,7 +78,8 @@ export function normalizeEvents(rows, profile){
     if (!e || e.status === "cancelled" || !e.start || !e.start.dateTime) continue;
     const key = cal.id + ":" + e.id; if (seen.has(key)) continue; seen.add(key);
     if (!keepEvent(e, cal, profile)) continue;
-    evs.push({id:e.id, title:(e.summary||"").trim(), date:new Date(e.start.dateTime), cal:cal.id, calName:cal.name, studio:!!cal.studio});
+    const mins = e.end && e.end.dateTime ? (new Date(e.end.dateTime) - new Date(e.start.dateTime)) / 60000 : 60;
+    evs.push({id:e.id, title:(e.summary||"").trim(), date:new Date(e.start.dateTime), cal:cal.id, calName:cal.name, studio:!!cal.studio, half: mins > 0 && mins <= 35});
   }
   return evs.sort((a,b)=>a.date-b.date);
 }
@@ -117,7 +122,7 @@ export function rentApplies(c, s){
 function sessionRent(s, value, c){
   const r = rentCfg();
   if (!rentApplies(c, s)) return 0;
-  if (r.mode === "perSession") return num(r.perSession);
+  if (r.mode === "perSession") return num(r.perSession) * W(s);
   if (r.mode === "percent") return value * num(r.percent)/100;
   return 0;
 }
@@ -142,7 +147,7 @@ export function compute({profile, clients, events, now} = {}){
       u.count++; u.dates.push(e.date); if (e.date < now){ u.past++; u.last = e.date; } else if (!u.next) u.next = e.date;
       continue;
     }
-    byClient[id].push({date:e.date, cal:e.cal, calName:e.calName, studio:e.studio, title:e.title, clientId:id, billable:!skip, future:e.date >= now, value:0, rent:0});
+    byClient[id].push({date:e.date, cal:e.cal, calName:e.calName, studio:e.studio, half:!!e.half, title:e.title, clientId:id, billable:!skip, future:e.date >= now, value:0, rent:0});
   }
   const stats = {};
   // Shared packages: a client paid for by someone else can use the payer's package, so both people's sessions count down one package.
@@ -169,7 +174,7 @@ function paceOf(c, past, future, now){
   const d56 = now - 56*DAY, recent = past.filter(s => s.date >= d56);
   const first = past.length ? past[0].date : null;
   const weeks = first ? Math.min(8, Math.max(1, (now - Math.max(+first, d56)) / (7*DAY))) : 8;
-  return c.active === false ? 0 : recent.length ? recent.length/weeks : future.filter(s => s.date < now + 28*DAY).length/4;
+  return c.active === false ? 0 : recent.length ? wsum(recent)/weeks : wsum(future.filter(s => s.date < now + 28*DAY))/4;
 }
 function clientStats(c, list, now, curM, sharers, payerSt){
   const bill = c.billing || "package";
@@ -196,12 +201,12 @@ function clientStats(c, list, now, curM, sharers, payerSt){
     }
     packageStats(c, st, now);
   }
-  else if (bill === "payg"){ all.forEach(s => s.value = st.rate); st.perSession = st.rate; st.label = "Pays per session"; st.status = "info"; }
+  else if (bill === "payg"){ all.forEach(s => s.value = W(s) * st.rate); st.perSession = st.rate; st.label = "Pays per session"; st.status = "info"; }
   else monthStats(c, st, now, curM);
 
   for (const s of all) s.rent = sessionRent(s, s.value, c);
   const bucket = k => st.monthly[k] || (st.monthly[k] = {n:0, earned:0, rent:0, collected:0});
-  for (const s of past){ const m = bucket(mkey(s.date)); m.n++; m.earned += s.value; m.rent += s.rent; if (bill === "payg") m.collected += s.value; }
+  for (const s of past){ const m = bucket(mkey(s.date)); m.n += W(s); m.earned += s.value; m.rent += s.rent; if (bill === "payg") m.collected += s.value; }
   if (bill === "membership") for (const inv of st.invoices) bucket(inv.month).earned = inv.amount;
   for (const p of (c.payments||[])){ const k = String(p.date||"").slice(0,7); if (k) bucket(k).collected += num(p.amount); }
   return st;
@@ -221,7 +226,7 @@ function packageStats(c, st, now){
   const dPrice = num(c.packagePrice, st.rate * dSize);
   st.nextSize = dSize; st.nextPrice = dPrice;
   if (!pk.length){
-    [...PAST, ...FUT].forEach(s => s.value = dPrice/dSize);
+    [...PAST, ...FUT].forEach(s => s.value = W(s) * dPrice/dSize);
     st.status = "setup"; st.label = "Set package"; st.perSession = dPrice/dSize; return;
   }
   const base = new Date(pk[0].start);
@@ -229,32 +234,32 @@ function packageStats(c, st, now){
   const used = caps.map(() => 0);
   let i = 0; const overS = [];
   for (const s of PAST){
-    if (s.date < base){ s.value = num(pk[0].price)/Math.max(1,num(pk[0].size)); continue; }
+    if (s.date < base){ s.value = W(s) * num(pk[0].price)/Math.max(1,num(pk[0].size)); continue; }
     while (i < caps.length && used[i] >= caps[i]) i++;
-    if (i < caps.length){ used[i]++; s.value = num(pk[i].price)/Math.max(1,num(pk[i].size)); s.pkg = i; }
-    else { s.value = dPrice/dSize; s.over = true; overS.push(s); }
+    if (i < caps.length){ used[i] += W(s); s.value = W(s) * num(pk[i].price)/Math.max(1,num(pk[i].size)); s.pkg = i; }
+    else { s.value = W(s) * dPrice/dSize; s.over = true; overS.push(s); }
   }
-  const cap = caps.reduce((a,b)=>a+b,0), usedT = used.reduce((a,b)=>a+b,0) + overS.length;
+  const cap = caps.reduce((a,b)=>a+b,0), usedT = used.reduce((a,b)=>a+b,0) + wsum(overS);
   st.remaining = cap - usedT;
   let cur = used.findIndex((u,j) => u < caps[j]); if (cur < 0) cur = pk.length - 1;
   const cp = pk[cur];
   st.current = {...cp, index:cur, size:num(cp.size), usedIn: used[cur] + (cur === 0 ? num(cp.used0) : 0)};
   st.perSession = num(cp.price)/Math.max(1,num(cp.size));
-  FUT.forEach(s => s.value = st.perSession);
+  FUT.forEach(s => s.value = W(s) * st.perSession);
   st.unpaid = pk.map((p,j)=>({p,j})).filter(({p,j}) => !p.paidDate && (used[j] > 0 || j === cur || (j === 0 && num(p.used0) > 0)));
   st.unpaidAmt = st.unpaid.reduce((a,{p}) => a + num(p.price), 0);
-  st.over = overS.length;
+  st.over = wsum(overS);
   const th = num(P("threshold"), 3);
-  if (st.remaining < 0){ st.status = "out"; st.label = `${-st.remaining} past package`; }
+  if (st.remaining < 0){ st.status = "out"; st.label = `${fmtN(-st.remaining)} past package`; }
   else if (st.remaining === 0){ st.status = "out"; st.label = "Out of sessions"; }
-  else if (st.remaining <= th){ st.status = "low"; st.label = `${st.remaining} left`; }
-  else { st.status = "ok"; st.label = `${st.remaining} left`; }
+  else if (st.remaining <= th){ st.status = "low"; st.label = `${fmtN(st.remaining)} left`; }
+  else { st.status = "ok"; st.label = `${fmtN(st.remaining)} left`; }
   if (st.unpaid.length && st.status !== "out"){ st.status = "owes"; st.label = "Package unpaid"; }
   st.balance = st.unpaidAmt;
   let left = st.remaining;
   if (left <= 0) st.runout = overS.length ? overS[0].date : (PAST.length ? PAST[PAST.length-1].date : now);
   else {
-    for (const s of FUT){ left--; if (left <= 0){ st.runout = s.date; break; } }
+    for (const s of FUT){ left -= W(s); if (left <= 0){ st.runout = s.date; break; } }
     if (!st.runout && PACE > 0){ const from = FUT.length ? FUT[FUT.length-1].date : now; st.runout = new Date(+from + left/PACE*7*DAY); st.runoutEst = true; }
   }
 }
@@ -266,16 +271,16 @@ function monthStats(c, st, now, curM){
   for (const s of [...st.past, ...st.future]){ const k = mkey(s.date); (byM[k] = byM[k] || []).push(s); }
   for (const k in byM){
     const list = byM[k];
-    if (bill === "tab") list.forEach(s => s.value = st.rate);
+    if (bill === "tab") list.forEach(s => s.value = W(s) * st.rate);
     else { const n = Math.max(1, list.length); const amt = fee + (inc > 0 ? Math.max(0, n - inc)*over : 0); list.forEach(s => s.value = amt/n); }
   }
   st.perSession = bill === "tab" ? st.rate : (st.pace ? fee/Math.max(1, st.pace*4.33) : fee);
   const invoices = [];
   for (let k = mkey(bs); k <= curM; k = mNext(k)){
-    const list = (byM[k]||[]).filter(s => !s.future); const n = list.length;
-    const sched = (byM[k]||[]).filter(s => s.future).length;
+    const list = (byM[k]||[]).filter(s => !s.future); const n = wsum(list);
+    const sched = wsum((byM[k]||[]).filter(s => s.future));
     let amount, details;
-    if (bill === "tab"){ amount = n * st.rate; details = `${n} session${n===1?"":"s"} at ${money(st.rate)}`; }
+    if (bill === "tab"){ amount = n * st.rate; details = `${fmtN(n)} session${n===1?"":"s"} at ${money(st.rate)}`; }
     else { const extra = inc > 0 ? Math.max(0, n - inc) : 0; amount = fee + extra*over; details = `${mLabel(k,true)} membership` + (extra ? ` plus ${extra} extra session${extra===1?"":"s"} at ${money(over)}` : ""); }
     const running = k === curM && bill === "tab";
     invoices.push({month:k, n, sched, amount, details, due: bill === "membership" ? true : k < curM, running, paid:0});
@@ -318,7 +323,7 @@ export function projectMonth(M, k){
       const a = new Date(Math.max(+w, +ms, +now)), b = new Date(Math.min(+we, +me));
       if (b <= a) continue;
       const frac = (b - a) / (7*DAY);
-      const sched = st.future.filter(s => s.date >= a && s.date < b).length;
+      const sched = wsum(st.future.filter(s => s.date >= a && s.date < b));
       k2 += w >= horizon ? st.pace*frac : Math.max(sched, st.pace*frac);
     }
     n += k2;
@@ -641,8 +646,13 @@ export function clientView(M, clientId){
       return { done: [...early, ...PAST.filter(s => s.pkg === j).map(s => s.date)].map(d => d.toISOString()), uncounted: Math.max(0, pre - early.length) };
     };
     const cur = pkgDone(ci), done = cur.done;
-    const slots = Math.max(0, st.current.size - done.length - cur.uncounted);
+    // Half-hour sessions take half a slot, so count what fits by weight.
+    const halfSet = new Set([...PAST, ...FUT].filter(s => s.half).map(s => s.date.toISOString()));
+    const doneW = done.reduce((a, d) => a + (halfSet.has(d) ? 0.5 : 1), 0);
+    let room = st.current.size - doneW - cur.uncounted, slots = 0;
+    while (slots < FUT.length && room > 0){ room -= W(FUT[slots]); slots++; }
     v.pack = { size: st.current.size, done, booked: FUT.slice(0, slots).map(s => s.date.toISOString()), uncounted: cur.uncounted };
+    if (halfSet.size) v.halves = [...halfSet];
     // Earlier packages that are used up but not paid yet, each with every session, so the client sees what they owe for.
     // A paid earlier package the trainer marked `onLink` is listed too, tagged with its `paidNote` ("Paid in cash").
     v.owed = pk.map((p, j) => ({p, j})).filter(({p, j}) => j < ci && (!p.paidDate || p.onLink))
@@ -655,7 +665,7 @@ export function clientView(M, clientId){
     if (st.sharedBy && st.sharedBy.length){ v.who = {}; v.people = [c, ...st.sharedBy].map(p => firstName(p.name));
       for (const p of [c, ...st.sharedBy]) for (const x of [...M.stats[p.id].past, ...M.stats[p.id].future]) v.who[x.date.toISOString()] = firstName(p.name); }
     v.packSessions = true; }
-  else { const k = M.curM; v.thisMonth = st.past.filter(s => mkey(s.date) === k).length; v.bookedThisMonth = st.future.filter(s => mkey(s.date) === k).length;
+  else { const k = M.curM; v.thisMonth = wsum(st.past.filter(s => mkey(s.date) === k)); v.bookedThisMonth = wsum(st.future.filter(s => mkey(s.date) === k));
     if (st.bill === "membership" && num(c.included)) v.included = num(c.included);
     // Dated session lists for this month and last, including anyone this client pays for.
     const deps = dependentsOf(M, c), people = [c, ...deps], who = p => deps.length ? firstName(p.name) : "";
@@ -762,7 +772,7 @@ export function studioCount(M, k){
   CTX = M.ctx;
   let n = 0, free = 0;
   for (const c of M.ctx.clients){ const st = M.stats[c.id]; if (!st) continue;
-    for (const s of st.past) if (s.studio && mkey(s.date) === k){ if (rentApplies(c, s)) n++; else free++; } }
+    for (const s of st.past) if (s.studio && mkey(s.date) === k){ if (rentApplies(c, s)) n += W(s); else free += W(s); } }
   return {n, free};
 }
 /* Sessions trained at the studio between a and b, for paying rent: done ones charged rent (n), done ones at the
@@ -776,8 +786,8 @@ export function studioTally(M, a, b){
     for (const s of [...st.past, ...st.future]){
       if (s.date < a || s.date >= b || !(all || s.studio)) continue;
       const on = rentApplies(c, s);
-      if (s.future){ if (on) booked++; continue; }
-      if (on){ n++; rent += s.rent || 0; } else free++;
+      if (s.future){ if (on) booked += W(s); continue; }
+      if (on){ n += W(s); rent += s.rent || 0; } else free += W(s);
     } }
   const cals = ((P("calendars")||[]).filter(c => c.use && (all || c.studio))).map(c => c.name);
   return {n, free, booked, rent, cals, any: all || cals.length > 0};
