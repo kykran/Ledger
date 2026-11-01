@@ -508,6 +508,17 @@ function renderOverview(M){
     ${ng ? `<button class="btn primary" data-act="nm-open">Sort out calendar names</button>` : `<button class="btn primary" data-act="new-client">Add client</button>`}</div></div>`;
   return ovWeek() ? renderOverviewWeek(M, ovWeek()) : renderOverviewMonth(M);
 }
+/* Studio rent count: how many sessions were trained at the studio in the period shown, for paying rent. */
+function rentCountCard(M, a, b, label){
+  const R = E.studioTally(M, a, b);
+  const where = R.cals.length && rentCfg().appliesTo !== "all" ? R.cals.join(" + ") : "the studio";
+  if (!R.any) return `<section class="card rentcount"><div class="rc-l"><span class="k">Sessions at the studio</span><span class="small muted">Mark which calendar is your studio and this counts your sessions there for rent.</span></div><button class="btn sm" data-act="goto-settings" data-anchor="calendars">Pick studio calendar</button></section>`;
+  const txt = `${label}: ${R.n} session${R.n===1?"":"s"} at ${where}`;
+  return `<section class="card rentcount" data-tour="rentcount"><div class="rc-l"><span class="k">Sessions at ${esc(where)} for rent · ${esc(label)}</span>
+      <span class="rc-v"><b>${R.n}</b> done${R.booked ? ` <span class="muted">+${R.booked} booked</span>` : ""}</span>
+      <span class="small muted">${[R.rent > 0.5 ? money(R.rent) + " rent" : "", R.free ? `${R.free} more there with no rent` : ""].filter(Boolean).join(" · ") || "Counts sessions on your studio calendar"}</span></div>
+    <button class="btn sm" data-act="rc-copy" data-text="${esc(txt)}">Copy</button></section>`;
+}
 function renderOverviewMonth(M){
   const k = S.month, T = monthTotals(M, k), isCur = k === M.curM, pr = isCur ? projectMonth(M, k) : {n:0, earned:0, net:0, rent:0};
   const owed = S.clients.reduce((a,c) => a + (M.stats[c.id].balance||0), 0);
@@ -529,6 +540,7 @@ function renderOverviewMonth(M){
     <div class="stat"><span class="k">Collected</span><span class="v">${money(T.collected)}</span><span class="d">payments this month</span></div>
     <div class="stat"><span class="k">Outstanding</span><span class="v ${owed>0.5?"neg":""}">${money(owed)}</span><span class="d">owed across clients</span></div>
   </div>
+  ${rentCountCard(M, mStart(k), mStart(mNext(k)), mName(k))}
   ${overviewRest(M)}`;
 }
 function overviewRest(M){
@@ -562,6 +574,7 @@ function renderOverviewWeek(M, a){
     <div class="stat"><span class="k">Collected</span><span class="v">${money(T.collected)}</span><span class="d">payments this week</span></div>
     <div class="stat"><span class="k">Outstanding</span><span class="v ${owed>0.5?"neg":""}">${money(owed)}</span><span class="d">owed across clients</span></div>
   </div>
+  ${rentCountCard(M, a, addDays(a, 7), "Week of " + fmtD(a))}
   ${overviewRest(M)}`;
 }
 function todoCard(M){
@@ -599,7 +612,8 @@ function attnRow(a){
 function renderCalendar(M){
   const k = S.month, ms = mStart(k), me = mStart(mNext(k));
   const gridStart = sow(ms);
-  const list = sessionsIn(M, gridStart, addDays(gridStart, 42));
+  const cals = (P("calendars")||[]).filter(c => c.use), pick = calPick(cals), keep = s => !pick || pick.includes(s.cal);
+  const list = sessionsIn(M, gridStart, addDays(gridStart, 42)).filter(keep);
   const byDay = {}; for (const s of list){ const d = ymd(s.date); (byDay[d] = byDay[d] || []).push(s); }
   const today = ymd(M.now);
   if (!S.day || S.day.slice(0,7) !== k) S.day = k === M.curM ? today : ymd(ms);
@@ -618,8 +632,9 @@ function renderCalendar(M){
   }
   const dayItems = byDay[S.day] || [];
   const dd = parseDay(S.day);
-  const T = monthTotals(M, k);
-  return `<div class="stats">
+  const T = pick ? (() => { const d = list.filter(s => !s.future && s.date >= ms && s.date < me); return {n:d.length, net:d.reduce((a,s)=>a+s.value-s.rent,0)}; })() : monthTotals(M, k);
+  const picker = cals.length > 1 ? `<div class="calpick" role="group" aria-label="Calendars shown"><button data-act="calpick" data-id="" aria-pressed="${!pick}">All calendars</button>${cals.map(c => `<button data-act="calpick" data-id="${esc(c.id)}" aria-pressed="${!!pick && pick.includes(c.id)}" title="${esc(c.name)}">${esc(c.name)}</button>`).join("")}</div>` : "";
+  return `${picker}<div class="stats">
       <div class="stat"><span class="k">Sessions in ${esc(mName(k))}</span><span class="v">${T.n}</span><span class="d">done so far</span></div>
       <div class="stat"><span class="k">Booked ahead</span><span class="v">${list.filter(s=>s.future && s.date>=ms && s.date<me).length}</span><span class="d">still on the calendar</span></div>
       <div class="stat"><span class="k">Busiest day</span><span class="v">${busiest(list.filter(s=>s.date>=ms && s.date<me))}</span><span class="d">by sessions</span></div>
@@ -631,9 +646,18 @@ function renderCalendar(M){
         ${dayItems.length ? `<div class="daylist">${dayItems.map(s => `<div class="row"><span class="t">${esc(fmtT(s.date))}</span>
           <span class="who">${avatar(s.c)}<span style="min-width:0"><a href="#" class="n" data-act="edit" data-id="${s.c.id}">${esc(s.c.name)}</a><div class="s">${esc(s.calName||"")}${s.rent?` · ${money2(s.rent)} rent`:""}${s.future?" · booked":""}</div></span></span>
           <span class="${s.future?"muted":""}" style="font-weight:600">${money2(s.value - s.rent)}</span></div>`).join("")}</div>` : `<div class="empty">No sessions this day.</div>`}
-        ${(() => { const skipped = S.clients.flatMap(c => M.stats[c.id].skipped).filter(s => ymd(s.date) === S.day); return skipped.length ? `<p class="small muted">${skipped.length} event${skipped.length===1?"":"s"} skipped as cancelled or free: ${skipped.map(s=>esc(s.title)).join(", ")}</p>` : ""; })()}
+        ${(() => { const skipped = S.clients.flatMap(c => M.stats[c.id].skipped).filter(s => ymd(s.date) === S.day && keep(s)); return skipped.length ? `<p class="small muted">${skipped.length} event${skipped.length===1?"":"s"} skipped as cancelled or free: ${skipped.map(s=>esc(s.title)).join(", ")}</p>` : ""; })()}
       </section>
     </div>`;
+}
+/* Calendar tab: which calendars to show. Remembered per device; null means all. */
+if (S.calPick === undefined){ try { S.calPick = JSON.parse(localStorage.getItem("tt-calpick") || "null"); } catch(e){ S.calPick = null; } }
+function calPick(cals){ const p = (S.calPick || []).filter(id => cals.some(c => c.id === id)); return p.length && p.length < cals.length ? p : null; }
+function setCalPick(id){
+  const cals = (P("calendars")||[]).filter(c => c.use), cur = calPick(cals) || [];
+  S.calPick = !id ? null : cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id];
+  if (S.calPick && (!S.calPick.length || S.calPick.length >= cals.length)) S.calPick = null;
+  try { localStorage.setItem("tt-calpick", JSON.stringify(S.calPick)); } catch(e){}
 }
 function busiest(list){ if (!list.length) return "–"; const c = [0,0,0,0,0,0,0]; list.forEach(s => c[(s.date.getDay()+6)%7]++); const i = c.indexOf(Math.max(...c)); return ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][i]; }
 
@@ -1667,6 +1691,8 @@ async function onClick(e){
     case "msg": openModal({type:"msg", id, kind:el.getAttribute("data-kind"), month:el.getAttribute("data-month")}); break;
     case "mlink-sent": { const m = S.modal, c = client(m.id); closeModal(); if (c) saveClient({...c, monthlyLinkSent: m.month}).then(()=>toast("Marked sent")).catch(()=>{}); break; }
     case "copy": { const t = document.getElementById("msg-text"); try { await navigator.clipboard.writeText(t.value); toast("Message copied"); } catch(err){ t.focus(); t.select(); toast("Selected. Use your device's copy."); } break; }
+    case "calpick": setCalPick(el.getAttribute("data-id")); render(); break;
+    case "rc-copy": { const t = el.getAttribute("data-text"); try { await navigator.clipboard.writeText(t); toast("Copied: " + t); } catch(err){ toast(t); } break; }
     case "copy-out": { const t = document.getElementById("co-text"); try { await navigator.clipboard.writeText(t.value); toast("Copied"); } catch(err){ t.focus(); t.select(); toast("Selected. Use your device's copy."); } break; }
     case "nm-open": openModal({type:"names", skipped:[], f:{}, at:el.getAttribute("data-key") || null}); break;
     case "nm-skip": S.modal.skipped.push(S.modal.cur); S.modal.at = null; renderModal(); break;

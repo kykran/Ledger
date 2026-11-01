@@ -765,3 +765,20 @@ export function studioCount(M, k){
     for (const s of st.past) if (s.studio && mkey(s.date) === k){ if (rentApplies(c, s)) n++; else free++; } }
   return {n, free};
 }
+/* Sessions trained at the studio between a and b, for paying rent: done ones charged rent (n), done ones at the
+ * studio with no rent (free, e.g. a no-rent client), and ones still booked (booked). With rent charged on every
+ * session, every calendar counts as the studio; otherwise only calendars marked studio. */
+export function studioTally(M, a, b){
+  CTX = M.ctx;
+  const all = rentCfg().appliesTo === "all";
+  let n = 0, free = 0, booked = 0, rent = 0;
+  for (const c of M.ctx.clients){ const st = M.stats[c.id]; if (!st || !st.past) continue;
+    for (const s of [...st.past, ...st.future]){
+      if (s.date < a || s.date >= b || !(all || s.studio)) continue;
+      const on = rentApplies(c, s);
+      if (s.future){ if (on) booked++; continue; }
+      if (on){ n++; rent += s.rent || 0; } else free++;
+    } }
+  const cals = ((P("calendars")||[]).filter(c => c.use && (all || c.studio))).map(c => c.name);
+  return {n, free, booked, rent, cals, any: all || cals.length > 0};
+}
