@@ -3,7 +3,7 @@
  * app.js calls attach(ctx) once and then render()/onClick()/onChange()/onInput() while the Programs tab is open.
  * Data goes through ctx.A.programs (see adapter-hosted.js / programs-demo.js). */
 import { pid, newRow, newSession, newWeek, newProgram, copySession, copyWeek, repeatSession, repeatWeek, setCount,
-  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, timedPlan, sessionForDate, weekZero, weekStartDay, sessionBrief, findSession, parseTrueCoach, truecoachToProgram, topSet, liftDelta, STANDARD_LIFTS, standardLiftHistory } from "./programs-core.js";
+  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, timedPlan, sessionForDate, weekZero, weekStartDay, weeksSince, sessionBrief, findSession, parseTrueCoach, truecoachToProgram, topSet, liftDelta, STANDARD_LIFTS, standardLiftHistory } from "./programs-core.js";
 import { STARTER_EXERCISES } from "./exercise-seed.js";
 import { createVoice, voiceContext, VOICE_CSS } from "./programs-voice.js";
 
@@ -163,7 +163,7 @@ function whenLabel(d){
   const day = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime(), n = (day(d) - day(new Date())) / 86400000;
   return n === 0 ? "Today " + t : n === 1 ? "Tomorrow " + t : d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }) + ", " + t;
 }
-function weekIndexFor(p, d){ if (!p || !p.startDate) return 0; return Math.max(0, Math.min((p.weeks || []).length - 1, Math.floor((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - weekZero(p)) / (7 * 86400000)))); }
+function weekIndexFor(p, d){ if (!p || !p.startDate) return 0; return Math.max(0, Math.min((p.weeks || []).length - 1, weeksSince(weekZero(p), d))); }
 function renderClientList(){
   const progOf = id => (PG.progs || []).filter(p => p.clientId === id && p.status !== "archived");
   const list = (C.S.allClients || C.S.clients).filter(c => c.active !== false).map(c => ({ c, next: nextOf(c) }))
@@ -408,7 +408,7 @@ function renderCalendar(c, p){
   for (const a of appts){ const k = ymd(a); (byDay[k] = byDay[k] || []).push(a); }
   for (const l of PG.logs[c.id] || []) if (l.done || l.reps != null){ const k = String(l.logged_on).slice(0, 10); (logged[k] = logged[k] || new Set()).add(l.session_id); }
   W.forEach((w, wi) => (w.sessions || []).forEach(x => { sess[x.id] = { s: x, wi }; }));
-  const tk = today(), thisWeek = Math.floor((new Date(...tk.split("-").map((v, i) => i === 1 ? v - 1 : +v)) - start) / (7 * 86400000));
+  const tk = today(), thisWeek = weeksSince(start, new Date(...tk.split("-").map((v, i) => i === 1 ? v - 1 : +v)));
   const tm = dt => dt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).replace(":00", "").replace(/\s?(AM|PM)/i, (_, x) => x[0].toLowerCase());
   // The workout open for editing sits in its day, larger; everything else on the calendar stays a read-only summary.
   const openEd = (x, when) => { const at = sess[x.id], wi = at.wi, si = W[wi].sessions.indexOf(x), keep = MODE;
@@ -424,11 +424,11 @@ function renderCalendar(c, p){
   };
   // The calendar keeps going past the written weeks: through a month past today and past the last booked session,
   // so you can scroll ahead. Weeks not written yet show the bookings; tapping one writes that week.
-  const lastAppt = appts.reduce((m, a) => Math.max(m, Math.floor((a - start) / (7 * 86400000))), -1);
+  const lastAppt = appts.reduce((m, a) => Math.max(m, weeksSince(start, a)), -1);
   const N = Math.min(W.length + 26, Math.max(W.length, thisWeek + 5, lastAppt + 1));
   const all = Array.from({ length: N }, (_, wi) => W[wi] || { label: "Week " + (wi + 1), sessions: [], ghost: true });
   const weeks = all.map((w, wi) => {
-    const used = new Set(), from = new Date(start.getTime() + wi * 7 * 86400000);
+    const used = new Set(), from = new Date(start.getFullYear(), start.getMonth(), start.getDate() + wi * 7);
     const days = Array.from({ length: 7 }, (_, k) => {
       const dt = new Date(from.getFullYear(), from.getMonth(), from.getDate() + k), key = ymd(dt), items = [];
       for (const sid of logged[key] || []){ const hit = sess[sid]; if (hit && !used.has(sid)){ used.add(sid); items.push(card(hit.s, hit.wi, true, "", key)); } }
