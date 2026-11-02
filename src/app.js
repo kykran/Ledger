@@ -1353,6 +1353,7 @@ function renderModal(){
           <label class="check full" data-bill-show="package"><input type="checkbox" id="ed-share" ${c.sharePackage?"checked":""}> Uses the payer's package<span class="hint" style="display:block">Both people's sessions count down one package, and both client links show the shared count. Only when someone else pays.</span></label>`; })()}
       <div class="field"><label for="ed-email">Email</label><input id="ed-email" type="email" value="${esc(c.email||"")}"></div>
       <div class="field"><label for="ed-phone">Phone</label><input id="ed-phone" type="tel" value="${esc(c.phone||"")}"></div>
+      <label class="check full"><input type="checkbox" id="ed-halfrate" ${c.halfRate?"checked":""}> Their rate is for a half-hour session<span class="hint" style="display:block">A 30-minute session still counts as ½ session, but earns the full rate.</span></label>
       <label class="check full"><input type="checkbox" id="ed-norent" ${c.noRent?"checked":""}> No studio rent for this client</label>
       <div class="field full"><label for="ed-nrn">No rent when the event is named</label><input id="ed-nrn" value="${esc((c.noRentNames||[]).join(", "))}" placeholder="e.g. a partner billed to this client"><span class="hint">Optional. Comma separated calendar names.</span></div>
       <label class="check full" data-bill-show="tab membership"><input type="checkbox" id="ed-mlink" ${c.monthlyLink?"checked":""}> Send them a monthly link to their sessions<span class="hint" style="display:block">A to-do on the 1st with a ready message and their client page link${m.id && dependentsOf(c).length ? ", including " + esc(dependentsOf(c).map(x=>firstName(x.name)).join(", ")) + "'s sessions" : ""}.</span></label>
@@ -1642,7 +1643,7 @@ async function onClick(e){
         rate: num(val("ed-rate"), num(defs().rate, 100)), packageSize: Math.max(1, Math.round(num(val("ed-size"), 10))),
         packagePrice: val("ed-price") === "" ? null : num(val("ed-price")), fee: num(val("ed-fee")), included: Math.max(0, Math.round(num(val("ed-inc")))),
         overageRate: val("ed-over") === "" ? null : num(val("ed-over")), billingStart: val("ed-bs") || null,
-        email: val("ed-email").trim(), phone: val("ed-phone").trim(), noRent: chk("ed-norent"), noRentNames: val("ed-nrn").split(",").map(s=>s.trim()).filter(Boolean), noAutoNotice: chk("ed-noauto"), monthlyLink: chk("ed-mlink"), active: chk("ed-active"),
+        email: val("ed-email").trim(), phone: val("ed-phone").trim(), noRent: chk("ed-norent"), halfRate: chk("ed-halfrate"), noRentNames: val("ed-nrn").split(",").map(s=>s.trim()).filter(Boolean), noAutoNotice: chk("ed-noauto"), monthlyLink: chk("ed-mlink"), active: chk("ed-active"),
         paidBy: document.getElementById("ed-paidby") ? (val("ed-paidby") || null) : (old.paidBy || null),
         sharePackage: document.getElementById("ed-paidby") ? !!(val("ed-paidby") && chk("ed-share")) : !!old.sharePackage,
         packages: old.packages || [], payments: old.payments || []};
