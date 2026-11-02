@@ -413,11 +413,11 @@ function renderCalendar(c, p){
   // The workout open for editing sits in its day, larger; everything else on the calendar stays a read-only summary.
   const openEd = (x, when) => { const at = sess[x.id], wi = at.wi, si = W[wi].sessions.indexOf(x), keep = MODE;
     MODE = PG.calPlan ? "plan" : "record"; const ed = renderSession(p, wi, si, x); MODE = keep;
-    return `<div class="pg-cal-open" data-wk="${wi}" id="pg-co-${esc(x.id)}"><div class="pg-cal-obar">${when ? `<span class="small muted">${esc(when)}</span>` : ""}${PG.calPlan ? `<button class="btn sm primary" data-act="pg-cal-rec">✓ Done editing</button>` : ""}<button class="btn sm ghost" data-act="pg-cal-close" aria-label="Close ${esc(x.name)}">✕ Close</button></div>${ed}</div>`; };
+    return `<div class="pg-cal-open" data-wk="${wi}" id="pg-co-${esc(x.id)}"><div class="pg-cal-obar"><button class="btn sm ghost pg-cal-grip" data-cdrag="1" data-sid="${esc(x.id)}" data-w="${wi}" data-k="${esc(PG.calAt || "")}" title="Drag to another day" aria-label="Move ${esc(x.name)} to another day">⠿ Move</button>${when ? `<span class="small muted">${esc(when)}</span>` : ""}${PG.calPlan ? `<button class="btn sm primary" data-act="pg-cal-rec">✓ Done editing</button>` : ""}<button class="btn sm ghost" data-act="pg-cal-close" aria-label="Close ${esc(x.name)}">✕ Close</button></div>${ed}</div>`; };
   const card = (x, wi, done, when, k) => {
     if (PG.calOpen === x.id && PG.calAt === k && !p.shared && sess[x.id]) return openEd(x, when);
     const rows = (x.rows || []).filter(r => r.name), more = rows.length - 4;
-    return `<button class="pg-cal-s ${done ? "done" : ""} ${x.homework ? "hw" : ""}" data-act="pg-cal-go" data-w="${wi}" data-sid="${esc(x.id)}" data-k="${esc(k)}" aria-label="Open ${esc(x.name)}">
+    return `<button class="pg-cal-s ${done ? "done" : ""} ${x.homework ? "hw" : ""}" data-act="pg-cal-go" data-w="${wi}" data-sid="${esc(x.id)}" data-k="${esc(k)}" ${done || p.shared ? "" : `data-cdrag="1" title="Tap to open. Drag to another day."`} aria-label="Open ${esc(x.name)}">
       <span class="pg-cal-t">${done ? `<i aria-hidden="true">✓</i>` : ""}${when ? `<span class="muted">${esc(when)}</span> ` : ""}<b>${esc(x.name)}</b></span>
       ${rows.slice(0, 4).map(r => `<span class="pg-cal-ex ${grpClass(r.group)}"><span class="gchip">${esc(r.group || "·")}</span><span class="pg-cal-n">${esc(r.name)}</span><span class="muted">${esc(fmtSetsReps(r))}</span></span>`).join("")}
       ${more > 0 ? `<span class="small muted">+${more} more</span>` : rows.length ? "" : `<span class="small muted">empty</span>`}</button>`;
@@ -438,7 +438,7 @@ function renderCalendar(c, p){
         if (hit && !used.has(hit.session.id)){ used.add(hit.session.id); items.push(card(hit.session, wi, false, tm(a), key)); }
         else if (!hit && !items.length) items.push(`<button class="pg-cal-gap" data-act="pg-cal-write" data-w="${wi}" data-d="${dt.getDay()}" aria-label="Write a workout for ${esc(dt.toDateString())}"><span class="muted">${esc(tm(a))}</span> nothing written</button>`);
       }
-      return `<div class="pg-cal-d ${items.length ? "has" : ""} ${items.some(h => h.startsWith('<div class="pg-cal-open"')) ? "open" : ""} ${key === tk ? "today" : ""} ${key < tk ? "past" : ""}"><div class="pg-cal-dn"><span>${dt.toLocaleDateString(undefined, { weekday: "short" })}</span><b>${dt.getDate()}</b></div>${items.join("")}${pasteBtn(p, dt.getDay(), dt.toDateString(), wi)}</div>`;
+      return `<div data-cdate="${key}" data-cw="${wi}" data-dow="${dt.getDay()}" class="pg-cal-d ${items.length ? "has" : ""} ${items.some(h => h.startsWith('<div class="pg-cal-open"')) ? "open" : ""} ${key === tk ? "today" : ""} ${key < tk ? "past" : ""}"><div class="pg-cal-dn"><span>${dt.toLocaleDateString(undefined, { weekday: "short" })}</span><b>${dt.getDate()}</b></div>${items.join("")}${pasteBtn(p, dt.getDay(), dt.toDateString(), wi)}</div>`;
     }).join("");
     const left = (w.sessions || []).filter(x => !used.has(x.id) && (x.rows || []).some(r => r.name));
     const strip = (label, list) => list.length ? `<div class="pg-cal-left"><span class="small muted">${label}</span>${list.map(x => card(x, wi, false, "", "left" + wi)).join("")}</div>` : "";
@@ -1474,6 +1474,9 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-sgrip{touch-action:none;cursor:grab;border:0;background:none;color:var(--muted);font-size:16px;line-height:1;padding:6px 2px;border-radius:6px;flex:0 0 auto;user-select:none;-webkit-user-select:none}
 .pg-sgrip:hover,.pg-sgrip:focus-visible{color:var(--ink);background:var(--surface2)}
 .pg-sdragging{opacity:.4}
+.pg-cal-s[data-cdrag]{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+.pg-cal-d.pg-drop{outline:2px solid var(--accent);outline-offset:-2px;background:color-mix(in srgb,var(--accent) 10%,transparent)!important}
+.pg-cal-grip{cursor:grab;touch-action:none;margin-right:auto}
 .pg-board.pg-bdrag{scroll-snap-type:none}
 .pg-col.pg-drop .pg-col-add,.pg-col.pg-drop>.pg-sess{border-color:var(--accent)!important;box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 45%,transparent)}
 .pg-col.pg-drop .pg-colh{color:var(--accent)}
@@ -1697,6 +1700,64 @@ function sessDragEnd(e){
   const name = (D.card.querySelector(".pg-sname") || {}).value || "Workout";
   C.toast(day === "" ? `${name}: no day` : `${name} → ${DOW[+day]}`);
 }
+/* ---------- drag a workout to another day (Calendar) ----------
+ * Grab a workout on the calendar (mouse: press and move; finger: hold, then move; or the ⠿ Move grip on the open one)
+ * and drop it on any day, in any week. A day that already has a workout gets both, stacked. */
+let CDRAG = null, cdragEnded = 0;
+function calDragDown(e){
+  const h = e.target.closest && e.target.closest("[data-cdrag]"); if (!h || (e.button && e.button !== 0) || PG.layout !== "cal" || !P()) return;
+  const D = CDRAG = { h, id: e.pointerId, x0: e.clientX, y0: e.clientY, on: false, touch: e.pointerType === "touch", sid: h.getAttribute("data-sid"), w: +h.getAttribute("data-w") };
+  if (h.classList.contains("pg-cal-grip")){ e.preventDefault(); calDragStart(e); }
+  else if (D.touch) D.hold = setTimeout(() => { if (CDRAG === D) calDragStart(e); }, 300);
+  window.addEventListener("pointermove", calDragMove); window.addEventListener("pointerup", calDragEnd); window.addEventListener("pointercancel", calDragEnd);
+}
+function calDragStart(e){
+  const D = CDRAG; if (!D || D.on) return; D.on = true;
+  const s = (P().weeks[D.w] || { sessions: [] }).sessions.find(x => x.id === D.sid);
+  D.name = s ? s.name || "Workout" : "Workout";
+  D.label = document.createElement("div"); D.label.className = "pg-dragtag"; D.label.textContent = D.name; document.body.appendChild(D.label);
+  D.card = D.h.closest(".pg-cal-open") || D.h; D.card.classList.add("pg-sdragging"); document.body.classList.add("pg-is-dragging");
+  if (navigator.vibrate && D.touch) try { navigator.vibrate(12); } catch (x){}
+  calDragMove(e);
+}
+function calDragMove(e){
+  const D = CDRAG; if (!D || e.pointerId !== D.id) return;
+  if (!D.on){ const far = Math.hypot(e.clientX - D.x0, e.clientY - D.y0);
+    if (D.touch){ if (far > 8){ clearTimeout(D.hold); calDragCleanup(); } return; } // a finger moving before the hold is a scroll
+    if (far < 6) return; calDragStart(e); }
+  D.label.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 10}px)`;
+  const el = document.elementFromPoint(e.clientX, e.clientY), day = el && el.closest && el.closest(".pg-cal-d[data-cdate]");
+  if (D.day && D.day !== day) D.day.classList.remove("pg-drop");
+  D.day = day; if (day) day.classList.add("pg-drop");
+  // scroll near the edges: the page up and down, a week's row sideways on a phone
+  clearInterval(D.timer); const vy = e.clientY < 90 ? -14 : e.clientY > innerHeight - 70 ? 14 : 0, row = day && day.closest(".pg-cal-days");
+  const rr = row && row.scrollWidth > row.clientWidth ? row.getBoundingClientRect() : null, vx = rr ? (e.clientX < rr.left + 40 ? -14 : e.clientX > rr.right - 40 ? 14 : 0) : 0;
+  if (vy || vx) D.timer = setInterval(() => { if (vy) scrollBy(0, vy); if (vx) row.scrollLeft += vx; }, 30);
+}
+function calDragCleanup(){
+  const D = CDRAG; if (!D) return; CDRAG = null; clearTimeout(D.hold); clearInterval(D.timer);
+  window.removeEventListener("pointermove", calDragMove); window.removeEventListener("pointerup", calDragEnd); window.removeEventListener("pointercancel", calDragEnd);
+  if (D.label) D.label.remove(); if (D.card) D.card.classList.remove("pg-sdragging"); if (D.day) D.day.classList.remove("pg-drop"); document.body.classList.remove("pg-is-dragging");
+  return D;
+}
+function calDragEnd(e){
+  if (!CDRAG || e.pointerId !== CDRAG.id) return; const D = calDragCleanup();
+  if (!D.on) return; cdragEnded = Date.now();
+  if (e.type === "pointercancel" || !D.day) return;
+  const date = D.day.getAttribute("data-cdate"), tw = +D.day.getAttribute("data-cw"), dow = +D.day.getAttribute("data-dow");
+  if (!moveToDay(D.sid, D.w, tw, dow)) return;
+  if (PG.calOpen === D.sid){ PG.calAt = date; PG.week = tw; redraw(); }
+  const [y, m, d] = date.split("-").map(Number);
+  C.toast(`${D.name} → ${new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}`);
+}
+/* Move a workout to weekday dow of program week tw (adding weeks if needed). */
+function moveToDay(sid, fw, tw, dow){
+  const p = P(); if (!p || !p.weeks[fw]) return false;
+  const i = p.weeks[fw].sessions.findIndex(x => x.id === sid); if (i < 0) return false;
+  mutate(p => { padWeeks(p, tw); const s = p.weeks[fw].sessions[i]; s.day = dow;
+    if (tw !== fw){ p.weeks[fw].sessions.splice(i, 1); p.weeks[tw].sessions.push(s); } });
+  return true;
+}
 function onPointerDown(e){
   const h = e.target.closest && e.target.closest("[data-drag]"); if (!h || (e.button && e.button !== 0) || !P()) return;
   wkFrom(h);
@@ -1765,6 +1826,11 @@ function attach(ctx){
         if (r.sets && r.sets.length) PG.rec.lastRow = r.sets[r.sets.length - 1].row_id; redraw(); } });
   }
   document.addEventListener("pointerdown", e => { if (e.target.closest && e.target.closest(".pg-qa-list")) e.preventDefault(); onPointerDown(e); });
+  document.addEventListener("pointerdown", calDragDown);
+  // Once a finger drag is under way, the page mustn't scroll under it; and the drop mustn't also count as a tap.
+  document.addEventListener("touchmove", e => { if (CDRAG && CDRAG.on) e.preventDefault(); }, { passive: false });
+  document.addEventListener("click", e => { if (Date.now() - cdragEnded < 400){ e.preventDefault(); e.stopPropagation(); } }, true);
+  document.addEventListener("contextmenu", e => { if (CDRAG) e.preventDefault(); });
   document.addEventListener("keydown", onDragKey); document.addEventListener("keydown", onBuilderKey);
   document.addEventListener("focusout", e => { const t = e.target; if (t.getAttribute && t.getAttribute("data-pg") === "qa"){ wkFrom(t); const si = t.getAttribute("data-s"), wk = PG.week; setTimeout(() => { const b = document.getElementById("pg-qa-list-" + wk + "-" + si), a = document.activeElement; if (b && !(a && a.getAttribute && a.getAttribute("data-pg") === "qa" && a.getAttribute("data-s") === si)) b.hidden = true; }, 150); } });
   document.addEventListener("focusin", e => { const t = e.target; if (t.getAttribute && t.getAttribute("data-pg") === "qa"){ wkFrom(t); if (t.value.trim()) qaRender(+t.getAttribute("data-s")); } });
