@@ -218,6 +218,7 @@ async function loadCalendar(refresh){
 
 /* ---------- engine (shared with the server: src/engine.js) ---------- */
 const E = globalThis.TallyEngine;
+const fN = n => E.fmtN(n), wsum = l => E.wsum(l);
 const engineData = () => ({profile:S.prof, clients:S.allClients || S.clients, events:S.events, now:new Date()});
 const compute = () => E.compute(engineData());
 const monthTotals = (M, k) => E.monthTotals(M, k);
@@ -500,7 +501,7 @@ function weekTotals(M, a){
     for (const p of (c.payments||[])){ const d = parseDay(p.date); if (p.date && d >= a && d < b) collected += num(p.amount); }
     if (M.stats[c.id].bill === "payg") collected += done.filter(s => s.c.id === c.id).reduce((x,s)=>x+s.value,0);
   }
-  return {n:done.length, booked:booked.length, clients:new Set(list.map(s => s.c.id)).size, earned, rent, net:earned-rent, bNet:bEarned-bRent, collected};
+  return {n:wsum(done), booked:wsum(booked), clients:new Set(list.map(s => s.c.id)).size, earned, rent, net:earned-rent, bNet:bEarned-bRent, collected};
 }
 function renderOverview(M){
   const ng = nameGroupsOf(M).length;
@@ -513,10 +514,10 @@ function rentCountCard(M, a, b, label){
   const R = E.studioTally(M, a, b);
   const where = R.cals.length && rentCfg().appliesTo !== "all" ? R.cals.join(" + ") : "the studio";
   if (!R.any) return `<section class="card rentcount"><div class="rc-l"><span class="k">Sessions at the studio</span><span class="small muted">Mark which calendar is your studio and this counts your sessions there for rent.</span></div><button class="btn sm" data-act="goto-settings" data-anchor="calendars">Pick studio calendar</button></section>`;
-  const txt = `${label}: ${R.n} session${R.n===1?"":"s"} at ${where}`;
+  const txt = `${label}: ${fN(R.n)} session${R.n===1?"":"s"} at ${where}`;
   return `<section class="card rentcount" data-tour="rentcount"><div class="rc-l"><span class="k">Sessions at ${esc(where)} for rent · ${esc(label)}</span>
-      <span class="rc-v"><b>${R.n}</b> done${R.booked ? ` <span class="muted">+${R.booked} booked</span>` : ""}</span>
-      <span class="small muted">${[R.rent > 0.5 ? money(R.rent) + " rent" : "", R.free ? `${R.free} more there with no rent` : ""].filter(Boolean).join(" · ") || "Counts sessions on your studio calendar"}</span></div>
+      <span class="rc-v"><b>${fN(R.n)}</b> done${R.booked ? ` <span class="muted">+${fN(R.booked)} booked</span>` : ""}</span>
+      <span class="small muted">${[R.rent > 0.5 ? money(R.rent) + " rent" : "", R.free ? `${fN(R.free)} more there with no rent` : ""].filter(Boolean).join(" · ") || "Counts sessions on your studio calendar"}</span></div>
     <button class="btn sm" data-act="rc-copy" data-text="${esc(txt)}">Copy</button></section>`;
 }
 function renderOverviewMonth(M){
@@ -535,7 +536,7 @@ function renderOverviewMonth(M){
       <div class="spark" data-chart="spark"></div>
     </div></section>
   <div class="stats">
-    <div class="stat"><span class="k">Sessions</span><span class="v">${T.n}${isCur && pr.n ? `<span class="muted" style="font-size:14px;font-weight:600"> +${Math.round(pr.n)}</span>` : ""}</span><span class="d">${isCur ? `${weekN} this week · ${booked} still booked` : `${(T.n/4.33).toFixed(1)} per week`}</span></div>
+    <div class="stat"><span class="k">Sessions</span><span class="v">${fN(T.n)}${isCur && pr.n ? `<span class="muted" style="font-size:14px;font-weight:600"> +${Math.round(pr.n)}</span>` : ""}</span><span class="d">${isCur ? `${weekN} this week · ${booked} still booked` : `${(T.n/4.33).toFixed(1)} per week`}</span></div>
     <div class="stat"><span class="k">Per session</span><span class="v">${T.n ? money2(T.net/T.n) : "–"}</span><span class="d">net, after rent</span></div>
     <div class="stat"><span class="k">Collected</span><span class="v">${money(T.collected)}</span><span class="d">payments this month</span></div>
     <div class="stat"><span class="k">Outstanding</span><span class="v ${owed>0.5?"neg":""}">${money(owed)}</span><span class="d">owed across clients</span></div>
@@ -569,7 +570,7 @@ function renderOverviewWeek(M, a){
       <div class="spark" data-chart="spark"></div>
     </div></section>
   <div class="stats">
-    <div class="stat"><span class="k">Sessions</span><span class="v">${T.n}${T.booked ? `<span class="muted" style="font-size:14px;font-weight:600"> +${T.booked}</span>` : ""}</span><span class="d">${T.clients} client${T.clients===1?"":"s"}${T.booked ? ` · ${T.booked} still booked` : P7.n && !future ? ` · ${T.n-P7.n>=0?"+":""}${T.n-P7.n} vs week before` : ""}</span></div>
+    <div class="stat"><span class="k">Sessions</span><span class="v">${fN(T.n)}${T.booked ? `<span class="muted" style="font-size:14px;font-weight:600"> +${fN(T.booked)}</span>` : ""}</span><span class="d">${T.clients} client${T.clients===1?"":"s"}${T.booked ? ` · ${fN(T.booked)} still booked` : P7.n && !future ? ` · ${T.n-P7.n>=0?"+":""}${fN(T.n-P7.n)} vs week before` : ""}</span></div>
     <div class="stat"><span class="k">Per session</span><span class="v">${T.n ? money2(T.net/T.n) : "–"}</span><span class="d">net, after rent</span></div>
     <div class="stat"><span class="k">Collected</span><span class="v">${money(T.collected)}</span><span class="d">payments this week</span></div>
     <div class="stat"><span class="k">Outstanding</span><span class="v ${owed>0.5?"neg":""}">${money(owed)}</span><span class="d">owed across clients</span></div>
@@ -592,7 +593,7 @@ function avgWeek(M){ const cut = addDays(sow(M.now), -56); let n = 0; S.clients.
 function attnRow(a){
   const {c, st} = a; let meta = "", acts = "";
   if (a.kind === "renew"){
-    meta = st.remaining < 0 ? `${-st.remaining} session${st.remaining===-1?"":"s"} done past the package · next ${st.nextSize}-pack ${money(st.nextPrice)}` : st.remaining === 0 ? `Package used up · last session ${fmtD(st.last)}` : `${st.remaining} left of ${st.current.size} · runs out ${st.runout ? (st.runoutEst?"around ":"") + fmtD(st.runout) : "–"}`;
+    meta = st.remaining < 0 ? `${fN(-st.remaining)} session${st.remaining===-1?"":"s"} done past the package · next ${st.nextSize}-pack ${money(st.nextPrice)}` : st.remaining === 0 ? `Package used up · last session ${fmtD(st.last)}` : `${fN(st.remaining)} left of ${st.current.size} · runs out ${st.runout ? (st.runoutEst?"around ":"") + fmtD(st.runout) : "–"}`;
     acts = `<button class="btn sm" data-act="msg" data-id="${c.id}" data-kind="renew">Message</button><button class="btn sm primary" data-act="add-pkg" data-id="${c.id}">Record renewal</button>`;
   } else if (a.kind === "unpaid"){
     meta = `${st.unpaid.length > 1 ? st.unpaid.length + " packages" : "Current package"} not marked paid · ${money(st.unpaidAmt)}`;
@@ -632,10 +633,10 @@ function renderCalendar(M){
   }
   const dayItems = byDay[S.day] || [];
   const dd = parseDay(S.day);
-  const T = pick ? (() => { const d = list.filter(s => !s.future && s.date >= ms && s.date < me); return {n:d.length, net:d.reduce((a,s)=>a+s.value-s.rent,0)}; })() : monthTotals(M, k);
+  const T = pick ? (() => { const d = list.filter(s => !s.future && s.date >= ms && s.date < me); return {n:wsum(d), net:d.reduce((a,s)=>a+s.value-s.rent,0)}; })() : monthTotals(M, k);
   const picker = cals.length > 1 ? `<div class="calpick" role="group" aria-label="Calendars shown"><button data-act="calpick" data-id="" aria-pressed="${!pick}">All calendars</button>${cals.map(c => `<button data-act="calpick" data-id="${esc(c.id)}" aria-pressed="${!!pick && pick.includes(c.id)}" title="${esc(c.name)}">${esc(c.name)}</button>`).join("")}</div>` : "";
   return `${picker}<div class="stats">
-      <div class="stat"><span class="k">Sessions in ${esc(mName(k))}</span><span class="v">${T.n}</span><span class="d">done so far</span></div>
+      <div class="stat"><span class="k">Sessions in ${esc(mName(k))}</span><span class="v">${fN(T.n)}</span><span class="d">done so far</span></div>
       <div class="stat"><span class="k">Booked ahead</span><span class="v">${list.filter(s=>s.future && s.date>=ms && s.date<me).length}</span><span class="d">still on the calendar</span></div>
       <div class="stat"><span class="k">Busiest day</span><span class="v">${busiest(list.filter(s=>s.date>=ms && s.date<me))}</span><span class="d">by sessions</span></div>
       <div class="stat"><span class="k">Net</span><span class="v">${money(T.net)}</span><span class="d">after rent</span></div>
@@ -644,7 +645,7 @@ function renderCalendar(M){
       <section class="card" style="padding:12px" data-tour="cal"><div class="cal" role="grid">${cells}</div></section>
       <section class="card"><div class="card-h"><h2>${esc(dd.toLocaleDateString(undefined,{weekday:"long", month:"long", day:"numeric"}))}</h2><span class="small muted">${dayItems.length} session${dayItems.length===1?"":"s"}</span></div>
         ${dayItems.length ? `<div class="daylist">${dayItems.map(s => `<div class="row"><span class="t">${esc(fmtT(s.date))}</span>
-          <span class="who">${avatar(s.c)}<span style="min-width:0"><a href="#" class="n" data-act="edit" data-id="${s.c.id}">${esc(s.c.name)}</a><div class="s">${esc(s.calName||"")}${s.rent?` · ${money2(s.rent)} rent`:""}${s.future?" · booked":""}</div></span></span>
+          <span class="who">${avatar(s.c)}<span style="min-width:0"><a href="#" class="n" data-act="edit" data-id="${s.c.id}">${esc(s.c.name)}</a><div class="s">${esc(s.calName||"")}${s.half?" · half hour":""}${s.rent?` · ${money2(s.rent)} rent`:""}${s.future?" · booked":""}</div></span></span>
           <span class="${s.future?"muted":""}" style="font-weight:600">${money2(s.value - s.rent)}</span></div>`).join("")}</div>` : `<div class="empty">No sessions this day.</div>`}
         ${(() => { const skipped = S.clients.flatMap(c => M.stats[c.id].skipped).filter(s => ymd(s.date) === S.day && keep(s)); return skipped.length ? `<p class="small muted">${skipped.length} event${skipped.length===1?"":"s"} skipped as cancelled or free: ${skipped.map(s=>esc(s.title)).join(", ")}</p>` : ""; })()}
       </section>
@@ -666,8 +667,8 @@ function punch(st){
   if (st.bill !== "package" || !st.current) return `<span class="muted small">–</span>`;
   const size = Math.max(1, st.current.size), used = Math.min(size, st.current.usedIn);
   const over = Math.max(0, -st.remaining);
-  const pips = size <= 40 ? Array.from({length:size}, (_,i)=>`<i class="${i<used?"used":""}"></i>`).join("") + Array.from({length:Math.min(over,10)},()=>`<i class="over"></i>`).join("") : "";
-  return `<div class="punch" aria-hidden="true">${pips}</div><div class="punchlbl">${st.remaining < 0 ? `${over} over` : `${size-used} of ${size} left`}${st.remaining > size-used ? ` · ${st.remaining} total` : ""}</div>`;
+  const pips = size <= 40 ? Array.from({length:size}, (_,i)=>`<i class="${i<used?"used":""}"></i>`).join("") + Array.from({length:Math.min(Math.ceil(over),10)},()=>`<i class="over"></i>`).join("") : "";
+  return `<div class="punch" aria-hidden="true">${pips}</div><div class="punchlbl">${st.remaining < 0 ? `${fN(over)} over` : `${fN(size-used)} of ${size} left`}${st.remaining > size-used ? ` · ${fN(st.remaining)} total` : ""}</div>`;
 }
 function renderClients(M){
   const order = {out:0, owes:1, low:2, setup:3, info:4, ok:5};
@@ -805,7 +806,7 @@ function weekRows(M){
     if (r.mode === "monthly") rent += num(r.monthly) * 12/52;
     const by = {};
     for (const s of list){ const e = by[s.c.id] || (by[s.c.id] = {c:s.c, n:0, booked:0, earned:0, rent:0}); if (s.future) e.booked++; else e.n++; e.earned += s.value; e.rent += s.rent; }
-    out.push({key:ymd(a), a, b, i, n:done.length, booked:list.length-done.length, earned, rent, net:earned-rent, clients:Object.values(by).sort((x,y)=>(y.earned-y.rent)-(x.earned-x.rent))});
+    out.push({key:ymd(a), a, b, i, n:wsum(done), booked:wsum(list)-wsum(done), earned, rent, net:earned-rent, clients:Object.values(by).sort((x,y)=>(y.earned-y.rent)-(x.earned-x.rent))});
   }
   return out;
 }
@@ -1103,15 +1104,15 @@ function recData(M, period){
     const inP = s => s.date >= a && s.date < b;
     const done = st.past.filter(inP), booked = st.future.filter(inP), skipped = (st.skipped||[]).filter(inP);
     if (!done.length && !booked.length && !skipped.length) continue;
-    const byCal = {}; for (const s of done) byCal[s.cal] = (byCal[s.cal]||0) + 1;
-    const bookedByCal = {}; for (const s of booked) bookedByCal[s.cal] = (bookedByCal[s.cal]||0) + 1;
+    const byCal = {}; for (const s of done) byCal[s.cal] = (byCal[s.cal]||0) + E.W(s);
+    const bookedByCal = {}; for (const s of booked) bookedByCal[s.cal] = (bookedByCal[s.cal]||0) + E.W(s);
     const earned = done.reduce((x,s)=>x+s.value,0), rent = done.reduce((x,s)=>x+s.rent,0);
-    rows.push({c, st, done, booked, skipped, byCal, bookedByCal, earned, rent, net:earned-rent});
+    rows.push({c, st, done, booked, skipped, n:wsum(done), nb:wsum(booked), byCal, bookedByCal, earned, rent, net:earned-rent});
   }
-  rows.sort((x,y) => y.done.length - x.done.length || x.c.name.localeCompare(y.c.name));
+  rows.sort((x,y) => y.n - x.n || x.c.name.localeCompare(y.c.name));
   const tot = {done:0, booked:0, skipped:0, earned:0, rent:0, net:0, byCal:{}, bookedByCal:{}, rentByCal:{}};
-  for (const r of rows){ tot.done += r.done.length; tot.booked += r.booked.length; tot.skipped += r.skipped.length; tot.earned += r.earned; tot.rent += r.rent; tot.net += r.net;
-    for (const s of r.done){ tot.byCal[s.cal] = (tot.byCal[s.cal]||0)+1; tot.rentByCal[s.cal] = (tot.rentByCal[s.cal]||0) + s.rent; }
+  for (const r of rows){ tot.done += r.n; tot.booked += r.nb; tot.skipped += r.skipped.length; tot.earned += r.earned; tot.rent += r.rent; tot.net += r.net;
+    for (const s of r.done){ tot.byCal[s.cal] = (tot.byCal[s.cal]||0)+E.W(s); tot.rentByCal[s.cal] = (tot.rentByCal[s.cal]||0) + s.rent; }
     for (const k in r.bookedByCal) tot.bookedByCal[k] = (tot.bookedByCal[k]||0) + r.bookedByCal[k]; }
   const calIds = [...new Set([...cals.map(c => c.id), ...Object.keys(tot.byCal), ...Object.keys(tot.bookedByCal)])].filter(id => tot.byCal[id] || tot.bookedByCal[id] || cals.some(c => c.id === id));
   return {rows, tot, calIds, calName, cals, now};
@@ -1135,23 +1136,23 @@ function renderReconcile(M){
   const {label, a, b} = recPeriod(), D = recData(M), isNow = M.now >= a && M.now < b, future = a > M.now;
   const short = n => String(n).replace(/@.*$/, "").slice(0, 22);
   const weekMode = R.mode === "week", prevP = weekMode ? {a:addDays(a,-7), b:a} : null;
-  const prevD = prevP ? recData(M, prevP) : null, prevN = id => { const r = prevD && prevD.rows.find(x => x.c.id === id); return r ? r.done.length : 0; };
+  const prevD = prevP ? recData(M, prevP) : null, prevN = id => { const r = prevD && prevD.rows.find(x => x.c.id === id); return r ? r.n : 0; };
   const rec = weekMode ? (P("reconciled")||{})[ymd(a)] : null, over = b <= M.now;
-  const delta = (n, p) => { const d = n - p; return d ? `<span class="small ${d>0?"pos":"neg"}"> ${d>0?"+":""}${d}</span>` : ""; };
+  const delta = (n, p) => { const d = n - p; return d ? `<span class="small ${d>0?"pos":"neg"}"> ${d>0?"+":""}${fN(d)}</span>` : ""; };
   const banner = !weekMode ? "" : !over ? `<div class="banner"><span>This week isn't over yet. Come back after Sunday to mark it reconciled.</span></div>`
     : !rec ? `<div class="banner"><span>Review the sessions below, compare with last week, then mark this week off.</span><button class="btn sm primary" data-act="rec-mark" data-week="${ymd(a)}">Mark week reconciled</button></div>`
-    : rec.n !== D.tot.done ? `<div class="banner err"><span>Changed since you reconciled on ${esc(fmtD(new Date(rec.at)))}: was ${rec.n} session${rec.n===1?"":"s"}, now ${D.tot.done}.</span><button class="btn sm primary" data-act="rec-mark" data-week="${ymd(a)}">Mark reconciled again</button></div>`
-    : `<div class="banner"><span>✓ Reconciled on ${esc(fmtD(new Date(rec.at)))} · ${rec.n} sessions · ${money(rec.net)} net</span><button class="btn sm ghost" data-act="rec-unmark" data-week="${ymd(a)}">Undo</button></div>`;
-  const calCell = (r, id) => { const n = r.byCal[id]||0, bk = r.bookedByCal[id]||0; return `${n||"–"}${bk?`<span class="muted"> +${bk}</span>`:""}`; };
+    : rec.n !== D.tot.done ? `<div class="banner err"><span>Changed since you reconciled on ${esc(fmtD(new Date(rec.at)))}: was ${fN(rec.n)} session${rec.n===1?"":"s"}, now ${fN(D.tot.done)}.</span><button class="btn sm primary" data-act="rec-mark" data-week="${ymd(a)}">Mark reconciled again</button></div>`
+    : `<div class="banner"><span>✓ Reconciled on ${esc(fmtD(new Date(rec.at)))} · ${fN(rec.n)} sessions · ${money(rec.net)} net</span><button class="btn sm ghost" data-act="rec-unmark" data-week="${ymd(a)}">Undo</button></div>`;
+  const calCell = (r, id) => { const n = r.byCal[id]||0, bk = r.bookedByCal[id]||0; return `${n?fN(n):"–"}${bk?`<span class="muted"> +${fN(bk)}</span>`:""}`; };
   const studio = id => (D.cals.find(c => c.id === id)||{}).studio;
-  const tiles = D.calIds.map(id => `<div class="stat"><span class="k">${esc(short(D.calName(id)))}${studio(id)?' <span class="tag">studio</span>':""}</span><span class="v">${D.tot.byCal[id]||0}${D.tot.bookedByCal[id]?`<span class="muted" style="font-size:14px;font-weight:600"> +${D.tot.bookedByCal[id]}</span>`:""}</span><span class="d">${D.tot.rentByCal[id] ? money(D.tot.rentByCal[id]) + " rent" : "no rent"}</span></div>`).join("");
+  const tiles = D.calIds.map(id => `<div class="stat"><span class="k">${esc(short(D.calName(id)))}${studio(id)?' <span class="tag">studio</span>':""}</span><span class="v">${fN(D.tot.byCal[id]||0)}${D.tot.bookedByCal[id]?`<span class="muted" style="font-size:14px;font-weight:600"> +${fN(D.tot.bookedByCal[id])}</span>`:""}</span><span class="d">${D.tot.rentByCal[id] ? money(D.tot.rentByCal[id]) + " rent" : "no rent"}</span></div>`).join("");
   const gone = weekMode ? prevD.rows.filter(p => !D.rows.some(r => r.c.id === p.c.id)) : [];
   const body = D.rows.map(r => { const open = R.open[r.c.id];
     const detail = open ? `<tr class="wkdetail"><td colspan="${D.calIds.length + 5 + (weekMode?1:0)}"><div class="list">${[...r.done.map(s=>[s,"done"]), ...r.booked.map(s=>[s,"booked"]), ...r.skipped.map(s=>[s,"skipped"])].sort((x,y)=>x[0].date-y[0].date).map(([s,k]) => `<div><span>${esc(s.date.toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric"}))} · ${esc(fmtT(s.date))} <span class="tag">${esc(short(s.calName||D.calName(s.cal)))}</span>${k!=="done"?` <span class="chip ${k==="booked"?"info":"low"}">${k==="booked"?"Booked":"Not counted"}</span>`:""}${k==="skipped"?` <span class="small muted">“${esc(s.title)}”</span>`:""}</span><span class="small">${k==="done"?money(s.value)+(s.rent?` · ${money(s.rent)} rent`:""):""}</span></div>`).join("")}</div></td></tr>` : "";
     return `<tr class="wkrow${open?" open":""}" data-act="rec-open" data-id="${r.c.id}" tabindex="0" role="button" aria-expanded="${!!open}"><td><div class="who"><span class="caret" aria-hidden="true">${open?"▾":"▸"}</span>${avatar(r.c)}<div style="min-width:0"><span class="n">${esc(r.c.name)}</span><div class="s">${BILLING[r.st.bill].label}${r.c.noRent?" · no rent":""}${payLine(r.c)}</div></div></div></td>
       ${D.calIds.map(id => `<td class="num">${calCell(r,id)}</td>`).join("")}
-      <td class="num" style="font-weight:700">${r.done.length}${r.booked.length?`<span class="muted" style="font-weight:500"> +${r.booked.length}</span>`:""}</td>
-      ${weekMode ? `<td class="num muted">${prevN(r.c.id)}${delta(r.done.length, prevN(r.c.id))}</td>` : ""}
+      <td class="num" style="font-weight:700">${fN(r.n)}${r.nb?`<span class="muted" style="font-weight:500"> +${fN(r.nb)}</span>`:""}</td>
+      ${weekMode ? `<td class="num muted">${fN(prevN(r.c.id))}${delta(r.n, prevN(r.c.id))}</td>` : ""}
       <td class="num">${money(r.earned)}</td><td class="num">${r.rent?money(r.rent):"–"}</td><td class="num" style="font-weight:600">${money(r.net)}</td></tr>${detail}`; }).join("");
   return `<section class="card"><div class="card-h">
       <div class="seg" role="group" aria-label="Period">${[["week","Week"],["month","Month"]].map(([k,l]) => `<button data-act="rec-mode" data-k="${k}" aria-pressed="${R.mode===k}">${l}</button>`).join("")}</div>
@@ -1161,22 +1162,22 @@ function renderReconcile(M){
     ${isNow ? `<p class="small muted">Done so far, plus <span class="muted">+booked</span> for the rest of the ${R.mode}.</p>` : future ? `<p class="small muted">Everything here is still booked.</p>` : ""}
   </section>
   <div class="stats">
-    <div class="stat"><span class="k">Sessions done</span><span class="v">${D.tot.done}${D.tot.booked?`<span class="muted" style="font-size:14px;font-weight:600"> +${D.tot.booked}</span>`:""}</span><span class="d">${D.rows.length} client${D.rows.length===1?"":"s"}${D.tot.skipped?` · ${D.tot.skipped} not counted`:""}</span></div>
+    <div class="stat"><span class="k">Sessions done</span><span class="v">${fN(D.tot.done)}${D.tot.booked?`<span class="muted" style="font-size:14px;font-weight:600"> +${fN(D.tot.booked)}</span>`:""}</span><span class="d">${D.rows.length} client${D.rows.length===1?"":"s"}${D.tot.skipped?` · ${D.tot.skipped} not counted`:""}</span></div>
     ${tiles}
     <div class="stat"><span class="k">Net to you</span><span class="v">${money(D.tot.net)}</span><span class="d">${money(D.tot.earned)} earned · ${money(D.tot.rent)} rent</span></div>
   </div>
   <section class="card"><div class="card-h"><h2>By client</h2><span class="small muted">tap a client for dates</span></div>
     ${D.rows.length ? `<div class="tablewrap"><table class="weeks"><thead><tr><th>Client</th>${D.calIds.map(id => `<th class="num">${esc(short(D.calName(id)))}</th>`).join("")}<th class="num">Total</th>${weekMode?'<th class="num">Last wk</th>':""}<th class="num">Earned</th><th class="num">Rent</th><th class="num">Net</th></tr></thead><tbody>${body}
-      <tr class="total"><td style="font-weight:700">Total</td>${D.calIds.map(id => `<td class="num" style="font-weight:700">${D.tot.byCal[id]||0}${D.tot.bookedByCal[id]?`<span class="muted" style="font-weight:500"> +${D.tot.bookedByCal[id]}</span>`:""}</td>`).join("")}<td class="num" style="font-weight:700">${D.tot.done}${D.tot.booked?`<span class="muted" style="font-weight:500"> +${D.tot.booked}</span>`:""}</td>${weekMode?`<td class="num muted">${prevD.tot.done}${delta(D.tot.done, prevD.tot.done)}</td>`:""}<td class="num">${money(D.tot.earned)}</td><td class="num">${money(D.tot.rent)}</td><td class="num" style="font-weight:700">${money(D.tot.net)}</td></tr>
+      <tr class="total"><td style="font-weight:700">Total</td>${D.calIds.map(id => `<td class="num" style="font-weight:700">${fN(D.tot.byCal[id]||0)}${D.tot.bookedByCal[id]?`<span class="muted" style="font-weight:500"> +${fN(D.tot.bookedByCal[id])}</span>`:""}</td>`).join("")}<td class="num" style="font-weight:700">${fN(D.tot.done)}${D.tot.booked?`<span class="muted" style="font-weight:500"> +${fN(D.tot.booked)}</span>`:""}</td>${weekMode?`<td class="num muted">${fN(prevD.tot.done)}${delta(D.tot.done, prevD.tot.done)}</td>`:""}<td class="num">${money(D.tot.earned)}</td><td class="num">${money(D.tot.rent)}</td><td class="num" style="font-weight:700">${money(D.tot.net)}</td></tr>
     </tbody></table></div>` : `<div class="empty">No sessions in this ${R.mode}.</div>`}
-    ${gone.length ? `<p class="small">Trained last week but not this week: ${gone.map(g => `<b>${esc(g.c.name)}</b> (${g.done.length})`).join(", ")}</p>` : ""}
+    ${gone.length ? `<p class="small">Trained last week but not this week: ${gone.map(g => `<b>${esc(g.c.name)}</b> (${fN(g.n)})`).join(", ")}</p>` : ""}
     <p class="small muted">"Not counted" are calendar events with words like cancel, free or comp in the title. They show in a client's dates but aren't billed or charged rent.</p>
   </section>`;
 }
 function exportReconcile(){
   const D = recData(S.M), {label, a} = recPeriod(), R = S.rec;
   const rows = [["client", ...D.calIds.map(id => D.calName(id) + " (done)"), "done", "booked", "not counted", "earned", "rent", "net"]];
-  for (const r of D.rows) rows.push([r.c.name, ...D.calIds.map(id => r.byCal[id]||0), r.done.length, r.booked.length, r.skipped.length, Math.round(r.earned*100)/100, Math.round(r.rent*100)/100, Math.round(r.net*100)/100]);
+  for (const r of D.rows) rows.push([r.c.name, ...D.calIds.map(id => r.byCal[id]||0), r.n, r.nb, r.skipped.length, Math.round(r.earned*100)/100, Math.round(r.rent*100)/100, Math.round(r.net*100)/100]);
   rows.push(["Total", ...D.calIds.map(id => D.tot.byCal[id]||0), D.tot.done, D.tot.booked, D.tot.skipped, Math.round(D.tot.earned*100)/100, Math.round(D.tot.rent*100)/100, Math.round(D.tot.net*100)/100]);
   offerFile(`reconcile-${R.mode}-${ymd(a)}.csv`, csv(rows));
 }
@@ -1284,7 +1285,7 @@ function drawCharts(M){
   if (mo){
     const hs = mkey(parseDay(P("historyStart"))); const bars = []; const sess = S.trendMode === "sessions";
     for (let k = hs; k <= M.curM; k = mNext(k)){ const T = monthTotals(M,k); const pr = k === M.curM ? projectMonth(M,k) : {net:0, n:0};
-      bars.push({label:MONTHS[mStart(k).getMonth()], segs: sess ? [{v:T.n},{v:Math.round(pr.n), proj:true}] : [{v:T.net},{v:T.rent, rent:true},{v:pr.net, proj:true}], tip:`${mLabel(k)}: ${T.n} sessions, ${money(T.earned)} earned, ${money(T.rent)} rent, ${money(T.net)} net` + (pr.net?` (+${money(pr.net)} projected)`:"")}); }
+      bars.push({label:MONTHS[mStart(k).getMonth()], segs: sess ? [{v:T.n},{v:Math.round(pr.n), proj:true}] : [{v:T.net},{v:T.rent, rent:true},{v:pr.net, proj:true}], tip:`${mLabel(k)}: ${fN(T.n)} sessions, ${money(T.earned)} earned, ${money(T.rent)} rent, ${money(T.net)} net` + (pr.net?` (+${money(pr.net)} projected)`:"")}); }
     for (let k = mNext(M.curM), i = 0; i < 3; k = mNext(k), i++){ const pr = projectMonth(M,k); bars.push({label:MONTHS[mStart(k).getMonth()], segs:[{v: sess ? Math.round(pr.n) : pr.net, proj:true}], tip:`${mLabel(k)} projected: ${Math.round(pr.n)} sessions, ${money(pr.net)} net`}); }
     barChart(mo, bars, {id:"mo", h:240, label: sess ? "Sessions by month" : "Net income by month", fmt: sess ? (v=>String(Math.round(v))) : (v=> v>=1000 ? "$"+(v/1000).toFixed(v%1000?1:0)+"k" : "$"+v)});
   }
@@ -1352,6 +1353,7 @@ function renderModal(){
           <label class="check full" data-bill-show="package"><input type="checkbox" id="ed-share" ${c.sharePackage?"checked":""}> Uses the payer's package<span class="hint" style="display:block">Both people's sessions count down one package, and both client links show the shared count. Only when someone else pays.</span></label>`; })()}
       <div class="field"><label for="ed-email">Email</label><input id="ed-email" type="email" value="${esc(c.email||"")}"></div>
       <div class="field"><label for="ed-phone">Phone</label><input id="ed-phone" type="tel" value="${esc(c.phone||"")}"></div>
+      <label class="check full"><input type="checkbox" id="ed-halfrate" ${c.halfRate?"checked":""}> Their rate is for a half-hour session<span class="hint" style="display:block">A 30-minute session still counts as ½ session, but earns the full rate.</span></label>
       <label class="check full"><input type="checkbox" id="ed-norent" ${c.noRent?"checked":""}> No studio rent for this client</label>
       <div class="field full"><label for="ed-nrn">No rent when the event is named</label><input id="ed-nrn" value="${esc((c.noRentNames||[]).join(", "))}" placeholder="e.g. a partner billed to this client"><span class="hint">Optional. Comma separated calendar names.</span></div>
       <label class="check full" data-bill-show="tab membership"><input type="checkbox" id="ed-mlink" ${c.monthlyLink?"checked":""}> Send them a monthly link to their sessions<span class="hint" style="display:block">A to-do on the 1st with a ready message and their client page link${m.id && dependentsOf(c).length ? ", including " + esc(dependentsOf(c).map(x=>firstName(x.name)).join(", ")) + "'s sessions" : ""}.</span></label>
@@ -1379,7 +1381,7 @@ function renderModal(){
   } else if (m.type === "add-pkg"){
     const c = client(m.id), st = S.M.stats[c.id];
     title = "New package · " + c.name;
-    body = `<p class="note">${st.remaining < 0 ? `${-st.remaining} session${st.remaining===-1?"":"s"} already done past the last package will come out of this one.` : st.remaining > 0 ? `The ${st.remaining} session${st.remaining===1?"":"s"} left on the current package are used first.` : "Sessions from now on count against this package."}</p>
+    body = `<p class="note">${st.remaining < 0 ? `${fN(-st.remaining)} session${st.remaining===-1?"":"s"} already done past the last package will come out of this one.` : st.remaining > 0 ? `The ${fN(st.remaining)} session${st.remaining===1?"":"s"} left on the current package are used first.` : "Sessions from now on count against this package."}</p>
     <div class="form">
       <div class="field"><label for="ap-size">Sessions</label><input id="ap-size" type="number" min="1" step="1" value="${esc(st.nextSize)}"></div>
       <div class="field"><label for="ap-price">Price ($)</label><input id="ap-price" type="number" min="0" step="1" value="${esc(Math.round(st.nextPrice))}"></div>
@@ -1641,7 +1643,7 @@ async function onClick(e){
         rate: num(val("ed-rate"), num(defs().rate, 100)), packageSize: Math.max(1, Math.round(num(val("ed-size"), 10))),
         packagePrice: val("ed-price") === "" ? null : num(val("ed-price")), fee: num(val("ed-fee")), included: Math.max(0, Math.round(num(val("ed-inc")))),
         overageRate: val("ed-over") === "" ? null : num(val("ed-over")), billingStart: val("ed-bs") || null,
-        email: val("ed-email").trim(), phone: val("ed-phone").trim(), noRent: chk("ed-norent"), noRentNames: val("ed-nrn").split(",").map(s=>s.trim()).filter(Boolean), noAutoNotice: chk("ed-noauto"), monthlyLink: chk("ed-mlink"), active: chk("ed-active"),
+        email: val("ed-email").trim(), phone: val("ed-phone").trim(), noRent: chk("ed-norent"), halfRate: chk("ed-halfrate"), noRentNames: val("ed-nrn").split(",").map(s=>s.trim()).filter(Boolean), noAutoNotice: chk("ed-noauto"), monthlyLink: chk("ed-mlink"), active: chk("ed-active"),
         paidBy: document.getElementById("ed-paidby") ? (val("ed-paidby") || null) : (old.paidBy || null),
         sharePackage: document.getElementById("ed-paidby") ? !!(val("ed-paidby") && chk("ed-share")) : !!old.sharePackage,
         packages: old.packages || [], payments: old.payments || []};
