@@ -20,6 +20,8 @@ create table if not exists public.client_access (
   unique (user_id, client_id)
 );
 alter table public.client_access enable row level security;
+-- The client's own settings from the app, e.g. {"equipment": ["dumbbells", "bands"]} for homework.
+alter table public.client_access add column if not exists prefs jsonb not null default '{}'::jsonb;
 drop policy if exists "own client access" on public.client_access;
 create policy "own client access" on public.client_access for all to authenticated
   using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));

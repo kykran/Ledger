@@ -130,7 +130,7 @@ export function clientProgramView({ client, trainerName, programs, exercises, lo
   const used = new Set();
   for (const p of active) for (const w of p.weeks || []) for (const s of w.sessions || []) for (const r of s.rows || []) if (r.exId && lib[r.exId]) used.add(r.exId);
   const ex = {};
-  for (const id of used){ const e = lib[id]; ex[id] = { name: e.name, cues: e.cues || "", video: e.videoPath ? (videoUrls[e.videoPath] || "") : (e.videoUrl || "") }; }
+  for (const id of used){ const e = lib[id]; ex[id] = { name: e.name, equipment: e.equipment || "", cues: e.cues || "", video: e.videoPath ? (videoUrls[e.videoPath] || "") : (e.videoUrl || "") }; }
   const sex = client.sex, by = client.birthYear;
   const meas = (measurements || []).map(m => ({ date: String(m.taken_on).slice(0, 10), weight: m.weight != null ? Number(m.weight) : null,
     bodyFat: m.body_fat != null ? Number(m.body_fat) : bodyFat4(m, sex, ageOn(by, m.taken_on)), source: m.source })).sort((a, b) => a.date.localeCompare(b.date));
@@ -681,7 +681,7 @@ const LABEL = { squat: "squat", hinge: "hinge (deadlift)", push: "push (bench an
 /* A homework workout that fits between the client's last session and their next one:
  * accessories for the main lifts in those sessions, the patterns they skip (balance), and single-leg and core stability.
  * last/next: sessions ({name, rows}) or null. library: the trainer's exercises (names are matched so videos show). seed varies the pick. */
-export function suggestWorkout({ last, next, library = [], seed = 0 }){
+export function suggestWorkout({ last, next, library = [], seed = 0, equipment = null }){
   const rowsOf = s => (s && s.rows || []).filter(r => r.name);
   const near = [...rowsOf(last), ...rowsOf(next)];
   const hit = new Set(near.map(r => patternOf(r.name)).filter(Boolean));
@@ -702,7 +702,9 @@ export function suggestWorkout({ last, next, library = [], seed = 0 }){
   out.forEach((r, i) => { r.id = pid("r"); r.group = String.fromCharCode(65 + Math.floor(i / 2)) + (i % 2 + 1); });
   const focus = primaries.slice(0, 2).map(p => LABEL[p].replace(/ \(.*/, ""));
   const why = `${last ? `Last session: ${last.name}.` : ""}${next ? ` Next: ${next.name}.` : ""} This adds ${focus.length ? `accessories for your ${focus.join(" and ")}` : "whole-body work"}${missing.length ? `, some ${missing.slice(0, 2).map(p => LABEL[p].replace(/ \(.*/, "")).join(" and ")} for balance` : ""}, plus single-leg and core control. About 30 minutes.`.trim();
-  return { name: "Balance + accessories", notes: "", rows: out, why };
+  // Fit it to the client's equipment: anything they can't do becomes an equivalent (the note stays, the swap isn't flagged).
+  const rows = equipment ? adaptRows(out, equipment, { library, seed }).map(r => { const { swappedFrom, cantDo, ...x } = r; return x; }).filter((r, i, a) => a.findIndex(y => y.name === r.name) === i) : out;
+  return { name: "Balance + accessories", notes: "", rows, why };
 }
 
 /* Puts workouts a client added (client_workouts rows: {id, program_id, on_date, data:{name, notes, rows}}) into the program's weeks
@@ -714,4 +716,58 @@ export function withClientWorkouts(p, cws){
     if (wi < 0 || wi >= q.weeks.length) continue;
     q.weeks[wi].sessions.push({ ...(w.data || {}), id: w.id, homework: true, byClient: true, on: String(w.on_date).slice(0, 10), day: d.getDay(), rows: ((w.data || {}).rows || []) }); }
   return q;
+}
+
+/* ---------- equipment the client has at home, and swapping to equivalents ---------- */
+export const EQUIPMENT = [["bodyweight", "Just my body"], ["dumbbells", "Dumbbells"], ["kettlebell", "Kettlebell"], ["bands", "Bands"], ["bench", "Bench"], ["pullup", "Pull-up bar"], ["box", "Box or step"], ["barbell", "Barbell"], ["gym", "Gym machines"]];
+// Equivalents by movement. need: any one of these sets of equipment is enough.
+const ALTS = [
+  ["squat", "Goblet Squat", [["dumbbells"], ["kettlebell"]], "10"], ["squat", "Bodyweight Squat", [["bodyweight"]], "15"], ["squat", "Reverse Lunge", [["bodyweight"]], "8 each"],
+  ["squat", "Split Squat", [["bodyweight"]], "8 each"], ["squat", "Bulgarian Split Squat", [["dumbbells", "bench"], ["bench"]], "8 each"], ["squat", "Step-Up", [["box"], ["bench"]], "8 each"],
+  ["squat", "Band Squat", [["bands"]], "12"], ["squat", "Back Squat", [["barbell"]], "6-8"], ["squat", "Leg Press", [["gym"]], "10-12"],
+  ["hinge", "Single-Leg RDL", [["dumbbells"], ["kettlebell"], ["bodyweight"]], "8 each"], ["hinge", "Glute Bridge", [["bodyweight"]], "12"], ["hinge", "Single-Leg Glute Bridge", [["bodyweight"]], "10 each"],
+  ["hinge", "Kettlebell Swing", [["kettlebell"]], "15"], ["hinge", "Dumbbell RDL", [["dumbbells"]], "10"], ["hinge", "Band Good Morning", [["bands"]], "12"], ["hinge", "Romanian Deadlift", [["barbell"]], "8"],
+  ["hinge", "Hamstring Curl", [["gym"]], "10-12"],
+  ["push", "Push-Up", [["bodyweight"]], "10-15"], ["push", "Incline Push-Up", [["bodyweight"]], "12"], ["push", "Dumbbell Floor Press", [["dumbbells"]], "10"],
+  ["push", "Dumbbell Bench Press", [["dumbbells", "bench"]], "8-10"], ["push", "Band Chest Press", [["bands"]], "12"], ["push", "Half-Kneeling Dumbbell Press", [["dumbbells"], ["kettlebell"]], "8 each"],
+  ["push", "Pike Push-Up", [["bodyweight"]], "8"], ["push", "Bench Press", [["barbell", "bench"]], "6-8"],
+  ["pull", "One-Arm Dumbbell Row", [["dumbbells"], ["kettlebell"]], "10 each"], ["pull", "Band Row", [["bands"]], "12"], ["pull", "Band Pull-Apart", [["bands"]], "15"],
+  ["pull", "Prone Y-T-W", [["bodyweight"]], "6 each"], ["pull", "Inverted Row", [["pullup"], ["gym"]], "8-12"], ["pull", "Pull-Up", [["pullup"]], "AMRAP"],
+  ["pull", "Face Pull", [["gym"], ["bands"]], "15"], ["pull", "Lat Pulldown", [["gym"]], "10"], ["pull", "Seated Cable Row", [["gym"]], "10-12"], ["pull", "Chest-Supported Row", [["dumbbells", "bench"]], "10"],
+  ["core", "Dead Bug", [["bodyweight"]], "8 each"], ["core", "Side Plank", [["bodyweight"]], "20-30s each"], ["core", "Plank", [["bodyweight"]], "30-45s"], ["core", "Bird Dog", [["bodyweight"]], "8 each"],
+  ["core", "Pallof Press", [["bands"], ["gym"]], "10 each"], ["core", "Suitcase Carry", [["dumbbells"], ["kettlebell"]], "30 yd each"], ["core", "Farmer Carry", [["dumbbells"], ["kettlebell"]], "40 yd"],
+  ["core", "Single-Leg Balance Reach", [["bodyweight"]], "6 each"]
+];
+const ALT_BY = Object.fromEntries(ALTS.map(a => [a[1].toLowerCase(), a]));
+/* What an exercise needs, from the list above, else the trainer's library (equipment field), else its name. */
+export function needOf(name, libEquip){
+  const a = ALT_BY[String(name || "").toLowerCase()]; if (a) return a[2];
+  const t = (String(libEquip || "") + " " + String(name || "")).toLowerCase();
+  if (/barbell|trap bar|back squat|front squat|deadlift(?!.*(dumbbell|kettlebell))/.test(t)) return [["barbell"]];
+  if (/cable|machine|pulldown|leg press|leg extension|smith/.test(t)) return [["gym"]];
+  if (/kettlebell|swing/.test(t)) return [["kettlebell"]];
+  if (/dumbbell|\bdb\b|goblet/.test(t)) return [["dumbbells"], ["kettlebell"]];
+  if (/band/.test(t)) return [["bands"]];
+  if (/pull-?up|chin-?up/.test(t)) return [["pullup"]];
+  if (/box|step-?up/.test(t)) return [["box"], ["bench"]];
+  return [["bodyweight"]];
+}
+export const canDo = (need, eq) => { const have = new Set(["bodyweight", ...(eq || [])]); return need.some(set => set.every(k => have.has(k))); };
+
+/* A homework's rows adjusted to today's equipment. Rows the client can't do get an equivalent for the same movement.
+ * vary (a repeat): every row that has another option swaps to it, so the workout isn't the same twice in a row.
+ * Each changed row keeps its id and sets, gets the new name and reps, and swappedFrom = the original name. */
+export function adaptRows(rows, eq, { library = [], vary = false, seed = 0 } = {}){
+  const lib = Object.fromEntries((library || []).filter(e => e && e.name).map(e => [e.name.toLowerCase(), e]));
+  const taken = new Set((rows || []).map(r => String(r.name || "").toLowerCase()));
+  return (rows || []).map((r, i) => {
+    const e = lib[String(r.name || "").toLowerCase()], ok = canDo(needOf(r.name, e && e.equipment), eq);
+    if (ok && !vary) return r;
+    const pat = patternOf(r.name) || (/carry|balance/i.test(r.name) ? "core" : "");
+    const opts = ALTS.filter(a => a[0] === pat && canDo(a[2], eq) && !taken.has(a[1].toLowerCase()));
+    if (!opts.length) return ok ? r : { ...r, cantDo: true };
+    const a = opts[(i + seed) % opts.length]; taken.add(a[1].toLowerCase());
+    const le = lib[a[1].toLowerCase()];
+    return { ...r, name: le ? le.name : a[1], exId: le ? le.id : null, reps: a[3], weight: "", swappedFrom: r.name };
+  });
 }

@@ -64,6 +64,7 @@ export default async function handler(req, res){
       const v = await programView(acc.user_id, acc.client_id);
       if (!v) return send(res, 404, { message: "This link has been turned off. Ask your trainer for a new one." });
       v.flags = await flagsFor(acc.user_id, acc.client_id);
+      v.prefs = acc.prefs || {};
       return send(res, 200, v);
     }
     if (req.method !== "POST") return send(res, 405, { message: "Method not allowed" });
@@ -105,6 +106,13 @@ export default async function handler(req, res){
       return send(res, 200, { ok: true });
     }
     if (!dev) return send(res, 401, { signin: true, message: "Enter your code again to continue." });
+    if (b.action === "prefs"){
+      const keep = ["bodyweight", "dumbbells", "kettlebell", "bands", "bench", "pullup", "box", "barbell", "gym"];
+      const equipment = (Array.isArray(b.equipment) ? b.equipment : []).filter(k => keep.includes(k));
+      const { error } = await admin.from("client_access").update({ prefs: { ...(acc.prefs || {}), equipment } }).eq("key", acc.key);
+      if (error) throw error;
+      return send(res, 200, { ok: true });
+    }
     const r = await clientAction(acc.user_id, acc.client_id, b, { flags: true });
     return send(res, r.status, r.body);
   } catch (e){

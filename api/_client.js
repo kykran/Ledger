@@ -62,7 +62,7 @@ export async function clientAction(uid, cid, b, { flags = false } = {}){
     const now = new Date().toISOString(), on = day(b.logged_on);
     const sets = (Array.isArray(b.sets) ? b.sets : []).slice(0, 200).filter(s => rows[s.row_id] && Number.isInteger(+s.set_no) && +s.set_no >= 1 && +s.set_no <= 12);
     const up = sets.map(s => ({ user_id: uid, program_id: pr.id, session_id: found.session.id, row_id: s.row_id, set_no: +s.set_no, client_id: cid,
-      ex_name: String(rows[s.row_id].name || "").slice(0, 120), reps: numOrNull(s.reps), weight: numOrNull(s.weight), timed: timedPlan(rows[s.row_id]), done: !!s.done, logged_on: on, source: "client", updated_at: now }));
+      ex_name: String((b.swaps && typeof b.swaps[s.row_id] === "string" && b.swaps[s.row_id]) || rows[s.row_id].name || "").slice(0, 120), reps: numOrNull(s.reps), weight: numOrNull(s.weight), timed: timedPlan(rows[s.row_id]), done: !!s.done, logged_on: on, source: "client", updated_at: now }));
     if (up.length){ const { error } = await admin.from("program_logs").upsert(up); if (error) throw error; }
     return { status: 200, body: { ok: true, saved: up.length } };
   }
@@ -125,7 +125,8 @@ async function suggestFor(uid, cid, b){
   const library = (exs || []).map(r => ({ id: r.id, ...r.data }));
   const find = id => { const f = id && findSession(pr.data, String(id)); return f ? f.session : null; };
   const last = find(b.last_id), next = find(b.next_id), seed = Math.max(0, Math.min(20, +b.seed || 0));
-  const base = suggestWorkout({ last, next, library, seed });
+  const equipment = Array.isArray(b.equipment) ? b.equipment.map(String).slice(0, 12) : null;
+  const base = suggestWorkout({ last, next, library, seed, equipment });
   if (!process.env.ANTHROPIC_API_KEY) return { workout: base, by: "planner" };
   try {
     const notes = (cl && cl.data && cl.data.programNotes) || "none";
@@ -139,7 +140,8 @@ Next session with the trainer: ${fmt(next)}
 Trainer's notes on this client (injuries, limits, goals): ${notes}
 Exercise library (use these exact names when they fit): ${library.map(e => e.name).join(", ")}
 
-Write a 25-35 minute homework workout, 4-6 exercises, minimal equipment, that balances their week: accessories that support the primary lifts in those sessions, the movement patterns those sessions skip, and single-leg and core stability. Don't repeat heavy work that would leave them sore for the next session. Never program anything the trainer's notes make risky. Address the client in "why" (no jargon). Call homework_workout.`;
+Equipment they have today: ${equipment ? ["bodyweight", ...equipment].join(", ") : "bodyweight and light dumbbells"}. Use only this.
+Write a 25-35 minute homework workout, 4-6 exercises, that balances their week: accessories that support the primary lifts in those sessions, the movement patterns those sessions skip, and single-leg and core stability. Don't repeat heavy work that would leave them sore for the next session. Never program anything the trainer's notes make risky. Address the client in "why" (no jargon). Call homework_workout.`;
     const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST",
       headers: { "content-type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({ model: process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001", max_tokens: 2000, tools: [tool], tool_choice: { type: "tool", name: tool.name }, messages: [{ role: "user", content: prompt }] }) });

@@ -84,6 +84,12 @@
     .card.studio{border-left:4px solid var(--accent)} .card.hw{border-left:4px solid var(--good)}
     .kind{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--accent);margin-bottom:-6px} .card.hw .kind{color:var(--good)}
     .linkbtn{border:0;background:none;padding:0;color:var(--accent);font-weight:600;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+    .eq{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--bg)}
+    .eq-h{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-size:13.5px}
+    .eq-c,.eq-opts{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+    .chip{font:inherit;font-size:13px;min-height:34px;padding:5px 12px;border-radius:20px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer}
+    .chip[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+    .note.swap{color:var(--accent);font-weight:600}
     .signin{gap:14px;margin-top:8vh;text-align:left}
     .code{font-size:34px;letter-spacing:.5em;text-align:center;padding:12px 10px 12px 26px;border:1.5px solid var(--line);background:var(--bg);border-radius:14px;width:100%;font-weight:700}
     .code:focus{outline:none;border-color:var(--accent)}
