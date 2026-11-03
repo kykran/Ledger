@@ -138,7 +138,12 @@ export const adapter = {
     sharing: {
       async ready(){ const { error } = await sb.from("program_shares").select("program_id").limit(1); return !error; },
       async list(programId){ const { data, error } = await sb.from("program_shares").select("shared_email,created_at").eq("owner_id", session.user.id).eq("program_id", programId); if (error) throw fail(error); return data || []; },
-      async add(p, email, clientName, ownerName){ const { error } = await sb.from("program_shares").upsert({ owner_id: session.user.id, program_id: p.id, shared_email: email.trim().toLowerCase(), client_id: p.clientId, client_name: clientName, program_name: p.name || "", owner_name: ownerName || "" }); if (error) throw fail(error); },
+      async add(p, email, clientName, ownerName){
+        const row = { owner_id: session.user.id, program_id: p.id, shared_email: email.trim().toLowerCase(), client_id: p.clientId, client_name: clientName, program_name: p.name || "", owner_name: ownerName || "" };
+        // owner_email lets the other trainer share their own program for the same client back (older databases lack the column).
+        let { error } = await sb.from("program_shares").upsert({ ...row, owner_email: (session.user.email || "").toLowerCase() });
+        if (error && /owner_email/.test(error.message || "")) ({ error } = await sb.from("program_shares").upsert(row));
+        if (error) throw fail(error); },
       async remove(programId, email){ const { error } = await sb.from("program_shares").delete().eq("owner_id", session.user.id).eq("program_id", programId).eq("shared_email", email); if (error) throw fail(error); },
       // Programs other trainers shared with me, plus the exercises they use.
       async withMe(){
@@ -148,7 +153,7 @@ export const adapter = {
         const programs = [], exercises = [];
         for (const s of sh || []){
           const { data } = await sb.from("programs").select("id,client_id,data,updated_at").eq("user_id", s.owner_id).eq("id", s.program_id).maybeSingle();
-          if (data) programs.push({ ...data.data, id: data.id, clientId: data.client_id, updatedAt: data.updated_at, ownerId: s.owner_id, ownerName: s.owner_name, shared: true, clientName: s.client_name });
+          if (data) programs.push({ ...data.data, id: data.id, clientId: data.client_id, updatedAt: data.updated_at, ownerId: s.owner_id, ownerName: s.owner_name, ownerEmail: s.owner_email || "", shared: true, clientName: s.client_name });
         }
         for (const owner of [...new Set((sh || []).map(s => s.owner_id))]){
           const { data } = await sb.from("exercises").select("id,data").eq("user_id", owner);
