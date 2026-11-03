@@ -32,6 +32,10 @@
       "destination": "/program.html"
     },
     {
+      "source": "/c/:key",
+      "destination": "/program.html"
+    },
+    {
       "source": "/programs",
       "destination": "/programs.html"
     }

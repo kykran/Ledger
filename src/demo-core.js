@@ -9,7 +9,12 @@ export function demoAdapter(){
   let profile = D.profile;
   let clients = D.clients;
   const wait = ms => new Promise(r => setTimeout(r, ms));
-  let outbox = null; const links = {}; const signoffs = [];
+  let outbox = null; const links = {}; const signoffs = []; const access = {}; let flags = null;
+  // Two sample questions from clients, on real sample session dates.
+  const demoFlags = () => { const M = demoModel(D, profile, clients), past = id => (M.stats[id] ? M.stats[id].past : []);
+    const at = (id, back) => { const p = past(id); return p.length > back ? p[p.length - 1 - back].date.toISOString() : null; };
+    return [{ id: "f1", client_id: "maya", session_at: at("maya", 1), reason: "Canceled early", note: "We stopped at 6:30, I had to pick up my son.", created_at: new Date(Date.now() - 3 * 3600000).toISOString(), resolved_at: null, reply: "" },
+      { id: "f2", client_id: "priya", session_at: at("priya", 4), reason: "Session never happened", note: "", created_at: new Date(Date.now() - 26 * 3600000).toISOString(), resolved_at: null, reply: "" }].filter(f => f.session_at); };
   return {
     name: "demo",
     calendar: {
@@ -46,6 +51,17 @@ export function demoAdapter(){
       async get(id){ return links[id] || null; },
       async create(id){ links[id] = { token: "demo", url: "/client.html?demo=" + encodeURIComponent(id) }; return links[id]; },
       async revoke(id){ delete links[id]; }
+    },
+    access: {
+      async get(id){ return access[id] || null; },
+      async make(id){ const code = String(Math.floor(Math.random() * 10000)).padStart(4, "0");
+        access[id] = { ...(access[id] || { key: "demo-" + id, url: location.origin + "/program.html?demo=" + encodeURIComponent(id) + "&app", lastLoginAt: null }), code, expiresAt: new Date(Date.now() + 30 * 864e5).toISOString() }; return clone(access[id]); },
+      async off(id){ delete access[id]; }
+    },
+    flags: {
+      async list(){ if (!flags) flags = demoFlags(); return clone(flags); },
+      async resolve(id, reply){ const f = flags.find(x => x.id === id); if (f){ f.resolved_at = new Date().toISOString(); f.reply = reply || ""; } },
+      async reopen(id){ const f = flags.find(x => x.id === id); if (f){ f.resolved_at = null; f.reply = ""; } }
     },
     studio: {
       url: "/demo-studio.html",

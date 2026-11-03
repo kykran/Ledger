@@ -124,18 +124,18 @@ export const VIDEO_CSS = `.vid{position:relative;width:100%;aspect-ratio:16/9;ba
 
 /* What a client sees on their program page. Shared by /api/program and the demo page.
  * Only exercises used in the client's programs are sent; videoUrls maps a stored video path to a signed URL. */
-export function clientProgramView({ client, trainerName, programs, exercises, logs, measurements, videoUrls = {} }){
+export function clientProgramView({ client, trainerName, programs, exercises, logs, measurements, videoUrls = {}, clientWorkouts = [] }){
   const lib = Object.fromEntries((exercises || []).map(e => [e.id, e]));
-  const active = (programs || []).filter(p => p.status !== "archived").sort((a, b) => String(b.startDate || "").localeCompare(String(a.startDate || "")));
+  const active = (programs || []).filter(p => p.status !== "archived").map(p => withClientWorkouts(p, clientWorkouts)).sort((a, b) => String(b.startDate || "").localeCompare(String(a.startDate || "")));
   const used = new Set();
   for (const p of active) for (const w of p.weeks || []) for (const s of w.sessions || []) for (const r of s.rows || []) if (r.exId && lib[r.exId]) used.add(r.exId);
   const ex = {};
-  for (const id of used){ const e = lib[id]; ex[id] = { name: e.name, cues: e.cues || "", video: e.videoPath ? (videoUrls[e.videoPath] || "") : (e.videoUrl || "") }; }
+  for (const id of used){ const e = lib[id]; ex[id] = { name: e.name, equipment: e.equipment || "", cues: e.cues || "", video: e.videoPath ? (videoUrls[e.videoPath] || "") : (e.videoUrl || "") }; }
   const sex = client.sex, by = client.birthYear;
   const meas = (measurements || []).map(m => ({ date: String(m.taken_on).slice(0, 10), weight: m.weight != null ? Number(m.weight) : null,
     bodyFat: m.body_fat != null ? Number(m.body_fat) : bodyFat4(m, sex, ageOn(by, m.taken_on)), source: m.source })).sort((a, b) => a.date.localeCompare(b.date));
   const strip = p => ({ id: p.id, name: p.name, startDate: p.startDate, weekStart: p.weekStart, weeks: (p.weeks || []).map(w => ({ id: w.id, label: w.label,
-    sessions: (w.sessions || []).map(s => ({ id: s.id, name: s.name, homework: !!s.homework, notes: s.notes || "",
+    sessions: (w.sessions || []).map(s => ({ id: s.id, name: s.name, homework: !!s.homework, ...(s.wasSession && s.homework ? { wasSession: true } : {}), ...(s.byClient ? { byClient: true, on: s.on } : {}), ...(s.day != null && s.day !== "" ? { day: +s.day } : {}), notes: s.notes || "",
       rows: (s.rows || []).filter(r => r.name || r.exId).map(r => ({ id: r.id, exId: r.exId && ex[r.exId] ? r.exId : null, name: (r.exId && ex[r.exId] && ex[r.exId].name) || r.name, group: r.group || "", sets: r.sets || "", reps: r.reps || "", weight: r.weight || "", note: r.note || "" })) })) })) });
   return {
     first: String(client.name || "").trim().split(/[\s+&]/)[0] || "there", trainer: trainerName || "",
@@ -654,4 +654,120 @@ export function sessionBrief({ session, logs = [], notes = "", billing = null, b
     else if (billing.status === "low") flags.push({ text: `${left} session${left === 1 ? "" : "s"} left in the package`, tone: "info" });
   } else if (billing && billing.status === "owes") flags.push({ text: billing.label || "Owes money", tone: "warn" });
   return { lines, flags };
+}
+
+/* ---------- workouts a client adds from their app ---------- */
+/* Main movement patterns, read from exercise names. */
+const PATTERNS = [
+  ["squat", /squat|leg press|lunge|step-?up|wall sit/i],
+  ["hinge", /deadlift|rdl|hip thrust|bridge|swing|good ?morning|hamstring|back extension/i],
+  ["push", /bench|press|push-?up|dip/i],
+  ["pull", /row|pull-?up|chin-?up|pulldown|face pull|pull-?apart/i],
+  ["core", /plank|dead ?bug|pallof|bird ?dog|carry|crunch|rollout|hollow/i]
+];
+const PRIMARY = { squat: /back squat|front squat|goblet squat|leg press|trap bar/i, hinge: /deadlift|rdl|hip thrust/i, push: /bench|overhead press|incline/i, pull: /pull-?up|row|pulldown/i };
+export const patternOf = name => (PATTERNS.find(([, re]) => re.test(name || "")) || [""])[0];
+// Accessories that support each main lift, doable with little equipment, and balance work. First listed is preferred.
+const ACCESSORY = {
+  squat: [["Bulgarian Split Squat", "3", "8 each"], ["Step-Up", "3", "8 each"], ["Reverse Lunge", "3", "8 each"]],
+  hinge: [["Single-Leg RDL", "3", "8 each"], ["Glute Bridge", "3", "12"], ["Bird Dog", "2", "8 each"]],
+  push: [["Push-Up", "3", "10-15"], ["Half-Kneeling Dumbbell Press", "3", "8 each"]],
+  pull: [["One-Arm Dumbbell Row", "3", "10 each"], ["Inverted Row", "3", "8-12"], ["Face Pull", "3", "15"]]
+};
+const BALANCE = { squat: ["Goblet Squat", "3", "10"], hinge: ["Glute Bridge", "3", "12"], push: ["Push-Up", "3", "10-15"], pull: ["One-Arm Dumbbell Row", "3", "10 each"] };
+const STABILITY = [["Side Plank", "3", "20-30s each"], ["Dead Bug", "3", "8 each"], ["Single-Leg Balance Reach", "2", "6 each"], ["Suitcase Carry", "3", "30 yd each"]];
+const LABEL = { squat: "squat", hinge: "hinge (deadlift)", push: "push (bench and press)", pull: "pull (rows)" };
+
+/* A homework workout that fits between the client's last session and their next one:
+ * accessories for the main lifts in those sessions, the patterns they skip (balance), and single-leg and core stability.
+ * last/next: sessions ({name, rows}) or null. library: the trainer's exercises (names are matched so videos show). seed varies the pick. */
+export function suggestWorkout({ last, next, library = [], seed = 0, equipment = null }){
+  const rowsOf = s => (s && s.rows || []).filter(r => r.name);
+  const near = [...rowsOf(last), ...rowsOf(next)];
+  const hit = new Set(near.map(r => patternOf(r.name)).filter(Boolean));
+  const primaries = [...new Set(near.filter(r => { const p = patternOf(r.name); return PRIMARY[p] && PRIMARY[p].test(r.name); }).map(r => patternOf(r.name)))];
+  const used = new Set(near.map(r => r.name.toLowerCase()));
+  const lib = Object.fromEntries((library || []).filter(e => e && e.name).map(e => [e.name.toLowerCase(), e]));
+  const out = [], take = ([name, sets, reps], why) => { if (out.some(r => r.name.toLowerCase() === name.toLowerCase())) return false;
+    const e = lib[name.toLowerCase()]; out.push({ name: e ? e.name : name, exId: e ? e.id : null, sets, reps, weight: "", note: why }); return true; };
+  const rot = (list, k) => list.map((_, i) => list[(i + k) % list.length]);
+  // 1. Accessories for each main lift (skipping exercises they already do in those sessions).
+  for (const p of primaries.slice(0, 2)) for (const a of rot(ACCESSORY[p], seed)) if (!used.has(a[0].toLowerCase()) && take(a, "Supports your " + LABEL[p])) break;
+  // 2. Balance: a pattern neither session covers.
+  const missing = ["pull", "hinge", "squat", "push"].filter(p => !hit.has(p));
+  for (const p of rot(missing, seed).slice(0, primaries.length ? 1 : 2)) take(BALANCE[p], "Balances out the week");
+  // 3. Stability: one single-side or anti-rotation piece and one core piece.
+  let k = 0; for (const s of rot(STABILITY, seed)) if (k < 2 && !used.has(s[0].toLowerCase()) && take(s, "Balance and core control")) k++;
+  while (out.length < 4){ const a = rot(ACCESSORY.pull, seed + out.length)[0]; if (!take(a, "Balances out the week")) break; }
+  out.forEach((r, i) => { r.id = pid("r"); r.group = String.fromCharCode(65 + Math.floor(i / 2)) + (i % 2 + 1); });
+  const focus = primaries.slice(0, 2).map(p => LABEL[p].replace(/ \(.*/, ""));
+  const why = `${last ? `Last session: ${last.name}.` : ""}${next ? ` Next: ${next.name}.` : ""} This adds ${focus.length ? `accessories for your ${focus.join(" and ")}` : "whole-body work"}${missing.length ? `, some ${missing.slice(0, 2).map(p => LABEL[p].replace(/ \(.*/, "")).join(" and ")} for balance` : ""}, plus single-leg and core control. About 30 minutes.`.trim();
+  // Fit it to the client's equipment: anything they can't do becomes an equivalent (the note stays, the swap isn't flagged).
+  const rows = equipment ? adaptRows(out, equipment, { library, seed }).map(r => { const { swappedFrom, cantDo, ...x } = r; return x; }).filter((r, i, a) => a.findIndex(y => y.name === r.name) === i) : out;
+  return { name: "Balance + accessories", notes: "", rows, why };
+}
+
+/* Puts workouts a client added (client_workouts rows: {id, program_id, on_date, data:{name, notes, rows}}) into the program's weeks
+ * as homework on their day, marked byClient. Returns a copy; the program itself isn't changed. */
+export function withClientWorkouts(p, cws){
+  const mine = (cws || []).filter(w => w.program_id === p.id); if (!mine.length || !p.startDate) return p;
+  const q = { ...p, weeks: (p.weeks || []).map(w => ({ ...w, sessions: [...(w.sessions || [])] })) }, z = weekZero(p);
+  for (const w of mine){ const d = parseYmd(String(w.on_date).slice(0, 10)), wi = Math.floor((d - z) / (7 * DAYMS) + 0.01);
+    if (wi < 0 || wi >= q.weeks.length) continue;
+    q.weeks[wi].sessions.push({ ...(w.data || {}), id: w.id, homework: true, byClient: true, on: String(w.on_date).slice(0, 10), day: d.getDay(), rows: ((w.data || {}).rows || []) }); }
+  return q;
+}
+
+/* ---------- equipment the client has at home, and swapping to equivalents ---------- */
+export const EQUIPMENT = [["bodyweight", "Just my body"], ["dumbbells", "Dumbbells"], ["kettlebell", "Kettlebell"], ["bands", "Bands"], ["bench", "Bench"], ["pullup", "Pull-up bar"], ["box", "Box or step"], ["barbell", "Barbell"], ["gym", "Gym machines"]];
+// Equivalents by movement. need: any one of these sets of equipment is enough.
+const ALTS = [
+  ["squat", "Goblet Squat", [["dumbbells"], ["kettlebell"]], "10"], ["squat", "Bodyweight Squat", [["bodyweight"]], "15"], ["squat", "Reverse Lunge", [["bodyweight"]], "8 each"],
+  ["squat", "Split Squat", [["bodyweight"]], "8 each"], ["squat", "Bulgarian Split Squat", [["dumbbells", "bench"], ["bench"]], "8 each"], ["squat", "Step-Up", [["box"], ["bench"]], "8 each"],
+  ["squat", "Band Squat", [["bands"]], "12"], ["squat", "Back Squat", [["barbell"]], "6-8"], ["squat", "Leg Press", [["gym"]], "10-12"],
+  ["hinge", "Single-Leg RDL", [["dumbbells"], ["kettlebell"], ["bodyweight"]], "8 each"], ["hinge", "Glute Bridge", [["bodyweight"]], "12"], ["hinge", "Single-Leg Glute Bridge", [["bodyweight"]], "10 each"],
+  ["hinge", "Kettlebell Swing", [["kettlebell"]], "15"], ["hinge", "Dumbbell RDL", [["dumbbells"]], "10"], ["hinge", "Band Good Morning", [["bands"]], "12"], ["hinge", "Romanian Deadlift", [["barbell"]], "8"],
+  ["hinge", "Hamstring Curl", [["gym"]], "10-12"],
+  ["push", "Push-Up", [["bodyweight"]], "10-15"], ["push", "Incline Push-Up", [["bodyweight"]], "12"], ["push", "Dumbbell Floor Press", [["dumbbells"]], "10"],
+  ["push", "Dumbbell Bench Press", [["dumbbells", "bench"]], "8-10"], ["push", "Band Chest Press", [["bands"]], "12"], ["push", "Half-Kneeling Dumbbell Press", [["dumbbells"], ["kettlebell"]], "8 each"],
+  ["push", "Pike Push-Up", [["bodyweight"]], "8"], ["push", "Bench Press", [["barbell", "bench"]], "6-8"],
+  ["pull", "One-Arm Dumbbell Row", [["dumbbells"], ["kettlebell"]], "10 each"], ["pull", "Band Row", [["bands"]], "12"], ["pull", "Band Pull-Apart", [["bands"]], "15"],
+  ["pull", "Prone Y-T-W", [["bodyweight"]], "6 each"], ["pull", "Inverted Row", [["pullup"], ["gym"]], "8-12"], ["pull", "Pull-Up", [["pullup"]], "AMRAP"],
+  ["pull", "Face Pull", [["gym"], ["bands"]], "15"], ["pull", "Lat Pulldown", [["gym"]], "10"], ["pull", "Seated Cable Row", [["gym"]], "10-12"], ["pull", "Chest-Supported Row", [["dumbbells", "bench"]], "10"],
+  ["core", "Dead Bug", [["bodyweight"]], "8 each"], ["core", "Side Plank", [["bodyweight"]], "20-30s each"], ["core", "Plank", [["bodyweight"]], "30-45s"], ["core", "Bird Dog", [["bodyweight"]], "8 each"],
+  ["core", "Pallof Press", [["bands"], ["gym"]], "10 each"], ["core", "Suitcase Carry", [["dumbbells"], ["kettlebell"]], "30 yd each"], ["core", "Farmer Carry", [["dumbbells"], ["kettlebell"]], "40 yd"],
+  ["core", "Single-Leg Balance Reach", [["bodyweight"]], "6 each"]
+];
+const ALT_BY = Object.fromEntries(ALTS.map(a => [a[1].toLowerCase(), a]));
+/* What an exercise needs, from the list above, else the trainer's library (equipment field), else its name. */
+export function needOf(name, libEquip){
+  const a = ALT_BY[String(name || "").toLowerCase()]; if (a) return a[2];
+  const t = (String(libEquip || "") + " " + String(name || "")).toLowerCase();
+  if (/barbell|trap bar|back squat|front squat|deadlift(?!.*(dumbbell|kettlebell))/.test(t)) return [["barbell"]];
+  if (/cable|machine|pulldown|leg press|leg extension|smith/.test(t)) return [["gym"]];
+  if (/kettlebell|swing/.test(t)) return [["kettlebell"]];
+  if (/dumbbell|\bdb\b|goblet/.test(t)) return [["dumbbells"], ["kettlebell"]];
+  if (/band/.test(t)) return [["bands"]];
+  if (/pull-?up|chin-?up/.test(t)) return [["pullup"]];
+  if (/box|step-?up/.test(t)) return [["box"], ["bench"]];
+  return [["bodyweight"]];
+}
+export const canDo = (need, eq) => { const have = new Set(["bodyweight", ...(eq || [])]); return need.some(set => set.every(k => have.has(k))); };
+
+/* A homework's rows adjusted to today's equipment. Rows the client can't do get an equivalent for the same movement.
+ * vary (a repeat): every row that has another option swaps to it, so the workout isn't the same twice in a row.
+ * Each changed row keeps its id and sets, gets the new name and reps, and swappedFrom = the original name. */
+export function adaptRows(rows, eq, { library = [], vary = false, seed = 0 } = {}){
+  const lib = Object.fromEntries((library || []).filter(e => e && e.name).map(e => [e.name.toLowerCase(), e]));
+  const taken = new Set((rows || []).map(r => String(r.name || "").toLowerCase()));
+  return (rows || []).map((r, i) => {
+    const e = lib[String(r.name || "").toLowerCase()], ok = canDo(needOf(r.name, e && e.equipment), eq);
+    if (ok && !vary) return r;
+    const pat = patternOf(r.name) || (/carry|balance/i.test(r.name) ? "core" : "");
+    const opts = ALTS.filter(a => a[0] === pat && canDo(a[2], eq) && !taken.has(a[1].toLowerCase()));
+    if (!opts.length) return ok ? r : { ...r, cantDo: true };
+    const a = opts[(i + seed) % opts.length]; taken.add(a[1].toLowerCase());
+    const le = lib[a[1].toLowerCase()];
+    return { ...r, name: le ? le.name : a[1], exId: le ? le.id : null, reps: a[3], weight: "", swappedFrom: r.name };
+  });
 }
