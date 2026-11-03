@@ -47,7 +47,7 @@ const myClients = () => C.S.allClients || C.S.clients || [];
 const twinOf = p => p.clientName ? myClients().find(c => [c.name, ...(c.aliases || [])].some(n => nameKey(n) === nameKey(p.clientName))) : null;
 const sharedClients = () => { const out = {}; for (const p of PG.shared){ if (twinOf(p)) continue; const id = "sh:" + p.ownerId + ":" + p.clientId; out[id] = out[id] || { id, name: p.clientName || "Client", shared: true, ownerId: p.ownerId, ownerName: p.ownerName, realId: p.clientId }; } return Object.values(out); };
 const client = id => myClients().find(c => c.id === id) || sharedClients().find(c => c.id === id);
-const progsOf = c => c.shared ? PG.shared.filter(p => p.ownerId === c.ownerId && p.clientId === c.realId) : [...PG.shared.filter(p => twinOf(p) === c), ...(PG.progs || []).filter(p => p.clientId === c.id)];
+const progsOf = c => c.shared ? PG.shared.filter(p => p.ownerId === c.ownerId && p.clientId === c.realId) : [...(PG.progs || []).filter(p => p.clientId === c.id), ...PG.shared.filter(p => twinOf(p) === c)];
 /* Plan mode can show several weeks at once: lookups prefer the week you're working in (PG.week). */
 const inWk = sel => document.querySelector(`#main [data-wk="${PG.week}"] ${sel}`) || document.querySelector(`#main ${sel}`);
 function wkFrom(el){ const w = el && el.closest && el.closest("[data-wk]"); if (w) PG.week = +w.getAttribute("data-wk"); }
@@ -81,6 +81,7 @@ async function load(){
       const sh = C.A.programs.sharing;
       PG.sharing = sh ? await sh.ready().catch(() => false) : false;
       if (PG.sharing){ try { const w = await sh.withMe(); PG.shared = w.programs; PG.sharedLib = w.exercises; } catch (e){} }
+      if (PG.sharing) shareBack().catch(() => {});
       if (!lib.length && !(C.S.prof && C.S.prof.programsSeeded)){
         const list = STARTER_EXERCISES.map(e => ({ id: pid("ex"), ...e }));
         await C.A.programs.saveExercises(list); PG.lib = list;
@@ -89,6 +90,18 @@ async function load(){
     }
   } catch (e){ PG.ready = { ok: false, code: "unavailable", message: e.message }; }
   PG.loading = false; redraw();
+}
+/* A client two trainers both have: when the other trainer shares their program for her with me, my own programs
+ * for her are shared back to them, so the Calendar shows both trainers' workouts to both of us. */
+async function shareBack(){
+  const sh = C.A.programs.sharing, done = new Set();
+  for (const sp of PG.shared){
+    const c = twinOf(sp), to = (sp.ownerEmail || "").toLowerCase(); if (!c || !to || done.has(c.id + to)) continue; done.add(c.id + to);
+    for (const mine of (PG.progs || []).filter(q => q.clientId === c.id && q.status !== "archived" && !q.imported)){
+      const have = await sh.list(mine.id).catch(() => null); if (!have || have.some(x => (x.shared_email || "").toLowerCase() === to)) continue;
+      await sh.add(mine, to, c.name, (C.S.prof && C.S.prof.trainerName) || "").catch(() => {});
+    }
+  }
 }
 async function loadClient(id){
   try {
@@ -414,11 +427,26 @@ function renderCalendar(c, p){
   const openEd = (x, when) => { const at = sess[x.id], wi = at.wi, si = W[wi].sessions.indexOf(x), keep = MODE;
     MODE = PG.calPlan ? "plan" : "record"; const ed = renderSession(p, wi, si, x); MODE = keep;
     return `<div class="pg-cal-open" data-wk="${wi}" id="pg-co-${esc(x.id)}"><div class="pg-cal-obar"><button class="btn sm ghost pg-cal-grip" data-cdrag="1" data-sid="${esc(x.id)}" data-w="${wi}" data-k="${esc(PG.calAt || "")}" title="Drag to another day" aria-label="Move ${esc(x.name)} to another day">⠿ Move</button>${when ? `<span class="small muted">${esc(when)}</span>` : ""}${PG.calPlan ? `<button class="btn sm primary" data-act="pg-cal-rec">✓ Done editing</button>` : ""}<button class="btn sm ghost" data-act="pg-cal-close" aria-label="Close ${esc(x.name)}">✕ Close</button></div>${ed}</div>`; };
+  // A client two trainers share: the other trainer's program shows here too, tagged with who wrote it.
+  const others = c && !c.shared ? progsOf(c).filter(q => q.id !== p.id && q.status !== "archived" && !q.imported && q.startDate && (q.weeks || []).length) : [];
+  const who = q => q.shared ? String(q.ownerName || "Other trainer").split(" ")[0] : "You", whoTag = q => others.length ? `<span class="pg-cal-who ${q.shared ? "them" : ""}">${esc(who(q))}</span>` : "";
+  const oSess = {}; others.forEach(q => (q.weeks || []).forEach((w, wi) => (w.sessions || []).forEach(x => { oSess[x.id] = { q, s: x, wi }; })));
+  const otherCard = (q, x, wi, done, k) => { const rows = (x.rows || []).filter(r => r.name), more = rows.length - 4;
+    return `<button class="pg-cal-s pg-cal-other ${done ? "done" : ""}" data-act="pg-cal-other" data-pid="${esc(q.id)}" data-w="${wi}" data-sid="${esc(x.id)}" data-k="${esc(k)}" aria-label="Open ${esc(who(q))}'s ${esc(x.name)}">
+      <span class="pg-cal-t">${done ? `<i aria-hidden="true">✓</i>` : ""}${whoTag(q)}<b>${esc(x.name)}</b></span>
+      ${rows.slice(0, 4).map(r => `<span class="pg-cal-ex ${grpClass(r.group)}"><span class="gchip">${esc(r.group || "·")}</span><span class="pg-cal-n">${esc(r.name)}</span><span class="muted">${esc(fmtSetsReps(r))}</span></span>`).join("")}
+      ${more > 0 ? `<span class="small muted">+${more} more</span>` : ""}</button>`; };
+  const othersOn = (dt, key) => { const out = [], seen = new Set();
+    for (const sid of logged[key] || []){ const o = oSess[sid]; if (o && !seen.has(sid)){ seen.add(sid); out.push(otherCard(o.q, o.s, o.wi, true, key)); } }
+    for (const q of others){ const qw = weeksSince(weekZero(q), dt), w = (q.weeks || [])[qw];
+      for (const x of (w && w.sessions) || []) if (!seen.has(x.id) && hasDay(x) && +x.day === dt.getDay() && (x.rows || []).some(r => r.name)){ seen.add(x.id); out.push(otherCard(q, x, qw, false, key)); }
+      if ((byDay[key] || []).length){ const hit = sessionForDate(q, dt, appts); if (hit && !seen.has(hit.session.id) && !(logged[key] && [...logged[key]].some(sid => oSess[sid] && oSess[sid].q === q))){ seen.add(hit.session.id); out.push(otherCard(q, hit.session, qw, false, key)); } } }
+    return out; };
   const card = (x, wi, done, when, k) => {
-    if (PG.calOpen === x.id && PG.calAt === k && !p.shared && sess[x.id]) return openEd(x, when);
+    if (PG.calOpen === x.id && PG.calAt === k && sess[x.id]) return openEd(x, when);
     const rows = (x.rows || []).filter(r => r.name), more = rows.length - 4;
     return `<button class="pg-cal-s ${done ? "done" : ""} ${x.homework ? "hw" : ""}" data-act="pg-cal-go" data-w="${wi}" data-sid="${esc(x.id)}" data-k="${esc(k)}" ${done || p.shared ? "" : `data-cdrag="1" title="Tap to open. Drag to another day."`} aria-label="Open ${esc(x.name)}">
-      <span class="pg-cal-t">${done ? `<i aria-hidden="true">✓</i>` : ""}${when ? `<span class="muted">${esc(when)}</span> ` : ""}<b>${esc(x.name)}</b></span>
+      <span class="pg-cal-t">${done ? `<i aria-hidden="true">✓</i>` : ""}${when ? `<span class="muted">${esc(when)}</span> ` : ""}${whoTag(p)}<b>${esc(x.name)}</b></span>
       ${rows.slice(0, 4).map(r => `<span class="pg-cal-ex ${grpClass(r.group)}"><span class="gchip">${esc(r.group || "·")}</span><span class="pg-cal-n">${esc(r.name)}</span><span class="muted">${esc(fmtSetsReps(r))}</span></span>`).join("")}
       ${more > 0 ? `<span class="small muted">+${more} more</span>` : rows.length ? "" : `<span class="small muted">empty</span>`}</button>`;
   };
@@ -436,8 +464,9 @@ function renderCalendar(c, p){
       for (const a of byDay[key] || []){
         const hit = sessionForDate(p, dt, appts);
         if (hit && !used.has(hit.session.id)){ used.add(hit.session.id); items.push(card(hit.session, wi, false, tm(a), key)); }
-        else if (!hit && !items.length) items.push(`<button class="pg-cal-gap" data-act="pg-cal-write" data-w="${wi}" data-d="${dt.getDay()}" aria-label="Write a workout for ${esc(dt.toDateString())}"><span class="muted">${esc(tm(a))}</span> nothing written</button>`);
+        else if (!hit && !items.length && !othersOn(dt, key).length) items.push(`<button class="pg-cal-gap" data-act="pg-cal-write" data-w="${wi}" data-d="${dt.getDay()}" aria-label="Write a workout for ${esc(dt.toDateString())}"><span class="muted">${esc(tm(a))}</span> nothing written</button>`);
       }
+      items.push(...othersOn(dt, key));
       return `<div data-cdate="${key}" data-cw="${wi}" data-dow="${dt.getDay()}" class="pg-cal-d ${items.length ? "has" : ""} ${items.some(h => h.startsWith('<div class="pg-cal-open"')) ? "open" : ""} ${key === tk ? "today" : ""} ${key < tk ? "past" : ""}"><div class="pg-cal-dn"><span>${dt.toLocaleDateString(undefined, { weekday: "short" })}</span><b>${dt.getDate()}</b></div>${items.join("")}${pasteBtn(p, dt.getDay(), dt.toDateString(), wi)}</div>`;
     }).join("");
     const left = (w.sessions || []).filter(x => !used.has(x.id) && (x.rows || []).some(r => r.name));
@@ -1135,7 +1164,7 @@ async function onClick(el, e){
       let cur = secs.findIndex(x => x.getBoundingClientRect().bottom > top + 40); if (cur < 0) cur = secs.length - 1;
       const to = d === 0 ? (document.querySelector("#main .pg-cal-w.now") || secs[0]) : secs[Math.max(0, Math.min(secs.length - 1, cur + d))];
       window.scrollBy({ top: to.getBoundingClientRect().top - top, behavior: "smooth" }); break; }
-    case "pg-cal-go": if (el.getAttribute("data-sid") && PG.layout === "cal" && !p.shared){ // open it right there in its day; tap another to switch
+    case "pg-cal-go": if (el.getAttribute("data-sid") && PG.layout === "cal"){ // open it right there in its day; tap another to switch
         const sid = el.getAttribute("data-sid"); PG.calOpen = sid; PG.calAt = el.getAttribute("data-k"); PG.calPlan = false; PG.week = +el.getAttribute("data-w"); PG.repeat = null; redraw();
         setTimeout(() => { const o = document.getElementById("pg-co-" + sid), d = o && o.closest(".pg-cal-d"), row = d && d.closest(".pg-cal-days");
           if (row && row.scrollWidth > row.clientWidth) row.scrollLeft = d.offsetLeft - row.offsetLeft - 4;
@@ -1144,6 +1173,9 @@ async function onClick(el, e){
       { const sid = el.getAttribute("data-sid"), go = () => { padWeeks(P(), +el.getAttribute("data-w")); PG.layout = "days"; try { localStorage.setItem("tt.pg.layout", "days"); } catch (x){} PG.week = +el.getAttribute("data-w"); PG.scrollTo = sid ? null : "top"; PG.repeat = null; redraw(); };
       if (sid) zoom(el, go, () => document.getElementById("pg-s-" + sid)); else go(); break; }
     case "pg-cal-close": PG.calOpen = null; PG.calPlan = false; redraw(); break;
+    case "pg-cal-other": { const pid = el.getAttribute("data-pid"), sid = el.getAttribute("data-sid");
+      PG.progId = pid; PG.calOpen = sid; PG.calAt = el.getAttribute("data-k"); PG.calPlan = false; PG.week = +el.getAttribute("data-w"); PG.calFor = pid; redraw();
+      setTimeout(() => { const o = document.getElementById("pg-co-" + sid); if (o){ const r = o.getBoundingClientRect(); if (r.top < 80 || r.top > innerHeight * 0.6) o.scrollIntoView({ block: "start", behavior: "smooth" }); } }, 30); break; }
     case "pg-cal-rec": PG.calPlan = false; redraw(); break;
     case "pg-log": PG.logFor = { w: wi, s: si }; logSheet(); break;
     case "pg-logsave": {
@@ -1477,6 +1509,9 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-cal-s[data-cdrag]{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
 .pg-cal-d.pg-drop{outline:2px solid var(--accent);outline-offset:-2px;background:color-mix(in srgb,var(--accent) 10%,transparent)!important}
 .pg-cal-grip{cursor:grab;touch-action:none;margin-right:auto}
+.pg-cal-who{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.02em;padding:0 5px;margin-right:4px;border-radius:999px;background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent);vertical-align:1px}
+.pg-cal-who.them{background:color-mix(in srgb,#e08a3c 18%,transparent);color:#e08a3c}
+.pg-cal-other{border-style:dashed}
 .pg-board.pg-bdrag{scroll-snap-type:none}
 .pg-col.pg-drop .pg-col-add,.pg-col.pg-drop>.pg-sess{border-color:var(--accent)!important;box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 45%,transparent)}
 .pg-col.pg-drop .pg-colh{color:var(--accent)}

@@ -95,8 +95,11 @@ export function demoProgramsAdapter(){
       // ?demo&shared: another trainer shared her Maya program, and I have my own Maya too, so it shows under my Maya.
       async withMe(){
         if (typeof location === "undefined" || !/[?&]shared\b/.test(location.search)) return { programs: [], exercises: [] };
+        // Her own workouts: one Tuesday session a week, so both trainers' days show on the calendar.
         const src = P.programs[0], prog = { ...c(src), id: "prog-shared", clientId: "maya-t", name: "Studio block", ownerId: "tat", ownerName: "Tatjana", shared: true, clientName: "Maya Chen" };
-        if (!P.logs.some(l => l.program_id === prog.id)) P.logs.push(...P.logs.filter(l => l.program_id === src.id).map(l => ({ ...l, program_id: prog.id, client_id: "maya-t", weight: l.weight == null ? null : +l.weight + 100 })));
+        prog.weeks = prog.weeks.map(w => ({ ...w, sessions: w.sessions.filter(x => !x.homework).slice(0, 1).map(x => ({ ...x, id: "t-" + x.id, name: "Tue mobility", day: 2 })) }));
+        const keep = new Set(prog.weeks.flatMap(w => w.sessions.map(x => x.id.slice(2))));
+        if (!P.logs.some(l => l.program_id === prog.id)) P.logs.push(...P.logs.filter(l => l.program_id === src.id && keep.has(l.session_id)).map(l => ({ ...l, program_id: prog.id, client_id: "maya-t", session_id: "t-" + l.session_id, logged_on: l.logged_on })));
         return { programs: [prog], exercises: [] };
       },
       async leave(){}
