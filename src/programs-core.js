@@ -296,13 +296,15 @@ const sod = d => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 const parseYmd = s => { const [y, m, d] = String(s).slice(0, 10).split("-").map(Number); return new Date(y, m - 1, d); };
 /* Program weeks line up with calendar weeks: week 1 is the week (starting on program.weekStart, Monday unless set,
  * 0 = Sunday) that holds the start date, and week N starts 7N days later. */
+/* Whole program weeks from start to d. Counts calendar days, so a daylight-saving change (a 23 or 25 hour day) can't shift a week. */
+export const weeksSince = (start, d) => Math.floor(Math.round((sod(d) - sod(start)) / DAYMS) / 7);
 export const weekStartDay = p => { const w = p && p.weekStart; return w === 0 || (w >= 1 && w <= 6) ? +w : 1; };
 export function weekZero(p){ const s = parseYmd(p.startDate); return new Date(s.getFullYear(), s.getMonth(), s.getDate() - ((s.getDay() - weekStartDay(p) + 7) % 7)); }
 /* Which written session a client does on `date`: program week = weeks since the program's start date, and the
  * nth calendar session in that week gets the nth in-studio session (Day A, Day B...). null if nothing is written. */
 export function sessionForDate(program, date, sessionDates){
   if (!program || !program.startDate) return null;
-  const start = weekZero(program), wk = Math.floor((sod(date) - start) / (7 * DAYMS));
+  const start = weekZero(program), wk = weeksSince(start, date);
   if (wk < 0 || wk >= (program.weeks || []).length) return null;
   const week = program.weeks[wk], written = (week.sessions || []).filter(s => !s.homework && (s.rows || []).some(r => r.name));
   // A workout given a day (0 = Sunday) goes on that weekday. The rest fill the other booked days in order.
@@ -310,7 +312,7 @@ export function sessionForDate(program, date, sessionDates){
   const onDay = written.find(x => hasDay(x) && +x.day === date.getDay());
   if (onDay) return { week, weekIndex: wk, session: onDay };
   const taken = new Set(written.filter(hasDay).map(x => +x.day)), list = written.filter(x => !hasDay(x));
-  const days = [...new Set((sessionDates || []).filter(d => Math.floor((sod(d) - start) / (7 * DAYMS)) === wk && !taken.has(d.getDay())).map(d => sod(d).getTime()))].sort((a, b) => a - b);
+  const days = [...new Set((sessionDates || []).filter(d => weeksSince(start, d) === wk && !taken.has(d.getDay())).map(d => sod(d).getTime()))].sort((a, b) => a - b);
   const n = days.indexOf(sod(date).getTime());
   if (n < 0 || n >= list.length) return null;
   return { week, weekIndex: wk, session: list[n] };
@@ -529,7 +531,7 @@ export function truecoachToProgram(parsed, { clientId, name, libByName = {} }){
   const ws = parsed.workouts || []; if (!ws.length) return null;
   const parse = s => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
   const first = parse(ws[0].date), start = new Date(first.getFullYear(), first.getMonth(), first.getDate() - ((first.getDay() + 6) % 7));
-  const nWeeks = Math.floor((parse(ws[ws.length - 1].date) - start) / (7 * DAYMS)) + 1;
+  const nWeeks = weeksSince(start, parse(ws[ws.length - 1].date)) + 1;
   const label = d => d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " '" + String(d.getFullYear()).slice(2);
   const weeks = Array.from({ length: nWeeks }, (_, i) => ({ id: pid("w"), label: label(new Date(start.getTime() + i * 7 * DAYMS + 3600000)), sessions: [] }));
   const program = { name: name || "TrueCoach history", clientId, status: "archived", startDate: ymdOf(start), imported: "truecoach", weeks };
