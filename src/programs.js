@@ -11,7 +11,7 @@ import { createVoice, voiceContext, VOICE_CSS } from "./programs-voice.js";
 let C = null; // context from app.js
 let VOICE = null; // mic + /api/voice, when the adapter has it
 const PG = { ready: null, loading: false, view: "clients", clientId: null, progId: null, week: 0, sub: "program",
-  lib: null, progs: null, logs: {}, meas: {}, clip: null, repeat: null, confirm: null, save: "", libQ: "", lift: "", link: {}, access: {}, edEx: null, videoUrls: {},
+  lib: null, progs: null, logs: {}, meas: {}, clip: null, repeat: null, confirm: null, save: "", libQ: "", lift: "", link: {}, access: {}, cw: {}, edEx: null, videoUrls: {},
   shared: [], sharedLib: [], sharing: false, shareList: null, ss: {}, qa: null, filled: {}, layout: "days", scrollTo: null, mode: "record", recs: {} };
 try { const v = localStorage.getItem("tt.pg.layout"); if (v === "cal" || v === "days") PG.layout = v; const m = localStorage.getItem("tt.pg.mode"); if (m === "plan" || m === "record") PG.mode = m; } catch (x){}
 /* Record mode is the default: every session shows a line to log each exercise. Plan mode is for writing the program.
@@ -111,9 +111,21 @@ async function loadClient(id){
     const twins = sc ? progsOf(sc).filter(p => p.shared) : [];
     const [logs, meas, ...theirs] = await Promise.all([C.A.programs.logs(id), C.A.programs.measurements(id), ...twins.map(p => C.A.programs.programLogs(p.ownerId, p.id))]);
     PG.logs[id] = [...logs, ...theirs.flat()]; PG.meas[id] = meas;
+    if (C.A.programs.clientWorkouts) PG.cw[id] = await C.A.programs.clientWorkouts(id).catch(() => []);
   } catch (e){ C.toast("Couldn't load this client's logs"); PG.logs[id] = PG.logs[id] || []; PG.meas[id] = PG.meas[id] || []; }
   if (C.A.programs.link) C.A.programs.link.get(id).then(l => { PG.link[id] = l || false; if (PG.clientId === id) redraw(); }).catch(() => {});
   redraw();
+}
+
+/* Workouts the client added to their own calendar from the client app, newest first. Read-only here; the trainer can remove one. */
+function clientAdded(c){
+  const list = (PG.cw[c.id] || []).slice(0, 6); if (!list.length) return "";
+  const logs = PG.logs[c.id] || [], first = esc(c.name.split(" ")[0]);
+  const day = d => new Date(String(d).slice(0, 10) + "T12:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  return `<section class="card pg-cw"><div class="card-h"><h2>${first} added</h2><span class="small muted">from their app, around your sessions</span></div>
+    <div class="list">${list.map(w => { const done = logs.filter(l => l.session_id === w.id && l.done).length, rows = (w.data && w.data.rows) || [];
+      return `<div><span><b>${esc(day(w.on_date))}</b> · ${esc((w.data && w.data.name) || "Workout")} <span class="small muted">· ${esc(rows.map(r => r.name).join(", "))}</span>${done ? ` <span class="tag">✓ ${done} set${done === 1 ? "" : "s"} logged</span>` : ""}</span>
+        <button class="btn sm ghost" data-act="pg-cwdel" data-id="${esc(w.id)}" aria-label="Remove from ${first}'s calendar">Remove</button></div>`; }).join("")}</div></section>`;
 }
 
 /* ---------- to-dos: calendar sessions without a planned workout ---------- */
@@ -255,7 +267,7 @@ function renderClient(){
       <select class="pg-in" data-pg="wmail" aria-label="When to email ${first} their workout" style="width:auto">${[["off", "Off"], ["evening", "Evening before (7 PM)"], ["morning", "Morning of (6 AM)"]].map(([v, l]) => `<option value="${v}" ${wm === v ? "selected" : ""}>${l}</option>`).join("")}</select>
       <input class="pg-in" data-pg="cemail" type="email" value="${esc(c.email || "")}" placeholder="${first}'s email" aria-label="${first}'s email" style="width:230px"></div>
     <span class="small muted">${wm === "off" ? `Turn on to email ${first} each workout on days they're on your calendar.` : `Sent on days ${first} is on your calendar, as long as that day's workout is written.`}</span>` : ""}</details>`;
-  return head + (PG.sub === "progress" ? renderProgress(c) : clientBrief(c, progs) + setup + renderProgram(c, progs));
+  return head + (PG.sub === "progress" ? renderProgress(c) : clientBrief(c, progs) + setup + clientAdded(c) + renderProgram(c, progs));
 }
 
 /* ---------- program builder ---------- */
@@ -1236,6 +1248,7 @@ async function onClick(el, e){
       break; }
     case "pg-delmeas": { const id = el.getAttribute("data-id"), cid = PG.clientId; PG.meas[cid] = PG.meas[cid].filter(m => String(m.id) !== id); redraw(); C.A.programs.deleteMeasurement(id).catch(() => C.toast("Couldn't delete")); break; }
     case "pg-share": shareSheet(); break;
+    case "pg-cwdel": { const id = el.getAttribute("data-id"), cid = PG.clientId; try { await C.A.programs.deleteClientWorkout(id); PG.cw[cid] = (PG.cw[cid] || []).filter(w => w.id !== id); C.toast("Removed from their calendar"); } catch (x){ C.toast("Couldn't remove it"); } redraw(); break; }
     case "pg-ca-make": case "pg-ca-copy": case "pg-ca-off": await accessAct(el, { A: C.A, store: PG.access, clientOf: client, redraw: shareSheet, toast: C.toast, prefix: "pg-ca-" }); break;
     case "pg-mail": {
       const c = client(PG.clientId), s = p.weeks[wi].sessions[si];

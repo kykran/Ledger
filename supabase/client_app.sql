@@ -51,3 +51,20 @@ alter table public.session_flags enable row level security;
 drop policy if exists "own session flags" on public.session_flags;
 create policy "own session flags" on public.session_flags for all to authenticated
   using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
+
+-- Workouts a client adds to their own calendar from the app (homework on a day they pick).
+-- Kept apart from programs.data so the trainer's open Programs page can't overwrite them. The trainer can read and remove them.
+create table if not exists public.client_workouts (
+  id text primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  client_id text not null,
+  program_id text not null,
+  on_date date not null,
+  data jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+create index if not exists client_workouts_client on public.client_workouts (user_id, client_id, on_date);
+alter table public.client_workouts enable row level security;
+drop policy if exists "own client workouts" on public.client_workouts;
+create policy "own client workouts" on public.client_workouts for all to authenticated
+  using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
