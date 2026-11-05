@@ -11,6 +11,18 @@ const numOrNull = v => { if (v === "" || v == null) return null; const x = Numbe
 export const sha = s => createHash("sha256").update(String(s)).digest("hex");
 export const randomToken = n => randomBytes(n).toString("base64url");
 
+// Supabase returns at most 1000 rows per request; a long-time client's history needs several pages.
+async function allLogs(uid, cid){
+  const data = [];
+  for (let from = 0; ; from += 1000){
+    const r = await admin.from("program_logs").select("*").eq("user_id", uid).eq("client_id", cid)
+      .order("logged_on").order("session_id").order("row_id").order("set_no").range(from, from + 999);
+    if (r.error) throw r.error;
+    data.push(...(r.data || []));
+    if (!r.data || r.data.length < 1000) return { data };
+  }
+}
+
 /* Programs, videos, logs, measurements and sessions (left in the package, or this month) for one client. */
 export async function programView(uid, cid){
   const [cl, prof, progs, exs, logs, meas, cw] = await Promise.all([
@@ -18,7 +30,7 @@ export async function programView(uid, cid){
     admin.from("profiles").select("data").eq("user_id", uid).maybeSingle(),
     admin.from("programs").select("id,client_id,data").eq("user_id", uid).eq("client_id", cid),
     admin.from("exercises").select("id,data").eq("user_id", uid),
-    admin.from("program_logs").select("*").eq("user_id", uid).eq("client_id", cid),
+    allLogs(uid, cid),
     admin.from("measurements").select("*").eq("user_id", uid).eq("client_id", cid),
     admin.from("client_workouts").select("id,program_id,on_date,data").eq("user_id", uid).eq("client_id", cid)
   ]);
