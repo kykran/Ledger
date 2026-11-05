@@ -87,13 +87,15 @@ export function lineChart(points, { unit = "", height = 150, decimals = 1 } = {}
   const X = t => pts.length === 1 ? (L + W - R) / 2 : L + (t - x0) / span * (W - L - R);
   const Y = v => T + (hi - v) / (hi - lo) * (H - T - B);
   const fmt = v => (Math.round(v * Math.pow(10, decimals)) / Math.pow(10, decimals)).toLocaleString("en-US");
-  const md = d => { const [, m, dd] = d.split("-").map(Number); return m + "/" + dd; };
+  // Show the year on the axis once the history crosses into another year, so 5/28 isn't mistaken for this May.
+  const multiYear = pts[0].date.slice(0, 4) !== pts[pts.length - 1].date.slice(0, 4);
+  const md = d => { const [y, m, dd] = d.split("-").map(Number); return m + "/" + dd + (multiYear ? "/" + String(y).slice(2) : ""); };
   const ticks = [lo + (hi - lo) * 0.15, (lo + hi) / 2, hi - (hi - lo) * 0.15];
   const grid = ticks.map(v => `<line x1="${L}" x2="${W - R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" class="lc-grid"/><text x="${L - 6}" y="${(Y(v) + 3.5).toFixed(1)}" text-anchor="end" class="lc-ax">${fmt(v)}</text>`).join("");
   const path = pts.map((p, i) => (i ? "L" : "M") + X(xs[i]).toFixed(1) + " " + Y(p.value).toFixed(1)).join(" ");
   const idx = pts.length <= 2 ? pts.map((_, i) => i) : [0, Math.floor((pts.length - 1) / 2), pts.length - 1];
   const xl = [...new Set(idx)].map(i => `<text x="${X(xs[i]).toFixed(1)}" y="${H - 6}" text-anchor="middle" class="lc-ax">${md(pts[i].date)}</text>`).join("");
-  const mon = d => new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const mon = d => new Date(d + "T12:00:00").toLocaleDateString("en-US", multiYear ? { month: "short", day: "numeric", year: "numeric" } : { month: "short", day: "numeric" });
   const dots = pts.map((p, i) => `<circle cx="${X(xs[i]).toFixed(1)}" cy="${Y(p.value).toFixed(1)}" r="4" class="lc-dot"/>`).join("");
   // Hover or tap anywhere over a date: its number and date pop up. Each point owns the band halfway to its neighbours.
   const tips = pts.map((p, i) => {

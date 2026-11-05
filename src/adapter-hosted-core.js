@@ -28,6 +28,16 @@ async function readRows(uid, cals){
   }
   return rows;
 }
+// Supabase returns at most 1000 rows per request, so long histories are read in pages.
+async function allPages(build){
+  const rows = [];
+  for (let from = 0; ; from += 1000){
+    const { data, error } = await query(() => build().range(from, from + 999));
+    if (error) throw fail(error);
+    rows.push(...(data || []));
+    if (!data || data.length < 1000) return rows;
+  }
+}
 const fail = (error) => { const e = new Error(error && error.message || "Request failed"); e.code = error && (error.code === "42501" ? "invalid_argument" : "unavailable"); return e; };
 
 export const adapter = {
@@ -127,11 +137,11 @@ export const adapter = {
       if (error) throw fail(error);
     },
     async deleteProgram(id){ const uid = session.user.id; const { error } = await sb.from("programs").delete().eq("user_id", uid).eq("id", id); if (error) throw fail(error); await sb.from("program_logs").delete().eq("user_id", uid).eq("program_id", id); },
-    async logs(clientId){ const { data, error } = await query(() => sb.from("program_logs").select("*").eq("user_id", session.user.id).eq("client_id", clientId).order("logged_on")); if (error) throw fail(error); return data || []; },
+    async logs(clientId){ return allPages(() => sb.from("program_logs").select("*").eq("user_id", session.user.id).eq("client_id", clientId).order("logged_on").order("session_id").order("row_id").order("set_no")); },
     async saveLogs(rows, ownerId){ if (!rows.length) return; const uid = ownerId || session.user.id, now = new Date().toISOString(); const { error } = await sb.from("program_logs").upsert(rows.map(r => ({ ...r, user_id: uid, source: "trainer", updated_at: now }))); if (error) throw fail(error); },
-    async programLogs(ownerId, programId){ const { data, error } = await query(() => sb.from("program_logs").select("*").eq("user_id", ownerId).eq("program_id", programId).order("logged_on")); if (error) throw fail(error); return data || []; },
+    async programLogs(ownerId, programId){ return allPages(() => sb.from("program_logs").select("*").eq("user_id", ownerId).eq("program_id", programId).order("logged_on").order("session_id").order("row_id").order("set_no")); },
     // Which days each client has anything logged (for the "workout not logged" to-do).
-    async logDates(){ const { data, error } = await sb.from("program_logs").select("client_id,logged_on").eq("user_id", session.user.id).gte("logged_on", new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10)); if (error) throw fail(error); return data || []; },
+    async logDates(){ return allPages(() => sb.from("program_logs").select("client_id,logged_on").eq("user_id", session.user.id).gte("logged_on", new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10)).order("logged_on").order("client_id").order("session_id").order("row_id").order("set_no")); },
     ai(body){ return api("/api/ai", body); },
     voice(body){ return api("/api/voice", body); },
     emailWorkout(body){ return api("/api/outbox", { action: "workout", ...body }); },
