@@ -18,7 +18,7 @@ const CHECK = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 
 document.head.insertAdjacentHTML("beforeend", `<style>${LINECHART_CSS}${VIDEO_CSS}${GROUP_CSS}.ex.g{border-left:4px solid var(--g);padding-left:10px;margin-left:-2px}</style>`);
 
 let V = null, demoStore = null, SI = null;
-const st = { prog: 0, week: null, tab: "program", open: {}, draft: {}, lift: "", doing: null, doingOn: null, flag: null, view: "list", calOpen: null, vary: false, plain: false };
+const st = { prog: 0, week: null, tab: "calendar", calScroll: true, hwHist: false, histOpen: null, open: {}, draft: {}, lift: "", doing: null, doingOn: null, flag: null, view: "list", calOpen: null, vary: false, plain: false };
 const flagMap = () => Object.fromEntries((V.flags || []).map(f => [f.at, f]));
 
 function toast(msg){ const t = document.createElement("div"); t.className = "toast"; t.setAttribute("role", "status"); t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 2600); }
@@ -30,15 +30,18 @@ function currentWeek(p){
   return Math.max(0, Math.min(p.weeks.length - 1, i));
 }
 
+if ("scrollRestoration" in history) history.scrollRestoration = "manual";
 function render(){
   document.title = `${V.first}'s program`;
   const head = `<div><h1>Hi ${esc(V.first)}</h1><p class="sub">${V.trainer ? `Your program from ${esc(V.trainer)}` : "Your program"}</p></div>
-    <div class="seg" role="group" aria-label="View">${[["program", "Program"], ["calendar", "Calendar"], ["metrics", "Metrics"], ...(V.sessions ? [["billing", "Billing"]] : [])].map(([k, l]) => `<button data-act="tab" data-k="${k}" aria-pressed="${st.tab === k}">${l}</button>`).join("")}</div>`;
+    <div class="seg" role="group" aria-label="View">${[["calendar", "Calendar"], ["homework", "Homework"], ["metrics", "Metrics"], ...(V.sessions ? [["billing", "Billing"]] : [])].map(([k, l]) => `<button data-act="tab" data-k="${k}" aria-pressed="${st.tab === k}">${l}</button>`).join("")}</div>`;
   const sessions = () => `<div class="sv">${appKey ? `<p class="note" style="margin:0">Something look wrong? Tap the date and let ${esc(V.trainer || "your trainer")} know.</p>` : ""}${sessionCards(V.sessions, { tap: !!appKey, flags: appKey ? flagMap() : {}, due: true })}</div>`;
-  const body = st.tab === "metrics" ? renderProgress() : st.tab === "billing" && V.sessions ? sessions() : st.tab === "calendar" ? renderCalendar() : renderProgram();
+  const body = st.tab === "metrics" ? renderProgress() : st.tab === "billing" && V.sessions ? sessions() : st.tab === "homework" ? renderHomeworkTab() : renderCalendar();
+  document.body.classList.toggle("wide", st.tab === "calendar");
   $m.innerHTML = head + homeTip() + body
     + `<footer>Trainer Tally${appKey ? ` · <button class="linkbtn" data-act="signout">Sign out</button>` : ""}</footer>` + (st.flag ? flagSheet() : st.add ? addSheet() : "");
-  if (st.tab === "calendar" && st.calScroll){ st.calScroll = false; const t = document.querySelector(".cal-wk.now"); if (t) t.scrollIntoView({ block: "start" }); }
+  // Calendar opens on this week; earlier weeks are above, later ones below. Done again after layout settles so the phone doesn't keep an old position.
+  if (st.tab === "calendar" && st.calScroll){ st.calScroll = false; const go = () => { const t = document.querySelector(".cal-wk.go"); if (t) t.scrollIntoView({ block: "start" }); }; go(); requestAnimationFrame(go); setTimeout(go, 250); }
 }
 
 /* ---------- client app: sign in, home screen tip, flagging a session ---------- */
@@ -85,18 +88,7 @@ function flagSheet(){
   return `<div class="scrim" data-act="flagclose"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Flag this session"><h2>${esc(when)}</h2>${body}</div>`;
 }
 
-function renderProgram(){
-  if (!V.programs.length) return `<div class="card"><div class="empty">Your trainer hasn't added a program yet.</div></div>`;
-  const p = V.programs[Math.min(st.prog, V.programs.length - 1)];
-  if (st.week == null) st.week = currentWeek(p);
-  const wk = p.weeks[Math.min(st.week, p.weeks.length - 1)];
-  const pick = V.programs.length > 1 ? `<select data-act="prog" aria-label="Program">${V.programs.map((x, i) => `<option value="${i}" ${i === st.prog ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : `<h3>${esc(p.name)}</h3>`;
-  const tabs = `<div class="tabs" role="tablist">${p.weeks.map((w, i) => `<button role="tab" aria-selected="${i === st.week}" data-act="week" data-i="${i}">${esc(w.label || "Week " + (i + 1))}</button>`).join("")}</div>`;
-  const studio = wk ? wk.sessions.filter(s => !s.homework) : [];
-  return sessionsStrip() + renderHomework(p) + pick + tabs + (studio.length ? studio.map(s => renderSession(p, s)).join("") : `<div class="card"><div class="empty">${V.trainer ? `Your sessions with ${esc(V.trainer)}` : "Your sessions"} show here once they're written.</div></div>`);
-}
-/* Calendar: one week, a row per day. Sessions with the trainer sit on their booked days (same matching as the trainer's Calendar),
- * homework sits on the day it was done, and homework not done yet waits under the week. Tap one to open it right there. */
+/* Booked session dates from the billing view, used to place sessions with the trainer on the calendar. */
 const ymd = d => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
 function bookedDates(){
   const v = V.sessions; if (!v) return [];
@@ -107,8 +99,9 @@ function bookedDates(){
   for (const m of v.months || []) all.push(...m.done.map(x => x.at), ...m.booked.map(x => x.at));
   return [...new Set(all)].map(x => new Date(x));
 }
-/* The full calendar: every week of the program (and any booked weeks after it), current week first in view.
- * Workouts the client added sit on their day. "+ Add" on a day suggests one from the sessions before and after it. */
+/* The full calendar, laid out like the trainer's: each week is a row of day boxes, every workout shows its first exercises.
+ * Sessions with the trainer are solid, homework is dashed. Tap one to open it in its day (that day widens).
+ * Homework not done yet waits under the week. "+ Add" on a day suggests a workout that fits around the sessions. */
 function renderCalendar(){
   if (!V.programs.length) return `<div class="card"><div class="empty">Your trainer hasn't added a program yet.</div></div>`;
   const p = V.programs[Math.min(st.prog, V.programs.length - 1)];
@@ -116,30 +109,38 @@ function renderCalendar(){
   const z = weekZero(p), booked = bookedDates(), last = Math.max(0, ...booked.map(b => Math.floor((b - z) / (7 * 864e5) + 0.01)));
   const n = Math.max(p.weeks.length, last + 1), cur = Math.floor((Date.now() - z) / (7 * 864e5));
   const pick = V.programs.length > 1 ? `<select data-act="prog" aria-label="Program">${V.programs.map((x, i) => `<option value="${i}" ${i === st.prog ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : "";
-  return pick + `<p class="note" style="margin:0">Tap a workout to open it.${appKey ? " Tap <b>+ Add</b> on a day to get a workout that fits around your sessions." : ""}</p>`
-    + Array.from({ length: n }, (_, wi) => renderWeek(p, wi, booked, wi === cur)).join("");
+  const step = `<div class="cal-step" role="group" aria-label="Weeks"><button class="btn sm" data-act="calstep" data-d="-1" aria-label="Previous week">‹</button><button class="btn sm" data-act="calstep" data-d="0">This week</button><button class="btn sm" data-act="calstep" data-d="1" aria-label="Next week">›</button>
+    <span class="cal-key"><i class="k-s"></i>With ${esc(V.trainer || "your trainer")}<i class="k-h"></i>On your own</span></div>`;
+  return sessionsStrip() + pick + step + Array.from({ length: n }, (_, wi) => renderWeek(p, wi, booked, wi === cur, wi === Math.max(0, Math.min(n - 1, cur)))).join("");
 }
-function renderWeek(p, wi, booked, isNow){
+const srTxt = r => r.sets && r.reps ? `${r.sets}×${r.reps}` : r.reps || r.sets || "";
+function renderWeek(p, wi, booked, isNow, isGo){
   const z = weekZero(p), w = p.weeks[wi], days = Array.from({ length: 7 }, (_, i) => new Date(z.getFullYear(), z.getMonth(), z.getDate() + wi * 7 + i));
   const now = today(), sessions = w ? w.sessions || [] : [];
   const hw = sessions.filter(s => s.homework && s.rows.length && !s.byClient), mine = sessions.filter(s => s.byClient);
   const doneOn = {}; for (const l of V.logs) if (l.p === p.id) (doneOn[l.s] = doneOn[l.s] || new Set()).add(l.date);
-  const item = (s, key, label) => { const open = st.calOpen === key, done = doneOn[s.id];
-    return open ? `<div class="cal-open">${renderSession(p, s, key)}<button class="btn wide" data-act="calclose">Close</button></div>`
-      : `<button class="cal-it ${s.homework ? "hw" : "studio"} ${s.byClient ? "mine" : ""}" data-act="calgo" data-k="${esc(key)}"><b>${esc(s.name)}${done && s.homework ? " ✓" : ""}</b><span>${esc(label)}</span></button>`; };
-  const rows = days.map(d => {
+  const card = (s, key, when, done) => st.calOpen === key
+    ? `<div class="cal-open"><div class="cal-obar">${when ? `<span class="muted small">${esc(when)}</span>` : ""}<button class="btn sm" data-act="calclose" aria-label="Close ${esc(s.name)}">✕ Close</button></div>${renderSession(p, s, key)}</div>`
+    : `<button class="cal-s ${s.homework ? "hw" : ""} ${done ? "done" : ""}" data-act="calgo" data-k="${esc(key)}" aria-label="Open ${esc(s.name)}">
+        <span class="cal-t">${done ? `<i aria-hidden="true">✓</i>` : ""}${when ? `<span class="muted">${esc(when)}</span> ` : ""}<b>${esc(s.name)}</b></span>
+        ${s.rows.slice(0, 4).map(r => `<span class="cal-ex"><span class="gchip ${grpClass(r.group)}">${esc(r.group || "·")}</span><span class="cal-n">${esc(r.name)}</span><span class="muted">${esc(srTxt(r))}</span></span>`).join("")}
+        ${s.rows.length > 4 ? `<span class="muted">+${s.rows.length - 4} more</span>` : ""}</button>`;
+  let anyOpen = false;
+  const cells = days.map(d => {
     const k = ymd(d), its = [];
-    for (const b of booked.filter(b => ymd(b) === k)){ const hit = sessionForDate(p, b, booked); const t = b.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-      its.push(hit && hit.weekIndex === wi ? item(hit.session, k + "|" + hit.session.id, `With ${V.trainer || "your trainer"} · ${t}`) : `<div class="cal-it studio flat"><b>Session</b><span>With ${esc(V.trainer || "your trainer")} · ${esc(t)}</span></div>`); }
-    for (const s of hw) if (doneOn[s.id] && doneOn[s.id].has(k)) its.push(item(s, k + "|" + s.id, "Homework · done"));
-    for (const s of mine) if (s.on === k) its.push(item(s, k + "|" + s.id, doneOn[s.id] ? "Added by you · done" : "Added by you"));
-    const add = appKey && k >= ymd(new Date(Date.now() - 7 * 864e5)) && w ? `<button class="cal-add" data-act="addopen" data-d="${k}" aria-label="Add a workout on ${esc(d.toDateString())}">+ Add</button>` : "";
-    const opened = st.calOpen && st.calOpen.startsWith(k + "|");
-    return `<div class="cal-day ${k === now ? "today" : ""} ${its.length ? "" : "empty"}"><div class="cal-d"><b>${d.toLocaleDateString("en-US", { weekday: "short" })}</b><span>${d.getDate()}</span></div><div class="cal-its">${its.join("")}${its.length ? (opened ? "" : add) : `<div class="cal-rest"><span class="muted small">Rest</span>${add}</div>`}</div></div>`;
+    for (const b of booked.filter(b => ymd(b) === k)){ const hit = sessionForDate(p, b, booked), t = b.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+      its.push(hit && hit.weekIndex === wi ? card(hit.session, k + "|" + hit.session.id, t, doneOn[hit.session.id] && doneOn[hit.session.id].has(k))
+        : `<div class="cal-s flat"><span class="cal-t"><span class="muted">${esc(t)}</span> <b>Session</b></span><span class="muted">With ${esc(V.trainer || "your trainer")}</span></div>`); }
+    for (const s of hw) if (doneOn[s.id] && doneOn[s.id].has(k)) its.push(card(s, k + "|" + s.id, "", true));
+    for (const s of mine) if (s.on === k) its.push(card(s, k + "|" + s.id, "", doneOn[s.id]));
+    const open = !!(st.calOpen && st.calOpen.startsWith(k + "|")); if (open) anyOpen = true;
+    const add = appKey && w && k >= ymd(new Date(Date.now() - 7 * 864e5)) && !open ? `<button class="cal-add" data-act="addopen" data-d="${k}" aria-label="Add a workout on ${esc(d.toDateString())}">+ Add</button>` : "";
+    return `<div class="cal-d ${its.length ? "has" : ""} ${open ? "open" : ""} ${k === now ? "today" : ""} ${k < now ? "past" : ""}"><div class="cal-dn"><span>${d.toLocaleDateString("en-US", { weekday: "short" })}</span><b>${d.getDate()}</b></div>${its.join("")}${add}</div>`;
   }).join("");
-  const todo = hw.filter(s => !doneOn[s.id]);
-  return `<section class="card cal cal-wk ${isNow ? "now" : ""}"><div class="cal-h"><b>${esc(w ? w.label || "Week " + (wi + 1) : "After this program")}</b><span class="muted small">${esc(fmtR(days[0], days[6]))}${isNow ? " · this week" : ""}</span></div>${rows}
-    ${todo.length ? `<div class="cal-todo"><h3>Homework this week · any day</h3>${todo.map(s => item(s, "todo|" + s.id, "On your own")).join("")}</div>` : ""}</section>`;
+  const todo = hw.filter(s => !doneOn[s.id]), todoOpen = todo.find(s => st.calOpen === "todo|" + s.id);
+  return `<section class="card cal-wk ${isNow ? "now" : ""} ${isGo ? "go" : ""}" data-wi="${wi}"><div class="cal-h"><b>${esc(w ? w.label || "Week " + (wi + 1) : "After this program")}</b><span class="muted small">${esc(fmtR(days[0], days[6]))}</span>${isNow ? `<span class="tag">this week</span>` : ""}</div>
+    <div class="cal-days ${anyOpen ? "editing" : ""}">${cells}</div>
+    ${todo.length ? `<div class="cal-left ${todoOpen ? "open" : ""}"><span class="muted small">Homework this week · any day</span>${todo.map(s => card(s, "todo|" + s.id, "", false)).join("")}</div>` : ""}</section>`;
 }
 
 /* ---------- adding a workout from the calendar ---------- */
@@ -177,13 +178,31 @@ function sessionsStrip(){
   const L = sessionsLine(V.sessions);
   return `<button class="strip ${L.warn ? "warn" : ""}" data-act="tab" data-k="billing"><span><b>${esc(L.text)}</b>${L.due ? ` <span class="due">${V.sessions.billing === "package" ? "package due" : "payment due"}</span>` : ""}${L.next ? `<span class="muted"> · next ${esc(L.next)}</span>` : ""}</span><span aria-hidden="true">›</span></button>`;
 }
-/* Homework isn't tied to a day: the client picks a workout, taps "Do this workout", and it's logged on the day they do it.
- * Shows this week's homework, or the latest week before it that has some. */
-function renderHomework(p){
-  const now = currentWeek(p); let list = [];
-  for (let i = now; i >= 0 && !list.length; i--) list = (p.weeks[i] ? p.weeks[i].sessions : []).filter(s => s.homework && s.rows.length);
-  if (!list.length) return "";
-  return `<h3>Homework · on your own</h3>${list.map(s => renderSession(p, s)).join("")}<h3 style="margin-top:6px">Sessions with ${esc(V.trainer || "your trainer")}</h3>`;
+/* Homework tab: just the next one to do. Homework from this week (or the latest week that has some) comes first,
+ * then workouts the client added, soonest first. History lists every homework done, newest first; tap one to see or change it. */
+function homeworkQueue(p){
+  const done = new Set(V.logs.filter(l => l.p === p.id).map(l => l.s)), now = currentWeek(p), t = today();
+  let set = [];
+  for (let i = now; i >= 0 && !set.length; i--) set = (p.weeks[i] ? p.weeks[i].sessions : []).filter(s => s.homework && s.rows.length && !s.byClient);
+  const mine = p.weeks.flatMap(w => w.sessions || []).filter(s => s.byClient && s.on >= t).sort((a, b) => a.on.localeCompare(b.on));
+  return [...set, ...mine].filter(s => !done.has(s.id));
+}
+function renderHomeworkTab(){
+  if (!V.programs.length) return `<div class="card"><div class="empty">Your trainer hasn't added a program yet.</div></div>`;
+  const p = V.programs[Math.min(st.prog, V.programs.length - 1)];
+  const seg = `<div class="seg sm" role="group" aria-label="Homework" style="align-self:flex-start"><button data-act="hwview" data-k="next" aria-pressed="${!st.hwHist}">Next up</button><button data-act="hwview" data-k="hist" aria-pressed="${!!st.hwHist}">History</button></div>`;
+  if (st.hwHist){
+    const by = {}; for (const l of V.logs) if (l.p === p.id){ const k = l.date + "|" + l.s; (by[k] = by[k] || []).push(l); }
+    const all = p.weeks.flatMap(w => w.sessions || []), find = id => all.find(s => s.id === id);
+    const list = Object.keys(by).map(k => { const [date, sid] = k.split("|"); return { k, date, s: find(sid), n: by[k].length }; }).filter(x => x.s && x.s.homework).sort((a, b) => b.date.localeCompare(a.date));
+    if (!list.length) return seg + `<div class="card"><div class="empty">Homework you do shows up here.</div></div>`;
+    return seg + list.map(x => st.histOpen === x.k
+      ? `<div class="cal-open"><div class="cal-obar"><span class="muted small">${esc(fmt(x.date))}</span><button class="btn sm" data-act="histopen" data-k="" aria-label="Close">✕ Close</button></div>${renderSession(p, x.s, x.k)}</div>`
+      : `<button class="hist" data-act="histopen" data-k="${esc(x.k)}"><span class="hist-d">${esc(new Date(x.date + "T12:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }))}</span><b>${esc(x.s.name)}</b><span class="muted small">${x.n} set${x.n === 1 ? "" : "s"}</span><span aria-hidden="true">›</span></button>`).join("");
+  }
+  const q = homeworkQueue(p), next = q[0];
+  if (!next) return seg + `<div class="card"><div class="empty">You're all caught up. ${appKey ? `Add a workout from the <button class="linkbtn" data-act="tab" data-k="calendar">Calendar</button>, or do one again from History.` : ""}</div></div>`;
+  return seg + renderSession(p, next) + (q.length > 1 ? `<p class="muted small" style="margin:0;text-align:center">${q.length - 1} more after this one</p>` : "");
 }
 
 /* ---------- equipment ---------- */
@@ -227,6 +246,9 @@ function renderSession(p, s, calKey){
           <input type="number" inputmode="numeric" placeholder="${timedPlan(r) ? "Secs" : "Reps"}${repsFor(r, k) ? " (" + repsFor(r, k) + ")" : ""}" aria-label="Set ${k + 1} ${timedPlan(r) ? "seconds" : "reps"}" data-act="set" data-s="${s.id}" data-k="${esc(key)}" data-f="reps" value="${esc(l.reps ?? "")}">
           <input type="number" inputmode="decimal" step="0.5" placeholder="Weight${r.weight ? " (" + esc(r.weight) + ")" : ""}" aria-label="Set ${k + 1} weight" data-act="set" data-s="${s.id}" data-k="${esc(key)}" data-f="weight" value="${esc(l.weight ?? "")}">
           <button class="chk" data-act="done" data-s="${s.id}" data-k="${esc(key)}" aria-pressed="${!!l.done}" aria-label="Set ${k + 1} done">${CHECK}</button></div>`; }).join("")}</div>`;
+    } else if (calDay){ // what was logged that day: weight × reps
+      const ls = V.logs.filter(l => l.p === p.id && l.s === s.id && l.r === r.id && l.date === calDay && (l.reps != null || l.weight != null)).sort((a, b) => a.n - b.n);
+      if (ls.length) sets = `<div class="logged">${ls.map(l => `<span>${l.weight != null && l.weight !== "" ? esc(l.weight) + "×" : ""}${esc(l.reps ?? "")}${l.timed ? "s" : ""}</span>`).join("")}</div>`;
     }
     return `<div class="ex${r.group ? " g " + grpClass(r.group) : ""}"><div class="ex-h"><button class="ex-name" data-act="open" data-k="${esc(s.id + r.id)}" aria-expanded="${!!open}">${r.group ? `<span class="gchip ${grpClass(r.group)}">${esc(r.group)}</span>` : ""}<span>${esc(r.name)}</span>${ex && (ex.video || ex.cues) ? `<span class="play">${ex.video ? "▶ video" : "cues"}</span>` : ""}</button><span class="rx">${rx}</span></div>
       ${r.swappedFrom ? `<div class="note swap">Instead of ${esc(r.swappedFrom)}</div>` : ""}${r.cantDo ? `<div class="note warn">Needs equipment you didn't pick. Skip it or do what you can.</div>` : ""}
@@ -295,7 +317,7 @@ document.addEventListener("click", async e => {
   }
   if (!V) return;
   if (a === "tipoff"){ localStorage.setItem("tt-tip-off", "1"); render(); return; }
-  if (a === "signout"){ if (demo) localStorage.removeItem("tt-demo-in"); else await appPost({ action: "logout" }).catch(() => {}); V = null; st.tab = "program"; return load(); }
+  if (a === "signout"){ if (demo) localStorage.removeItem("tt-demo-in"); else await appPost({ action: "logout" }).catch(() => {}); V = null; st.tab = "calendar"; st.calScroll = true; return load(); }
   if (a === "flag"){ const at = el.getAttribute("data-at"), cur = flagMap()[at]; st.flag = { at, reason: cur && !cur.resolved ? cur.reason : null, note: cur && !cur.resolved ? cur.note : "" }; render(); const sh = document.querySelector(".sheet button[data-act=flagreason]"); if (sh) sh.focus(); return; }
   if (a === "flagclose"){ st.flag = null; render(); return; }
   if (a === "flagreason"){ st.flag.note = (document.getElementById("flag-note") || {}).value || ""; st.flag.reason = el.getAttribute("data-r"); render(); const n = document.getElementById("flag-note"); if (n && st.flag.reason === "Something else") n.focus(); return; }
@@ -331,6 +353,11 @@ document.addEventListener("click", async e => {
   else if (a === "mine-del"){ if (!confirm("Remove this workout from your calendar?")) return;
     try { await post({ action: "removeWorkout", session_id: el.getAttribute("data-s") }); st.calOpen = null; toast("Removed"); await load(true); } catch (x){ toast(x.message); } }
   else if (a === "calgo"){ st.calOpen = el.getAttribute("data-k"); st.doing = null; render(); const c = document.querySelector(".cal-open"); if (c) c.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
+  else if (a === "hwview"){ st.hwHist = el.getAttribute("data-k") === "hist"; st.histOpen = null; st.doing = null; render(); }
+  else if (a === "histopen"){ st.histOpen = el.getAttribute("data-k") || null; st.doing = null; render(); }
+  else if (a === "calstep"){ const secs = [...document.querySelectorAll(".cal-wk")], d = +el.getAttribute("data-d"); if (!secs.length) return;
+    const top = el.closest(".cal-step").getBoundingClientRect().bottom + 4, cur = Math.max(0, secs.findIndex(x => x.getBoundingClientRect().bottom > top + 40));
+    const to = d === 0 ? (document.querySelector(".cal-wk.go") || secs[0]) : secs[Math.max(0, Math.min(secs.length - 1, cur + d))]; to.scrollIntoView({ block: "start", behavior: "smooth" }); }
   else if (a === "calclose"){ st.calOpen = null; st.doing = null; render(); }
   else if (a === "open"){ const k = el.getAttribute("data-k"); st.open[k] = !st.open[k]; render(); }
   else if (a === "done"){ const s = el.getAttribute("data-s"), k = el.getAttribute("data-k"); const d = (st.draft[s][k] = st.draft[s][k] || {}); d.done = !d.done; el.setAttribute("aria-pressed", String(d.done)); }
