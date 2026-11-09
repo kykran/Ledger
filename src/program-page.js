@@ -30,6 +30,7 @@ function currentWeek(p){
   return Math.max(0, Math.min(p.weeks.length - 1, i));
 }
 
+if ("scrollRestoration" in history) history.scrollRestoration = "manual";
 function render(){
   document.title = `${V.first}'s program`;
   const head = `<div><h1>Hi ${esc(V.first)}</h1><p class="sub">${V.trainer ? `Your program from ${esc(V.trainer)}` : "Your program"}</p></div>
@@ -39,7 +40,8 @@ function render(){
   document.body.classList.toggle("wide", st.tab === "calendar");
   $m.innerHTML = head + homeTip() + body
     + `<footer>Trainer Tally${appKey ? ` · <button class="linkbtn" data-act="signout">Sign out</button>` : ""}</footer>` + (st.flag ? flagSheet() : st.add ? addSheet() : "");
-  if (st.tab === "calendar" && st.calScroll){ st.calScroll = false; const t = document.querySelector(".cal-wk.now"); if (t) t.scrollIntoView({ block: "start" }); }
+  // Calendar opens on this week; earlier weeks are above, later ones below. Done again after layout settles so the phone doesn't keep an old position.
+  if (st.tab === "calendar" && st.calScroll){ st.calScroll = false; const go = () => { const t = document.querySelector(".cal-wk.go"); if (t) t.scrollIntoView({ block: "start" }); }; go(); requestAnimationFrame(go); setTimeout(go, 250); }
 }
 
 /* ---------- client app: sign in, home screen tip, flagging a session ---------- */
@@ -109,10 +111,10 @@ function renderCalendar(){
   const pick = V.programs.length > 1 ? `<select data-act="prog" aria-label="Program">${V.programs.map((x, i) => `<option value="${i}" ${i === st.prog ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : "";
   const step = `<div class="cal-step" role="group" aria-label="Weeks"><button class="btn sm" data-act="calstep" data-d="-1" aria-label="Previous week">‹</button><button class="btn sm" data-act="calstep" data-d="0">This week</button><button class="btn sm" data-act="calstep" data-d="1" aria-label="Next week">›</button>
     <span class="cal-key"><i class="k-s"></i>With ${esc(V.trainer || "your trainer")}<i class="k-h"></i>On your own</span></div>`;
-  return sessionsStrip() + pick + step + Array.from({ length: n }, (_, wi) => renderWeek(p, wi, booked, wi === cur)).join("");
+  return sessionsStrip() + pick + step + Array.from({ length: n }, (_, wi) => renderWeek(p, wi, booked, wi === cur, wi === Math.max(0, Math.min(n - 1, cur)))).join("");
 }
 const srTxt = r => r.sets && r.reps ? `${r.sets}×${r.reps}` : r.reps || r.sets || "";
-function renderWeek(p, wi, booked, isNow){
+function renderWeek(p, wi, booked, isNow, isGo){
   const z = weekZero(p), w = p.weeks[wi], days = Array.from({ length: 7 }, (_, i) => new Date(z.getFullYear(), z.getMonth(), z.getDate() + wi * 7 + i));
   const now = today(), sessions = w ? w.sessions || [] : [];
   const hw = sessions.filter(s => s.homework && s.rows.length && !s.byClient), mine = sessions.filter(s => s.byClient);
@@ -136,7 +138,7 @@ function renderWeek(p, wi, booked, isNow){
     return `<div class="cal-d ${its.length ? "has" : ""} ${open ? "open" : ""} ${k === now ? "today" : ""} ${k < now ? "past" : ""}"><div class="cal-dn"><span>${d.toLocaleDateString("en-US", { weekday: "short" })}</span><b>${d.getDate()}</b></div>${its.join("")}${add}</div>`;
   }).join("");
   const todo = hw.filter(s => !doneOn[s.id]), todoOpen = todo.find(s => st.calOpen === "todo|" + s.id);
-  return `<section class="card cal-wk ${isNow ? "now" : ""}" data-wi="${wi}"><div class="cal-h"><b>${esc(w ? w.label || "Week " + (wi + 1) : "After this program")}</b><span class="muted small">${esc(fmtR(days[0], days[6]))}</span>${isNow ? `<span class="tag">this week</span>` : ""}</div>
+  return `<section class="card cal-wk ${isNow ? "now" : ""} ${isGo ? "go" : ""}" data-wi="${wi}"><div class="cal-h"><b>${esc(w ? w.label || "Week " + (wi + 1) : "After this program")}</b><span class="muted small">${esc(fmtR(days[0], days[6]))}</span>${isNow ? `<span class="tag">this week</span>` : ""}</div>
     <div class="cal-days ${anyOpen ? "editing" : ""}">${cells}</div>
     ${todo.length ? `<div class="cal-left ${todoOpen ? "open" : ""}"><span class="muted small">Homework this week · any day</span>${todo.map(s => card(s, "todo|" + s.id, "", false)).join("")}</div>` : ""}</section>`;
 }
@@ -355,7 +357,7 @@ document.addEventListener("click", async e => {
   else if (a === "histopen"){ st.histOpen = el.getAttribute("data-k") || null; st.doing = null; render(); }
   else if (a === "calstep"){ const secs = [...document.querySelectorAll(".cal-wk")], d = +el.getAttribute("data-d"); if (!secs.length) return;
     const top = el.closest(".cal-step").getBoundingClientRect().bottom + 4, cur = Math.max(0, secs.findIndex(x => x.getBoundingClientRect().bottom > top + 40));
-    const to = d === 0 ? (document.querySelector(".cal-wk.now") || secs[0]) : secs[Math.max(0, Math.min(secs.length - 1, cur + d))]; to.scrollIntoView({ block: "start", behavior: "smooth" }); }
+    const to = d === 0 ? (document.querySelector(".cal-wk.go") || secs[0]) : secs[Math.max(0, Math.min(secs.length - 1, cur + d))]; to.scrollIntoView({ block: "start", behavior: "smooth" }); }
   else if (a === "calclose"){ st.calOpen = null; st.doing = null; render(); }
   else if (a === "open"){ const k = el.getAttribute("data-k"); st.open[k] = !st.open[k]; render(); }
   else if (a === "done"){ const s = el.getAttribute("data-s"), k = el.getAttribute("data-k"); const d = (st.draft[s][k] = st.draft[s][k] || {}); d.done = !d.done; el.setAttribute("aria-pressed", String(d.done)); }
