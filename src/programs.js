@@ -190,6 +190,17 @@ function whenLabel(d){
   return n === 0 ? "Today " + t : n === 1 ? "Tomorrow " + t : d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }) + ", " + t;
 }
 function weekIndexFor(p, d){ if (!p || !p.startDate) return 0; return Math.max(0, Math.min((p.weeks || []).length - 1, weeksSince(weekZero(p), d))); }
+function stickOffsets(){
+  const b = [...document.querySelectorAll("header.bar, header.pa-bar")].find(x => getComputedStyle(x).position === "sticky"), pr = document.querySelector("#main .pg-prog.pg-stuck");
+  const st = document.documentElement.style; st.setProperty("--pg-stick", (b ? b.offsetHeight : 0) + "px"); st.setProperty("--pg-progh", (pr ? pr.offsetHeight + 6 : 0) + "px");
+}
+if (typeof window !== "undefined"){
+  window.addEventListener("resize", () => stickOffsets());
+  // Once it's pinned on a phone it shrinks to the name and weeks (Record/Plan and Calendar are on the floating buttons).
+  let pinned = false; window.addEventListener("scroll", () => { const pr = document.querySelector("#main .pg-prog.pg-stuck"); if (!pr) return;
+    const top = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--pg-stick")) || 0, on = pr.getBoundingClientRect().top <= top + 1 && scrollY > 0;
+    if (on !== pinned || pr.classList.contains("pg-pinned") !== on){ pinned = on; pr.classList.toggle("pg-pinned", on); } }, { passive: true });
+}
 function renderClientList(){
   const progOf = id => (PG.progs || []).filter(p => p.clientId === id && p.status !== "archived");
   const list = (C.S.allClients || C.S.clients).filter(c => c.active !== false).map(c => ({ c, next: nextOf(c) }))
@@ -309,7 +320,9 @@ function renderProgram(c, progs){
   const fmode = PG.layout !== "cal" && canRec && !p.shared ? `<button class="btn pg-fabmode ${MODE === "record" ? "rec" : ""}" data-act="pg-mode" data-v="${MODE === "record" ? "plan" : "record"}" data-fab="1" title="${MODE === "record" ? "Write and edit the program" : "Log what the client did"}">${MODE === "record" ? "✎ Plan" : "● Record"}</button>` : "";
   const zbtn = W.length ? `<div class="pg-fab">${fmode}<button class="btn pg-zoombtn" data-act="pg-layout" data-v="${PG.layout === "cal" ? "days" : "cal"}">${PG.layout === "cal" ? "◎ Today" : "▦ Calendar"}</button></div>` : "";
   const cs = clip && clip.type === "session" && !p.shared ? `<div class="pg-clipbar" role="status"><span>⧉ <b>${esc(clip.data.name)}</b> copied.<span class="pg-cliphint"> ${PG.layout === "cal" || MODE === "plan" ? "Tap <b>Paste</b> on any day." : "Open Calendar or Plan to paste it on any day."}</span></span><button class="btn sm" data-act="pg-clipx">Done</button></div>` : "";
-  return zbtn + cs + `<section class="card pg-prog">
+  // The bar stays pinned under the app header while you scroll (not while the ⋯ More tools are open).
+  setTimeout(stickOffsets, 0);
+  return zbtn + cs + `<section class="card pg-prog ${PG.tools ? "" : "pg-stuck"}">
     <div class="pg-bar"><b class="pg-pname" title="${esc(p.name)}">${esc(p.name)}</b>${layoutSeg}${PG.layout === "cal" ? "" : modeSeg + weekChips}
       <span class="small muted pg-savest" id="pg-save">${esc(PG.save)}</span>
       <button class="btn sm ${PG.tools ? "primary" : "ghost"} pg-toolsbtn" data-act="pg-tools" aria-expanded="${!!PG.tools}" title="Week and program tools: rename, copy, repeat, AI, start date, share, archive">⋯ ${PG.tools ? "Close" : "More"}</button></div>
@@ -1481,6 +1494,8 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-chev{margin-left:auto;color:var(--muted);transition:transform .15s}
 .pg-setup[open] .pg-chev{transform:rotate(180deg)}
 .pg-prog{padding:10px 14px;gap:10px}
+[id^="pg-s-"],[id^="pg-wk-"],[id^="pg-cw-"],.pg-cal-open,.pg-recrow{scroll-margin-top:calc(var(--pg-stick,0px) + var(--pg-progh,0px) + 8px)}
+.pg-prog.pg-stuck{position:sticky;top:var(--pg-stick,0px);z-index:16;background:color-mix(in srgb,var(--surface) 94%,transparent);backdrop-filter:blur(10px);box-shadow:0 6px 16px -10px rgba(0,0,0,.35)}
 .pg-bar{display:flex;align-items:center;gap:8px;min-width:0}
 .pg-pname{font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;flex:0 1 auto}
 .pg-bar .seg{flex:0 0 auto}
@@ -1500,6 +1515,10 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
   .pg-toolsbtn{order:3}
   .pg-bar .seg{order:4}
   .pg-bar .pg-weeks{flex:1 1 100%;order:5}
+  .pg-prog.pg-pinned{padding:6px 10px}
+  .pg-prog.pg-pinned .pg-bar{gap:6px}
+  .pg-prog.pg-pinned .pg-bar .seg,.pg-prog.pg-pinned .pg-savest{display:none}
+  .pg-prog.pg-pinned .pg-bar .pg-weeks>button{padding-top:4px;padding-bottom:4px}
   .pg-tl{width:100%}
   .pg-setup summary .pg-sumx{display:none}
 }
@@ -1626,7 +1645,7 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-done{font-size:11.5px;font-weight:600;color:var(--pos);white-space:nowrap;margin-right:4px}
 .pg-next{border-color:color-mix(in srgb,var(--accent) 45%,var(--line));background:color-mix(in srgb,var(--accent) 6%,var(--surface))}
 .pg-next h3{color:var(--accent)}
-.pg-cal-step{position:sticky;top:calc(var(--pg-stick,0px) + 8px);z-index:15;display:flex;gap:6px;justify-content:center;margin:0 auto 10px;width:max-content;padding:6px;border-radius:999px;background:color-mix(in srgb,var(--surface) 92%,transparent);backdrop-filter:blur(10px);border:1px solid var(--line);box-shadow:0 4px 14px rgba(0,0,0,.12)}
+.pg-cal-step{position:sticky;top:calc(var(--pg-stick,0px) + var(--pg-progh,0px) + 8px);z-index:15;display:flex;gap:6px;justify-content:center;margin:0 auto 10px;width:max-content;padding:6px;border-radius:999px;background:color-mix(in srgb,var(--surface) 92%,transparent);backdrop-filter:blur(10px);border:1px solid var(--line);box-shadow:0 4px 14px rgba(0,0,0,.12)}
 .pg-cal-ws{display:flex;align-items:center;gap:4px;padding-left:6px;border-left:1px solid var(--line);margin-left:2px}.pg-cal-ws select{width:auto;padding:4px 6px;font-size:13px}
 .pg-cal-w.ghost{border-style:dashed;background:transparent}
 .pg-cpy{padding:4px 8px!important}
