@@ -19,13 +19,17 @@ export function buildProgramsDemo(){
       row("Goblet Squat", 3, 10, "35", "A1"), row("Push-Up", 3, 10, "", "A2"), row("Single-Leg RDL", 3, "8 each", "25", "B1"), row("Side Plank", 3, "30s each", "", "B2") ] }
   ]});
   const program = { id: "prog-maya", clientId: "maya", name: "Fall strength block", status: "active", startDate: iso(start), weeks: [0, 1, 2, 3].map(weekOf) };
+  // Last week's lines typed with notes, so this week's "Last time" shows them with next steps.
+  const wk2 = program.weeks[2].sessions, rowOf = (s, name) => s.rows.find(r => r.name === name);
+  wk2[1].lines = { [rowOf(wk2[1], "Face Pull").id]: "15 15 15 felt easy, squeeze at the top" };
+  wk2[2].lines = { [rowOf(wk2[2], "Push-Up").id]: "10 10 8 last set up on knees" };
   const logs = [];
   for (let i = 0; i < 3; i++) for (const s of program.weeks[i].sessions){
     const day = iso(addDays(start, i * 7 + (s.id.endsWith("a") ? 0 : s.id.endsWith("b") ? 2 : 4)));
     for (const r of s.rows){
       const n = parseInt(r.sets, 10) || 1;
       for (let k = 1; k <= n; k++) logs.push({ program_id: program.id, session_id: s.id, row_id: r.id, set_no: k, client_id: "maya", ex_name: r.name,
-        reps: r.name === "Hamstring Curl" ? 11 - k : parseInt(r.reps, 10) || null, weight: r.weight ? Number(r.weight) + (k === n && r.name !== "Hamstring Curl" ? 5 : 0) : null, timed: /^\s*\d+\s*s\b/.test(r.reps || ""), done: true, logged_on: day, source: s.homework ? "client" : "trainer" });
+        reps: r.name === "Hamstring Curl" ? 11 - k : r.name === "Push-Up" && i === 2 && k === 3 ? 8 : parseInt(r.reps, 10) || null, weight: r.weight ? Number(r.weight) + (k === n && r.name !== "Hamstring Curl" ? 5 : 0) : null, timed: /^\s*\d+\s*s\b/.test(r.reps || ""), done: true, logged_on: day, source: s.homework ? "client" : "trainer" });
     }
   }
   const sites = [[14, 22, 17, 24, 141.2], [13, 21, 16, 23, 140.4], [13, 20, 15, 22, 139.6], [12, 19, 15, 21, 138.8]];
