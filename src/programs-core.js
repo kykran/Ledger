@@ -62,11 +62,67 @@ export function bodyFat4(m, sex, age){
 export function ageOn(birthYear, dateStr){ const y = parseInt(birthYear, 10); if (!y) return null; return new Date(dateStr || Date.now()).getFullYear() - y; }
 
 /* Heaviest set per exercise per day, oldest first: {name: [{date, weight, reps}]}. */
-export function liftHistory(logs){
+
+/* ---------- exercise names ----------
+ * The same lift gets typed many ways over the years ("DB Chest Press", "Dumbell chest press", "Bentover row DB").
+ * liftKey() turns a name into a key that ignores case, word order, spelling slips and short forms, so history,
+ * "Last time", change badges and charts treat them as one exercise. Only plain-wording differences are merged on
+ * their own: "Deadlift" = "Conventional Deadlift" = "Barbell Deadlift", but "Single Leg Deadlift" stays its own lift.
+ * The trainer can merge or split names by hand: merges = { "<name, lower case>": "<key of the lift it belongs to>" | "=" }
+ * ("=" keeps that name on its own). */
+const WORD = {
+  db: "dumbbell", dbs: "dumbbell", dumbell: "dumbbell", dumbel: "dumbbell", dumbbel: "dumbbell", dumabell: "dumbbell", dumbe: "dumbbell", dumbbells: "dumbbell", dumbells: "dumbbell",
+  bb: "barbell", barell: "barbell", barbel: "barbell", kb: "kettlebell", kbs: "kettlebell", kettlbell: "kettlebell", kettlebells: "kettlebell",
+  sa: "single arm", sl: "single leg", rdl: "romanian deadlift", rdls: "romanian deadlift", romanain: "romanian", staggard: "staggered", stagard: "staggered", staggared: "staggered",
+  defecit: "deficit", defeceit: "deficit", birdog: "bird dog", birddog: "bird dog", nuetral: "neutral", bentover: "bent over", backsquat: "back squat", suat: "squat",
+  trab: "trap", trapbar: "trap bar", hexbar: "hex bar", ofset: "offset", stiffed: "stiff", legged: "leg", pullup: "pull up", pushup: "push up", chinup: "chin up",
+  convential: "conventional", isohold: "iso hold"
+};
+const STOP = new Set(["w", "with", "for", "the", "a", "an", "and", "of"]);
+const BARE = new Set(["deadlift", "bench press", "back squat", "squat", "front squat", "box squat", "bent over row", "romanian deadlift", "sumo deadlift", "incline bench press", "overhead press", "hip thrust", "bench"]);
+export function liftWords(name){
+  let t = String(name || "").toLowerCase().replace(/kettle\s+bell/g, "kettlebell").replace(/\b(1|one)[\s-]*arm\b/g, "single arm").replace(/\bsingle[\s-]+/g, "single ").replace(/\boff\s+set\b/g, "offset")
+    .replace(/[^a-z0-9]+/g, " ").trim();
+  let w = t.split(" ").filter(Boolean).flatMap(x => (WORD[x] || x).split(" "))
+    .map(x => x.length > 3 && /s$/.test(x) && !/ss$/.test(x) ? (WORD[x.slice(0, -1)] || x.slice(0, -1)) : x).flatMap(x => x.split(" "))
+    .filter(x => !STOP.has(x));
+  // "Barbell", "conventional" and "flat" only say the default for a plain main lift.
+  w = w.filter(x => x !== "flat"); // flat bench = bench
+  const rest = w.filter(x => !["barbell", "conventional", "standard", "regular"].includes(x)), had = rest.length < w.length;
+  if (had && BARE.has(rest.join(" "))) w = rest;
+  let s = w.join(" ");
+  if (had && s === "squat") s = "back squat";
+  if (s === "bench" || (had && s === "bench")) s = "bench press";
+  // Dumbbell chest press is a dumbbell bench press.
+  if (/\bdumbbell\b/.test(s)) s = s.replace(/\bchest press\b/, "bench press");
+  return s.split(" ").filter(Boolean);
+}
+export const autoLiftKey = name => [...new Set(liftWords(name))].sort().join(" ");
+export function liftKey(name, merges){
+  const raw = String(name || "").trim().toLowerCase().replace(/\s+/g, " "); if (!raw) return "";
+  const m = merges && merges[raw];
+  return m === "=" ? "=" + raw : m || autoLiftKey(raw);
+}
+/* Names that count as one lift: { key: { name: the most-logged spelling, names: { spelling: sets } } }. */
+export function liftGroups(logs, merges){
+  const g = {};
+  for (const l of logs || []){
+    const nm = String(l.ex_name || "").trim(); if (!nm) continue;
+    const k = liftKey(nm, merges), e = g[k] || (g[k] = { key: k, names: {} }); e.names[nm] = (e.names[nm] || 0) + 1;
+  }
+  // Most-logged spelling first; on a tie, one typed with capitals ("Barbell Deadlift" over "deadlift").
+  const caps = n => /[A-Z]/.test(n) ? 0 : 1;
+  for (const e of Object.values(g)){ e.order = Object.keys(e.names).sort((a, b) => e.names[b] - e.names[a] || caps(a) - caps(b) || a.localeCompare(b)); e.name = e.order[0]; }
+  return g;
+}
+
+/* Heaviest set per day for each lift, keyed by the lift's most-logged spelling. */
+export function liftHistory(logs, merges){
+  const groups = liftGroups(logs, merges);
   const by = {};
   for (const l of logs || []){
     const w = n(l.weight); if (w == null || !l.ex_name) continue;
-    const key = l.ex_name.trim(); const d = String(l.logged_on).slice(0, 10);
+    const key = groups[liftKey(l.ex_name, merges)].name; const d = String(l.logged_on).slice(0, 10);
     const list = by[key] || (by[key] = {});
     if (!list[d] || w > list[d].weight) list[d] = { date: d, weight: w, reps: n(l.reps) };
   }
@@ -126,7 +182,8 @@ export const VIDEO_CSS = `.vid{position:relative;width:100%;aspect-ratio:16/9;ba
 
 /* What a client sees on their program page. Shared by /api/program and the demo page.
  * Only exercises used in the client's programs are sent; videoUrls maps a stored video path to a signed URL. */
-export function clientProgramView({ client, trainerName, programs, exercises, logs, measurements, videoUrls = {}, clientWorkouts = [] }){
+export function clientProgramView({ client, trainerName, programs, exercises, logs, measurements, videoUrls = {}, clientWorkouts = [], liftMerges = null }){
+  const liftG = liftGroups(logs, liftMerges), liftName = n => n ? (liftG[liftKey(n, liftMerges)] || {}).name || n : n;
   const lib = Object.fromEntries((exercises || []).map(e => [e.id, e]));
   const active = (programs || []).filter(p => p.status !== "archived").map(p => withClientWorkouts(p, clientWorkouts)).sort((a, b) => String(b.startDate || "").localeCompare(String(a.startDate || "")));
   const used = new Set();
@@ -142,7 +199,7 @@ export function clientProgramView({ client, trainerName, programs, exercises, lo
   return {
     first: String(client.name || "").trim().split(/[\s+&]/)[0] || "there", trainer: trainerName || "",
     programs: active.map(strip), exercises: ex,
-    logs: (logs || []).map(l => ({ p: l.program_id, s: l.session_id, r: l.row_id, n: l.set_no, reps: l.reps != null ? Number(l.reps) : null, weight: l.weight != null ? Number(l.weight) : null, timed: !!l.timed, done: !!l.done, date: String(l.logged_on).slice(0, 10), by: l.source, ex: l.ex_name })),
+    logs: (logs || []).map(l => ({ p: l.program_id, s: l.session_id, r: l.row_id, n: l.set_no, reps: l.reps != null ? Number(l.reps) : null, weight: l.weight != null ? Number(l.weight) : null, timed: !!l.timed, done: !!l.done, date: String(l.logged_on).slice(0, 10), by: l.source, ex: liftName(l.ex_name) })),
     measurements: meas, updated: new Date().toISOString()
   };
 }
@@ -608,17 +665,17 @@ export function standardLiftHistory(logs){
  * `weight` is the suggested load when it differs from the plan, so "Use these numbers" can write it in. */
 const fmtW = w => String(Math.round(w * 10) / 10);
 const repRange = r => { const m = String((r && r.reps) || "").match(/(\d+)\s*[-–]\s*(\d+)/); return m ? [+m[1], +m[2]] : null; };
-export function sessionBrief({ session, logs = [], notes = "", billing = null, before = new Date() }){
+export function sessionBrief({ session, logs = [], notes = "", billing = null, before = new Date(), merges = null }){
   const cut = ymdOf(before), lines = [], flags = [];
   const byEx = {};
   for (const l of logs){
     if (!l.ex_name || (!l.done && l.reps == null && l.weight == null)) continue;
     const d = String(l.logged_on).slice(0, 10); if (d >= cut) continue;
-    const k = l.ex_name.trim().toLowerCase(); ((byEx[k] = byEx[k] || {})[d] = byEx[k][d] || []).push(l);
+    const k = liftKey(l.ex_name, merges); ((byEx[k] = byEx[k] || {})[d] = byEx[k][d] || []).push(l);
   }
   for (const r of (session && session.rows) || []){
     if (!r.name) continue;
-    const days = byEx[r.name.trim().toLowerCase()] || {}, dates = Object.keys(days).sort(), lastDate = dates[dates.length - 1];
+    const days = byEx[liftKey(r.name, merges)] || {}, dates = Object.keys(days).sort(), lastDate = dates[dates.length - 1];
     if (!lastDate){ lines.push({ rowId: r.id, name: r.name, last: "", lastDate: "", say: "First time", dir: "new", stuck: false }); continue; }
     const sets = days[lastDate].sort((a, b) => a.set_no - b.set_no).map(l => ({ reps: n(l.reps), weight: n(l.weight), timed: !!l.timed })), secs = sets.some(x => x.timed);
     const last = fmtSetLog(sets), top = topSet(sets), pw = n(r.weight), range = repRange(r);

@@ -3,7 +3,7 @@
  * app.js calls attach(ctx) once and then render()/onClick()/onChange()/onInput() while the Programs tab is open.
  * Data goes through ctx.A.programs (see adapter-hosted.js / programs-demo.js). */
 import { pid, newRow, newSession, newWeek, newProgram, copySession, copyWeek, repeatSession, repeatWeek, setCount,
-  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, timedPlan, sessionForDate, weekZero, weekStartDay, weeksSince, sessionBrief, findSession, parseTrueCoach, truecoachToProgram, topSet, liftDelta, STANDARD_LIFTS, standardLiftHistory } from "./programs-core.js";
+  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, timedPlan, sessionForDate, weekZero, weekStartDay, weeksSince, sessionBrief, findSession, parseTrueCoach, truecoachToProgram, topSet, liftDelta, STANDARD_LIFTS, standardLiftHistory, liftKey, autoLiftKey, liftGroups } from "./programs-core.js";
 import { STARTER_EXERCISES } from "./exercise-seed.js";
 import { accessBlock, accessAct, loadAccess } from "./client-access.js";
 import { createVoice, voiceContext, VOICE_CSS } from "./programs-voice.js";
@@ -44,6 +44,9 @@ const libByName = () => Object.fromEntries((PG.lib || []).map(e => [e.name.trim(
 /* Programs other trainers shared with me show up as virtual clients: "sh:<owner>:<their client id>". */
 /* If I have my own client with the same name (both trainers see Claire), the shared program shows under my client instead, so we both work in one program. */
 const nameKey = n => String(n || "").trim().toLowerCase();
+/* Exercise names that count as one lift (spelling, short forms, word order), plus the trainer's own merges. */
+const merges = () => (C.S.prof && C.S.prof.liftMerges) || {};
+const lk = n => liftKey(n, merges());
 const myClients = () => C.S.allClients || C.S.clients || [];
 const twinOf = p => p.clientName ? myClients().find(c => [c.name, ...(c.aliases || [])].some(n => nameKey(n) === nameKey(p.clientName))) : null;
 const sharedClients = () => { const out = {}; for (const p of PG.shared){ if (twinOf(p)) continue; const id = "sh:" + p.ownerId + ":" + p.clientId; out[id] = out[id] || { id, name: p.clientName || "Client", shared: true, ownerId: p.ownerId, ownerName: p.ownerName, realId: p.clientId }; } return Object.values(out); };
@@ -221,7 +224,7 @@ function briefOf(c, p, when){
   if (!logs){ if (!PG.briefLoading){ PG.briefLoading = c.id; C.A.programs.logs(c.id).then(l => { PG.logs[c.id] = PG.logs[c.id] || l; }).catch(() => { PG.logs[c.id] = PG.logs[c.id] || []; }).finally(() => { PG.briefLoading = null; redraw(); }); } return null; }
   const hit = p ? sessionForDate(p, when, apptsOf(c)) : null;
   const M = C.getModel && C.getModel(), st = M && M.stats && M.stats[c.id];
-  const b = sessionBrief({ session: hit && hit.session, logs, notes: c.programNotes, billing: st, before: when });
+  const b = sessionBrief({ session: hit && hit.session, logs, notes: c.programNotes, billing: st, before: when, merges: merges() });
   return b.lines.length || b.flags.length ? { ...b, session: hit && hit.session, prog: p } : null;
 }
 function briefHtml(b, { notes = true, head = true } = {}){
@@ -675,11 +678,11 @@ function setsDone(s, r){
 }
 /* This session's top set for an exercise vs the most recent earlier day it was done: "+15 lb · +2 reps". */
 function deltaFor(s, r){
-  const all = PG.logs[PG.clientId] || [], key = String(r.name || "").trim().toLowerCase(); if (!key) return null;
+  const all = PG.logs[PG.clientId] || [], key = lk(r.name); if (!key) return null;
   const mine = all.filter(l => l.session_id === s.id && l.row_id === r.id && (l.done || l.reps != null));
   if (!mine.length) return null;
   const day = String(mine[0].logged_on).slice(0, 10), by = {};
-  for (const l of all){ if (l.session_id === s.id || String(l.ex_name || "").trim().toLowerCase() !== key) continue; const d = String(l.logged_on).slice(0, 10); if (d < day) (by[d] = by[d] || []).push(l); }
+  for (const l of all){ if (l.session_id === s.id || lk(l.ex_name) !== key) continue; const d = String(l.logged_on).slice(0, 10); if (d < day) (by[d] = by[d] || []).push(l); }
   const prevDay = Object.keys(by).sort().pop(); if (!prevDay) return null;
   return liftDelta(topSet(mine), topSet(by[prevDay]));
 }
@@ -692,9 +695,9 @@ function typedLineOf(progId, sid, rid){
   return "";
 }
 function lastTime(name, excludeSid){
-  const key = String(name || "").trim().toLowerCase(); if (!key) return "";
+  const key = lk(name); if (!key) return "";
   const by = {};
-  for (const l of PG.logs[PG.clientId] || []){ if (l.session_id === excludeSid || String(l.ex_name || "").trim().toLowerCase() !== key || (!l.done && l.reps == null && l.weight == null)) continue; const d = String(l.logged_on).slice(0, 10); (by[d] = by[d] || []).push(l); }
+  for (const l of PG.logs[PG.clientId] || []){ if (l.session_id === excludeSid || lk(l.ex_name) !== key || (!l.done && l.reps == null && l.weight == null)) continue; const d = String(l.logged_on).slice(0, 10); (by[d] = by[d] || []).push(l); }
   const day = Object.keys(by).sort().pop(); if (!day) return "";
   const first = by[day][0], line = typedLineOf(first.program_id, first.session_id, first.row_id);
   if (line) return fmtDay(day) + ": " + line;
@@ -787,17 +790,27 @@ function putSet(si, ri, no, patch, now){
 }
 
 /* ---------- progress: measurements, body fat, lifts, log history ---------- */
+/* Under the lift chart: every spelling counted in it (✕ takes one out) and a picker to fold in another name. */
+function liftNamesLine(logs){
+  const G = liftGroups(logs, merges()), g = Object.values(G).find(e => e.name === PG.lift); if (!g) return "";
+  const mine = g.order;
+  const others = Object.values(G).filter(e => e !== g).sort((a, b) => a.name.localeCompare(b.name));
+  return `<div class="pg-lnames small"><span class="muted">${mine.length > 1 ? "Counted together:" : "Name:"}</span>
+    ${mine.map(n => `<span class="pg-lname">${esc(n)}${mine.length > 1 ? `<button class="pg-lname-x" data-act="pg-lsplit" data-n="${esc(n)}" title="Count “${esc(n)}” on its own" aria-label="Take ${esc(n)} out">✕</button>` : ""}</span>`).join("")}
+    ${others.length ? `<select class="pg-in pg-lname-add" data-pg="lmerge" aria-label="Count another name as this lift"><option value="">+ Same lift as…</option>${others.map(e => `<option value="${esc(e.key)}">${esc(e.name)}${Object.keys(e.names).length > 1 ? ` (${Object.keys(e.names).length} names)` : ""}</option>`).join("")}</select>` : ""}</div>`;
+}
+function saveMerges(next, msg){ C.saveProfile({ liftMerges: next }).then(() => msg && C.toast(msg)).catch(() => {}); if (C.S.prof) C.S.prof.liftMerges = next; redraw(); }
 function renderProgress(c){
   const meas = PG.meas[c.id], logs = PG.logs[c.id];
   if (!meas || !logs) return `<div class="card"><div class="empty">Loading…</div></div>`;
-  if (c.shared){ const H = liftHistory(logs), names = Object.keys(H); if (!PG.lift || !H[PG.lift]) PG.lift = names[0] || "";
+  if (c.shared){ const H = liftHistory(logs, merges()), names = Object.keys(H); if (!PG.lift || !H[PG.lift]) PG.lift = names[0] || "";
     return `<section class="card"><div class="card-h"><h2>Lifts over time</h2>${names.length ? `<select class="pg-in" data-pg="lift" aria-label="Exercise">${names.map(n => `<option ${n === PG.lift ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>` : ""}</div>${names.length ? lineChart((H[PG.lift] || []).map(x => ({ date: x.date, value: x.weight }))) : `<div class="empty">Nothing logged yet.</div>`}<p class="small muted">Bodyweight and body fat stay with ${esc(c.ownerName || "the trainer who shared this")}.</p></section>`; }
   const sex = c.sex || "", by = c.birthYear || "";
   const rows = meas.slice().sort((a, b) => String(a.taken_on).localeCompare(String(b.taken_on)));
   const bfOf = m => m.body_fat != null ? Number(m.body_fat) : bodyFat4(m, sex, ageOn(by, m.taken_on));
   const wPts = rows.filter(m => num(m.weight) != null).map(m => ({ date: String(m.taken_on).slice(0, 10), value: Number(m.weight), label: m.source === "client" ? "logged by client" : "" }));
   const bPts = rows.map(m => ({ date: String(m.taken_on).slice(0, 10), value: bfOf(m) })).filter(p => p.value != null);
-  const H = liftHistory(logs), names = Object.keys(H).sort((a, b) => H[b].length - H[a].length || a.localeCompare(b));
+  const H = liftHistory(logs, merges()), names = Object.keys(H).sort((a, b) => H[b].length - H[a].length || a.localeCompare(b));
   if (!PG.lift || !H[PG.lift]) PG.lift = names[0] || "";
   const lift = H[PG.lift] || [];
   const prev = bfOf({ triceps: valIn("pg-m-tri"), abdomen: valIn("pg-m-abd"), suprailiac: valIn("pg-m-sup"), thigh: valIn("pg-m-thi"), taken_on: today() });
@@ -833,7 +846,7 @@ function renderProgress(c){
     <div class="pg-row"><button class="btn primary" data-act="pg-addmeas">Save measurement</button><span class="small" id="pg-bf">${prev != null ? `Body fat ≈ <b>${prev}%</b>` : "Body fat appears when all four sites, sex and birth year are filled in."}</span></div>
   </section>
   <section class="card"><div class="card-h"><h2>Lifts over time</h2>${names.length ? `<select class="pg-in" data-pg="lift" aria-label="Exercise">${names.map(n => `<option ${n === PG.lift ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>` : ""}</div>
-    ${names.length ? lineChart(lift.map(x => ({ date: x.date, value: x.weight, label: x.reps ? x.reps + " reps" : "" })), { unit: "", decimals: 1 }) + `<p class="small muted">Heaviest logged set each day.</p>` : `<div class="empty">Logged weights show up here. Use “Log” on a session, or have ${esc(c.name.split(" ")[0])} log homework from their link.</div>`}
+    ${names.length ? lineChart(lift.map(x => ({ date: x.date, value: x.weight, label: x.reps ? x.reps + " reps" : "" })), { unit: "", decimals: 1 }) + `<p class="small muted">Heaviest logged set each day.</p>` + liftNamesLine(logs) : `<div class="empty">Logged weights show up here. Use “Log” on a session, or have ${esc(c.name.split(" ")[0])} log homework from their link.</div>`}
     ${names.length > 1 ? `<div class="tablewrap"><table><thead><tr><th>Exercise</th><th class="num">First</th><th class="num">Latest</th><th class="num">Best</th><th>Last logged</th></tr></thead><tbody>${names.slice(0, 12).map(n => { const h = H[n], best = Math.max(...h.map(x => x.weight)); return `<tr><td>${esc(n)}</td><td class="num">${h[0].weight}</td><td class="num">${h[h.length - 1].weight}</td><td class="num" style="font-weight:600">${best}</td><td class="small">${fmtDay(h[h.length - 1].date)}</td></tr>`; }).join("")}</tbody></table></div>` : ""}
   </section>
   <div class="grid2">
@@ -1069,7 +1082,7 @@ async function onClick(el, e){
     case "pg-brief-use": {
       const p = (PG.progs || []).find(x => x.id === el.getAttribute("data-prog")), hit = p && findSession(p, el.getAttribute("data-sid")); if (!hit) break;
       const c = client(p.clientId);
-      const b = sessionBrief({ session: hit.session, logs: PG.logs[p.clientId] || [], before: nextOf(c) || new Date() });
+      const b = sessionBrief({ session: hit.session, logs: PG.logs[p.clientId] || [], before: nextOf(c) || new Date(), merges: merges() });
       let k = 0; for (const l of b.lines) if (l.weight != null){ const r = hit.session.rows.find(x => x.id === l.rowId); if (r){ r.weight = String(Math.round(l.weight * 10) / 10); k++; } }
       if (k){ saveSoon(p); C.toast(`${hit.session.name}: ${k} weight${k === 1 ? "" : "s"} updated`); }
       redraw(); break; }
@@ -1239,6 +1252,12 @@ async function onClick(el, e){
       break; }
     case "pg-exdel": { const id = PG.edEx.id, path = PG.edEx.videoPath; PG.lib = PG.lib.filter(x => x.id !== id); PG.edEx = null; C.closeModal(); redraw();
       C.A.programs.deleteExercise(id).then(() => { if (path) C.A.programs.deleteVideo(path).catch(() => {}); C.toast("Deleted"); }).catch(() => C.toast("Couldn't delete")); break; }
+    case "pg-lsplit": { // count this spelling on its own again
+      const n = el.getAttribute("data-n") || "", raw = n.trim().toLowerCase().replace(/\s+/g, " "), cur = merges(), next = { ...cur };
+      const g = Object.values(liftGroups(PG.logs[PG.clientId] || [], cur)).find(e => e.names[n]); if (!g) return true;
+      if (cur[raw] && cur[raw] !== "=" && autoLiftKey(raw) !== g.key) delete next[raw]; else next[raw] = "=";
+      if (g.name === n) PG.lift = g.order.filter(x => x !== n)[0] || n; // keep the rest on screen
+      saveMerges(next, `“${n}” counts on its own now`); return true; }
     case "pg-addmeas": {
       const c = client(PG.clientId);
       const m = { client_id: c.id, taken_on: valIn("pg-m-date") || today(), weight: num(valIn("pg-m-w")), triceps: num(valIn("pg-m-tri")), abdomen: num(valIn("pg-m-abd")), suprailiac: num(valIn("pg-m-sup")), thigh: num(valIn("pg-m-thi")), source: "trainer" };
@@ -1334,6 +1353,11 @@ function onChange(t){
     if (v !== (c.email || "")) C.saveClient({ ...c, email: v }).then(() => C.toast("Email saved")).catch(() => {}); return true; }
   if (k === "cnotes"){ const c = client(PG.clientId); if (c && !c.shared && (c.programNotes || "") !== t.value){ C.saveClient({ ...c, programNotes: t.value.trim() }).then(() => C.toast("Notes saved")).catch(() => {}); } return true; }
   if (k === "lift"){ PG.lift = t.value; redraw(); return true; }
+  if (k === "lmerge"){ // fold every spelling of the picked lift into the one on screen
+    const logs = PG.logs[PG.clientId] || [], G = liftGroups(logs, merges()), from = G[t.value], to = Object.values(G).find(e => e.name === PG.lift);
+    if (!from || !to) return true; const next = { ...merges() };
+    for (const n of Object.keys(from.names)) next[n.trim().toLowerCase().replace(/\s+/g, " ")] = to.key;
+    saveMerges(next, `“${from.name}” now counts as ${to.name}`); return true; }
   if (k === "who"){ const c = client(PG.clientId); C.saveClient({ ...c, sex: valIn("pg-sex"), birthYear: num(valIn("pg-by")) }).catch(() => {}); return true; }
   const p = P(); if (!p) return true;
   if (k === "sess" && t.type === "checkbox"){ mutate(p => { const x = p.weeks[PG.week].sessions[si]; x.homework = t.checked; if (!t.checked) delete x.wasSession; }); return true; }
@@ -1516,6 +1540,11 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-tcsteps{margin:0 0 6px;padding-left:18px;display:grid;gap:3px}
 .pg-tcsum{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface2)}
 .pg-tcgrid{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px}
+.pg-lnames{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px}
+.pg-lname{display:inline-flex;align-items:center;gap:2px;padding:2px 4px 2px 9px;border-radius:999px;background:var(--surface2)}
+.pg-lname-x{border:0;background:none;color:var(--muted);cursor:pointer;font-size:11px;padding:2px 5px;border-radius:999px}
+.pg-lname-x:hover{color:var(--ink);background:var(--line)}
+.pg-lname-add{width:auto;max-width:240px;padding:3px 8px;font-size:13px}
 .pg-delta{display:inline-flex;align-items:center;gap:3px;font-size:12px;font-weight:600;padding:1px 7px;border-radius:999px;white-space:nowrap;background:var(--surface2);color:var(--muted)}
 .pg-delta.up{color:var(--pos);background:color-mix(in srgb,var(--pos) 13%,transparent)}
 .pg-delta.down{color:var(--neg,#c0392b);background:color-mix(in srgb,var(--neg,#c0392b) 12%,transparent)}
