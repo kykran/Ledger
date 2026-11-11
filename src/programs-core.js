@@ -81,7 +81,7 @@ const WORD = {
 const STOP = new Set(["w", "with", "for", "the", "a", "an", "and", "of"]);
 const BARE = new Set(["deadlift", "bench press", "back squat", "squat", "front squat", "box squat", "bent over row", "romanian deadlift", "sumo deadlift", "incline bench press", "overhead press", "hip thrust", "bench"]);
 export function liftWords(name){
-  let t = String(name || "").toLowerCase().replace(/kettle\s+bell/g, "kettlebell").replace(/\b(1|one)[\s-]*arm\b/g, "single arm").replace(/\bsingle[\s-]+/g, "single ").replace(/\boff\s+set\b/g, "offset")
+  let t = String(name || "").toLowerCase().replace(/^\s*issa exercise library\s+/, "").replace(/kettle\s+bell/g, "kettlebell").replace(/\b(1|one)[\s-]*arm\b/g, "single arm").replace(/\bsingle[\s-]+/g, "single ").replace(/\boff\s+set\b/g, "offset")
     .replace(/[^a-z0-9]+/g, " ").trim();
   let w = t.split(" ").filter(Boolean).flatMap(x => (WORD[x] || x).split(" "))
     .map(x => x.length > 3 && /s$/.test(x) && !/ss$/.test(x) ? (WORD[x.slice(0, -1)] || x.slice(0, -1)) : x).flatMap(x => x.split(" "))
