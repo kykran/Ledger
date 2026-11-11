@@ -577,12 +577,19 @@ function renderOverviewWeek(M, a){
   ${rentCountCard(M, a, addDays(a, 7), "Week of " + fmtD(a))}
   ${overviewRest(M)}`;
 }
+/* Weeks still to reconcile: show the newest (and any that changed); the rest fold into one line. */
+function recShown(rec){
+  const changed = rec.filter(t => t.state === "changed"), plain = rec.filter(t => t.state !== "changed");
+  if (plain.length <= 2) return rec;
+  const rest = plain.slice(1);
+  return [...changed, plain[0], { more: rest.length, key: rest[rest.length - 1].key }];
+}
 function todoCard(M){
   const rec = recTodos(M), pg = PROGS() ? PROGS().todos(M).filter(t => t.kind !== "noprogram") : [], ml = E.monthLinkTodos(M);
   if (!rec.length && !pg.length && !ml.length) return "";
   const items = [
     ...ml.map(t => `<div><span>Send <b>${esc(firstName(t.c.name))}</b> ${esc(mLabel(t.month, true).replace(/ \d{4}$/, ""))}'s sessions · ${t.n} session${t.n===1?"":"s"}</span><button class="btn sm" data-act="msg" data-id="${t.c.id}" data-kind="monthlink" data-month="${t.month}">Send link</button></div>`),
-    ...rec.map(t => `<div><span>${t.state === "changed" ? `Re-check week of <b>${esc(weekLabel(t.a))}</b> · changed since you reconciled (${t.was} → ${t.n} sessions)` : `Reconcile week of <b>${esc(weekLabel(t.a))}</b> · ${t.n} session${t.n===1?"":"s"}, ${money(t.net)} net`}</span><button class="btn sm" data-act="rec-go" data-week="${t.key}">Review</button></div>`),
+    ...recShown(rec).map(t => t.more ? `<div><span class="muted">${t.more} earlier week${t.more===1?"":"s"} not reconciled yet</span><button class="btn sm" data-act="rec-go" data-week="${t.key}">Start with oldest</button></div>` : `<div><span>${t.state === "changed" ? `Re-check week of <b>${esc(weekLabel(t.a))}</b> · changed since you reconciled (${t.was} → ${t.n} sessions)` : `Reconcile week of <b>${esc(weekLabel(t.a))}</b> · ${t.n} session${t.n===1?"":"s"}, ${money(t.net)} net`}</span><button class="btn sm" data-act="rec-go" data-week="${t.key}">Review</button></div>`),
     ...pg.slice(0, 4).map(t => { const x = PROGS().todoText(t); return `<div><span><b>${esc(x.who)}</b> · ${esc(x.what)}</span><button class="btn sm" data-act="goto-programs">Programs</button></div>`; }),
     ...(pg.length > 4 ? [`<div><span class="muted">${pg.length - 4} more program to-do${pg.length - 4 === 1 ? "" : "s"}</span><button class="btn sm" data-act="goto-programs">See all</button></div>`] : [])
   ];
