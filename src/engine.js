@@ -38,7 +38,7 @@ export const mPrev = k => { const d = mStart(k); return mkey(new Date(d.getFullY
 export const mLabel = (k, long) => { const d = mStart(k); return (long ? d.toLocaleDateString("en-US",{month:"long"}) : MONTHS[d.getMonth()]) + " " + d.getFullYear(); };
 export const sow = d => { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate()-((x.getDay()+6)%7)); return x; };
 export const addDays = (d,n) => { const x = new Date(d); x.setDate(x.getDate()+n); return x; };
-export const norm = s => (s||"").toLowerCase().replace(/[’']/g,"").replace(/[^a-z0-9+&\s]/g," ").replace(/\s+/g," ").trim();
+export const norm = s => (s||"").toLowerCase().replace(/[’']/g,"").replace(/\s*([+&])\s*/g," $1 ").replace(/[^a-z0-9+&\s]/g," ").replace(/\s+/g," ").trim();
 export function clean(s){
   const w = norm(s).split(" ").filter(Boolean);
   while (w.length > 1 && LEAD.has(w[0])) w.shift();
