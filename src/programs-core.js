@@ -681,9 +681,10 @@ const LABEL = { squat: "squat", hinge: "hinge (deadlift)", push: "push (bench an
 /* A homework workout that fits between the client's last session and their next one:
  * accessories for the main lifts in those sessions, the patterns they skip (balance), and single-leg and core stability.
  * last/next: sessions ({name, rows}) or null. library: the trainer's exercises (names are matched so videos show). seed varies the pick. */
-export function suggestWorkout({ last, next, library = [], seed = 0, equipment = null }){
+export function suggestWorkout({ last, next, week = [], library = [], seed = 0, equipment = null }){
   const rowsOf = s => (s && s.rows || []).filter(r => r.name);
-  const near = [...rowsOf(last), ...rowsOf(next)];
+  // The rest of the week counts too: patterns it already covers aren't "missing", and its exercises aren't repeated.
+  const near = [...rowsOf(last), ...rowsOf(next), ...(week || []).flatMap(rowsOf)];
   const hit = new Set(near.map(r => patternOf(r.name)).filter(Boolean));
   const primaries = [...new Set(near.filter(r => { const p = patternOf(r.name); return PRIMARY[p] && PRIMARY[p].test(r.name); }).map(r => patternOf(r.name)))];
   const used = new Set(near.map(r => r.name.toLowerCase()));
@@ -701,7 +702,7 @@ export function suggestWorkout({ last, next, library = [], seed = 0, equipment =
   while (out.length < 4){ const a = rot(ACCESSORY.pull, seed + out.length)[0]; if (!take(a, "Balances out the week")) break; }
   out.forEach((r, i) => { r.id = pid("r"); r.group = String.fromCharCode(65 + Math.floor(i / 2)) + (i % 2 + 1); });
   const focus = primaries.slice(0, 2).map(p => LABEL[p].replace(/ \(.*/, ""));
-  const why = `${last ? `Last session: ${last.name}.` : ""}${next ? ` Next: ${next.name}.` : ""} This adds ${focus.length ? `accessories for your ${focus.join(" and ")}` : "whole-body work"}${missing.length ? `, some ${missing.slice(0, 2).map(p => LABEL[p].replace(/ \(.*/, "")).join(" and ")} for balance` : ""}, plus single-leg and core control. About 30 minutes.`.trim();
+  const why = `${last ? `Last session: ${last.name}.` : ""}${next ? ` Next: ${next.name}.` : ""} Looking at your whole week, this adds ${focus.length ? `accessories for your ${focus.join(" and ")}` : "whole-body work"}${missing.length ? `, some ${missing.slice(0, 2).map(p => LABEL[p].replace(/ \(.*/, "")).join(" and ")} for balance` : ""}, plus single-leg and core control. About 30 minutes.`.trim();
   // Fit it to the client's equipment: anything they can't do becomes an equivalent (the note stays, the swap isn't flagged).
   const rows = equipment ? adaptRows(out, equipment, { library, seed }).map(r => { const { swappedFrom, cantDo, ...x } = r; return x; }).filter((r, i, a) => a.findIndex(y => y.name === r.name) === i) : out;
   return { name: "Balance + accessories", notes: "", rows, why };
@@ -724,7 +725,7 @@ export const EQUIPMENT = [["bodyweight", "Just my body"], ["dumbbells", "Dumbbel
 const ALTS = [
   ["squat", "Goblet Squat", [["dumbbells"], ["kettlebell"]], "10"], ["squat", "Bodyweight Squat", [["bodyweight"]], "15"], ["squat", "Reverse Lunge", [["bodyweight"]], "8 each"],
   ["squat", "Split Squat", [["bodyweight"]], "8 each"], ["squat", "Bulgarian Split Squat", [["dumbbells", "bench"], ["bench"]], "8 each"], ["squat", "Step-Up", [["box"], ["bench"]], "8 each"],
-  ["squat", "Band Squat", [["bands"]], "12"], ["squat", "Back Squat", [["barbell"]], "6-8"], ["squat", "Leg Press", [["gym"]], "10-12"],
+  ["squat", "Band Squat", [["bands"]], "12"], ["squat", "Box Squat", [["box"], ["bench"]], "10"], ["squat", "Wall Sit", [["bodyweight"]], "30-45s"], ["squat", "Back Squat", [["barbell"]], "6-8"], ["squat", "Leg Press", [["gym"]], "10-12"],
   ["hinge", "Single-Leg RDL", [["dumbbells"], ["kettlebell"], ["bodyweight"]], "8 each"], ["hinge", "Glute Bridge", [["bodyweight"]], "12"], ["hinge", "Single-Leg Glute Bridge", [["bodyweight"]], "10 each"],
   ["hinge", "Kettlebell Swing", [["kettlebell"]], "15"], ["hinge", "Dumbbell RDL", [["dumbbells"]], "10"], ["hinge", "Band Good Morning", [["bands"]], "12"], ["hinge", "Romanian Deadlift", [["barbell"]], "8"],
   ["hinge", "Hamstring Curl", [["gym"]], "10-12"],
@@ -770,4 +771,58 @@ export function adaptRows(rows, eq, { library = [], vary = false, seed = 0 } = {
     const le = lib[a[1].toLowerCase()];
     return { ...r, name: le ? le.name : a[1], exId: le ? le.id : null, reps: a[3], weight: "", swappedFrom: r.name };
   });
+}
+
+/* ---------- a client asking for a workout or a swap in their own words ---------- */
+const FOCUS = [
+  ["Legs", ["squat", "hinge", "squat", "hinge"], /\b(legs?|lower|squats?|glutes?|quads?|hamstrings?|butt|hips?)\b/],
+  ["Upper body", ["push", "pull", "push", "pull"], /\b(upper|arms?|chest|back|shoulders?|biceps?|triceps?|push|pull)\b/],
+  ["Core", ["core", "core", "hinge", "core"], /\b(core|abs?|stomach|plank)\b/],
+  ["Full body", ["squat", "push", "hinge", "pull"], /\b(full|whole|total|everything)\b/]
+];
+/* Reads "30 min legs, hotel gym, knee is a bit sore" into a focus, a length and whether something hurts. */
+export function readAsk(text){
+  const t = String(text || "").toLowerCase(), f = FOCUS.find(x => x[2].test(t));
+  const m = t.match(/(\d{1,3})\s*(?:-?\s*)(?:min|mins|minutes?)\b/) || t.match(/\b(half an hour)\b/) || t.match(/\b(an? hour)\b/);
+  const minutes = m ? (/half/.test(m[1]) ? 30 : /hour/.test(m[1]) ? 60 : Math.max(10, Math.min(90, +m[1]))) : /\b(quick|short)\b/.test(t) ? 20 : null;
+  const hurt = (t.match(/\b(knee|back|shoulder|hip|wrist|elbow|ankle|neck)s?\b[^.,;]*\b(sore|hurts?|pain|tweaked|injur\w*|achy|bad)\b|\b(sore|hurts?|pain|tweaked|injur\w*|achy|bad)\b[^.,;]*\b(knee|back|shoulder|hip|wrist|elbow|ankle|neck)s?\b/) || []);
+  return { focus: f ? f[0] : null, patterns: f ? f[1] : null, minutes, hurt: hurt[1] || hurt[4] || (/\b(sore|hurts?|pain|injur\w*)\b/.test(t) ? "sore" : "") };
+}
+
+/* A workout from what the client asked for. Without a clear focus it's the usual "fits around your sessions" one.
+ * Uses only the equipment picked; about 7 minutes an exercise. */
+export function askWorkout({ ask = "", last = null, next = null, week = [], library = [], seed = 0, equipment = null }){
+  const A = readAsk(ask), eq = equipment || EQUIPMENT.map(e => e[0]);
+  let w;
+  if (!A.patterns) w = suggestWorkout({ last, next, week, library, seed, equipment });
+  else {
+    const n = Math.max(3, Math.min(8, Math.round((A.minutes || 30) / 7))), lib = Object.fromEntries((library || []).filter(e => e && e.name).map(e => [e.name.toLowerCase(), e]));
+    // Skip exercises already in this week's other workouts when there's another option.
+    const done = new Set([last, next, ...(week || [])].flatMap(x => (x && x.rows || []).map(r => String(r.name || "").toLowerCase())));
+    const taken = new Set(), rows = [], pats = Array.from({ length: n }, (_, i) => i === n - 1 && A.focus !== "Core" ? "core" : A.patterns[i % A.patterns.length]);
+    pats.forEach((pat, i) => { const all = ALTS.filter(a => a[0] === pat && canDo(a[2], eq) && !taken.has(a[1].toLowerCase())), fresh = all.filter(a => !done.has(a[1].toLowerCase())), opts = fresh.length ? fresh : all; if (!opts.length) return;
+      const a = opts[(seed + Math.floor(i / A.patterns.length)) % opts.length]; taken.add(a[1].toLowerCase()); const e = lib[a[1].toLowerCase()];
+      rows.push({ id: pid("r"), name: e ? e.name : a[1], exId: e ? e.id : null, group: "", sets: "3", reps: a[3], weight: "", note: "" }); });
+    rows.forEach((r, i) => { r.group = String.fromCharCode(65 + Math.floor(i / 2)) + (i % 2 + 1); });
+    w = { name: A.focus, notes: "", rows, why: `${A.focus}, about ${A.minutes || 30} minutes, with what you have. Do the A pair back to back, rest a minute, then the next pair.` };
+  }
+  if (A.hurt) w.why = (w.why || "") + ` Since your ${A.hurt === "sore" ? "body is sore" : A.hurt + " is bothering you"}, go lighter, skip anything that hurts, and tell your trainer.`;
+  return w;
+}
+
+const GENTLE = /^(Box Squat|Wall Sit|Glute Bridge|Band Good Morning|Incline Push-Up|Band Chest Press|Band Row|Band Pull-Apart|Chest-Supported Row|Dead Bug|Bird Dog|Plank)$/;
+export const SWAP_REASONS = [["equipment", "Don't have it"], ["busy", "Machine's taken"], ["hurts", "It hurts"], ["dislike", "Something else"]];
+/* Up to n swaps for one exercise: same movement, doable with the equipment picked, not already in the workout.
+ * "hurts" puts the gentler (bodyweight, single-side) options first. Returns [{name, exId, reps, why}]. */
+export function swapOptions(name, { equipment = null, library = [], exclude = [], reason = "", seed = 0, n = 3 } = {}){
+  const eq = (equipment || EQUIPMENT.map(e => e[0])).filter(k => !(reason === "busy" && k === "gym"));
+  const lib = Object.fromEntries((library || []).filter(e => e && e.name).map(e => [e.name.toLowerCase(), e]));
+  const skip = new Set([name, ...exclude].map(x => String(x || "").toLowerCase()));
+  const pat = patternOf(name) || (/carry|balance|core|ab/i.test(name) ? "core" : "");
+  if (!pat) return [];
+  let opts = ALTS.filter(a => a[0] === pat && canDo(a[2], eq) && !skip.has(a[1].toLowerCase()));
+  if (reason === "hurts") opts = [...opts.filter(a => GENTLE.test(a[1])), ...opts.filter(a => !GENTLE.test(a[1]))];
+  else opts = opts.map((_, i) => opts[(i + seed) % opts.length]);
+  const why = { equipment: "Same movement, with what you have", busy: "Same movement, no machine needed", hurts: "Gentler on the joints. Go light and stop if it hurts", dislike: "Same movement, different exercise" }[reason] || "Same movement";
+  return opts.slice(0, n).map(a => { const e = lib[a[1].toLowerCase()]; return { name: e ? e.name : a[1], exId: e ? e.id : null, reps: a[3], why }; });
 }

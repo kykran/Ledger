@@ -11,7 +11,7 @@ import { programView, clientAction, flagsFor, sha, randomToken } from "./_client
 import { sendMail, mailReady } from "./_mail.js";
 
 const KEY = /^[A-Za-z0-9_-]{8,40}$/;
-const CODE_DAYS = 30, MAX_FAILS = 5, LOCK_MIN = 15;
+const AI_PER_DAY = 40, CODE_DAYS = 30, MAX_FAILS = 5, LOCK_MIN = 15;
 const cookieName = k => "tt_" + k;
 const firstOf = n => String(n || "").trim().split(/[\s+&]/)[0] || "there";
 const maskEmail = e => { const [u, d] = String(e).split("@"); return d ? u.slice(0, 1) + "•••@" + d : ""; };
@@ -113,6 +113,12 @@ export default async function handler(req, res){
       if (error) throw error;
       return send(res, 200, { ok: true });
     }
+    // AI costs money: up to 40 workout or swap asks a day per client, then the built-in planner answers.
+    if ((b.action === "suggest" || b.action === "swap") && process.env.ANTHROPIC_API_KEY){
+      const d = new Date().toISOString().slice(0, 10), u = (acc.prefs || {}).ai || {}, n = u.d === d ? +u.n || 0 : 0;
+      if (n >= AI_PER_DAY) b.noAi = true;
+      else await admin.from("client_access").update({ prefs: { ...(acc.prefs || {}), ai: { d, n: n + 1 } } }).eq("key", acc.key);
+    } else delete b.noAi;
     const r = await clientAction(acc.user_id, acc.client_id, b, { flags: true });
     return send(res, r.status, r.body);
   } catch (e){
