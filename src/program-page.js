@@ -3,7 +3,7 @@
  * Two ways in: the program link (/p/<token>), or the client app (/c/<key>), where the client signs in once with a 4-digit code
  * and can tap any session date to flag it for the trainer. ?demo=maya&app shows the client app on sample data (any code works). */
 import { sessionCards, sessionsLine } from "./sessions-view.js";
-import { clientProgramView, sessionForDate, suggestWorkout, adaptRows, EQUIPMENT, findSession, weekZero, setCount, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, repsFor, timedPlan } from "./programs-core.js";
+import { clientProgramView, sessionForDate, askWorkout, swapOptions, SWAP_REASONS, adaptRows, EQUIPMENT, findSession, weekZero, setCount, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, repsFor, timedPlan } from "./programs-core.js";
 
 const $m = document.getElementById("m");
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -18,7 +18,7 @@ const CHECK = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 
 document.head.insertAdjacentHTML("beforeend", `<style>${LINECHART_CSS}${VIDEO_CSS}${GROUP_CSS}.ex.g{border-left:4px solid var(--g);padding-left:10px;margin-left:-2px}</style>`);
 
 let V = null, demoStore = null, SI = null;
-const st = { prog: 0, week: null, tab: "program", open: {}, draft: {}, lift: "", doing: null, doingOn: null, flag: null, view: "list", calOpen: null, vary: false, plain: false };
+const st = { prog: 0, week: null, tab: "program", open: {}, draft: {}, lift: "", doing: null, doingOn: null, flag: null, view: "list", calOpen: null, vary: false, plain: false, swaps: {}, swap: null };
 const flagMap = () => Object.fromEntries((V.flags || []).map(f => [f.at, f]));
 
 function toast(msg){ const t = document.createElement("div"); t.className = "toast"; t.setAttribute("role", "status"); t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 2600); }
@@ -93,7 +93,7 @@ function renderProgram(){
   const pick = V.programs.length > 1 ? `<select data-act="prog" aria-label="Program">${V.programs.map((x, i) => `<option value="${i}" ${i === st.prog ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : `<h3>${esc(p.name)}</h3>`;
   const tabs = `<div class="tabs" role="tablist">${p.weeks.map((w, i) => `<button role="tab" aria-selected="${i === st.week}" data-act="week" data-i="${i}">${esc(w.label || "Week " + (i + 1))}</button>`).join("")}</div>`;
   const studio = wk ? wk.sessions.filter(s => !s.homework) : [];
-  return sessionsStrip() + renderHomework(p) + pick + tabs + (studio.length ? studio.map(s => renderSession(p, s)).join("") : `<div class="card"><div class="empty">${V.trainer ? `Your sessions with ${esc(V.trainer)}` : "Your sessions"} show here once they're written.</div></div>`);
+  return sessionsStrip() + makeBtn() + renderHomework(p) + pick + tabs + (studio.length ? studio.map(s => renderSession(p, s)).join("") : `<div class="card"><div class="empty">${V.trainer ? `Your sessions with ${esc(V.trainer)}` : "Your sessions"} show here once they're written.</div></div>`);
 }
 /* Calendar: one week, a row per day. Sessions with the trainer sit on their booked days (same matching as the trainer's Calendar),
  * homework sits on the day it was done, and homework not done yet waits under the week. Tap one to open it right there. */
@@ -151,22 +151,66 @@ function around(p, k){
 }
 async function suggest(){
   const A = st.add, p = V.programs[Math.min(st.prog, V.programs.length - 1)], { last, next } = around(p, A.date);
-  A.busy = true; A.err = ""; render();
+  A.busy = true; A.err = ""; st.swap = null; render();
   try {
-    const j = await post({ action: "suggest", program_id: p.id, on_date: A.date, last_id: last && last.id, next_id: next && next.id, seed: A.seed, equipment: eqNow() || undefined });
+    const j = await post({ action: "suggest", program_id: p.id, on_date: A.date, last_id: last && last.id, next_id: next && next.id, seed: A.seed, equipment: eqNow() || undefined, ask: A.ask || undefined });
     if (!j.workout) throw new Error(j.message || "Couldn't come up with one. Try again.");
     A.workout = j.workout; A.last = last && last.name; A.next = next && next.name;
   } catch (x){ A.err = x.message; }
   A.busy = false; render();
 }
+const QUICK = ["Legs", "Upper body", "Full body", "Core", "20 min"];
+const hasWord = (t, w) => new RegExp("(^|[\\s,])" + w.replace(/ /g, "\\s+") + "($|[\\s,.])", "i").test(t || "");
 function addSheet(){
-  const A = st.add, when = new Date(A.date + "T12:00").toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }), W = A.workout;
-  const body = A.busy && !W ? `<div class="skel" style="height:160px"></div><p class="note" style="margin:0;text-align:center">Putting a workout together around your sessions…</p>`
+  const A = st.add, when = A.date === today() ? "today" : new Date(A.date + "T12:00").toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }), W = A.workout;
+  const ask = `<div class="ask"><div class="row ask-in"><input id="ask" type="text" enterkeyhint="go" placeholder="Want something else? e.g. 30 min legs, knee is sore" aria-label="What do you want to do?" value="${esc(A.ask || "")}"><button class="btn" data-act="askgo" ${A.busy ? "disabled" : ""}>Go</button></div>
+    <div class="eq-c">${QUICK.map(w => `<button class="chip" data-act="askchip" data-w="${esc(w)}" aria-pressed="${hasWord(A.ask, w)}">${esc(w)}</button>`).join("")}</div></div>`;
+  const body = A.busy && !W ? `<div class="skel" style="height:160px"></div><p class="note" style="margin:0;text-align:center">${A.ask ? "Putting your workout together…" : "Putting a workout together around your sessions…"}</p>`
     : W ? `<p class="note" style="margin:0">${esc(W.why || "")}</p>
-      <div class="sug">${W.rows.map((r, i) => `<div class="sug-r"><span class="gchip ${grpClass(r.group)}">${esc(r.group)}</span><span class="sug-n"><b>${esc(r.name)}</b>${r.note ? `<span class="muted small">${esc(r.note)}</span>` : ""}</span><span class="rx">${esc(r.sets)} × ${esc(r.reps)}</span><button class="btn sm" data-act="sugdel" data-i="${i}" aria-label="Take out ${esc(r.name)}">✕</button></div>`).join("")}</div>
+      <div class="sug">${W.rows.map((r, i) => `<div class="sug-w"><div class="sug-r"><span class="gchip ${grpClass(r.group)}">${esc(r.group)}</span><span class="sug-n"><b>${esc(r.name)}</b>${r.swappedFrom ? `<span class="small swap-t">Instead of ${esc(r.swappedFrom)}</span>` : r.note ? `<span class="muted small">${esc(r.note)}</span>` : ""}</span><span class="rx">${esc(r.sets)} × ${esc(r.reps)}${r.weight ? ` @ ${esc(r.weight)}` : ""}</span><button class="btn sm" data-act="swapopen" data-w="add" data-r="${i}" aria-expanded="${isSwap("add", i)}">Swap</button><button class="btn sm" data-act="sugdel" data-i="${i}" aria-label="Take out ${esc(r.name)}">✕</button></div>${isSwap("add", i) ? swapPanel(r) : ""}</div>`).join("")}</div>
       <div class="row"><button class="btn" data-act="addclose">Cancel</button><button class="btn" data-act="sugmore" ${A.busy ? "disabled" : ""}>${A.busy ? "Thinking…" : "Another idea"}</button><button class="btn primary" data-act="addsave" style="margin-left:auto" ${A.saving || !W.rows.length ? "disabled" : ""}>${A.saving ? "Adding…" : "Add to my calendar"}</button></div>`
     : `<div class="row"><button class="btn" data-act="addclose">Cancel</button><button class="btn primary" data-act="sugmore" style="margin-left:auto">Try again</button></div>`;
-  return `<div class="scrim" data-act="addclose"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Add a workout"><h2>Workout for ${esc(when)}</h2>${eqPicker()}${A.err ? `<p class="note warn" role="alert" style="margin:0">${esc(A.err)}</p>` : ""}${body}</div>`;
+  return `<div class="scrim" data-act="addclose"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Add a workout"><h2>Workout for ${esc(when)}</h2>${eqLine()}${ask}${A.err ? `<p class="note warn" role="alert" style="margin:0">${esc(A.err)}</p>` : ""}${body}</div>`;
+}
+/* Program tab, client app: one button to get a workout for today. */
+function makeBtn(){
+  if (!appKey || !V.programs.length) return "";
+  return `<button class="strip make" data-act="addopen" data-d="${today()}"><span><b>✦ Make me a workout</b><span class="muted"> · tell it what you feel like</span></span><span aria-hidden="true">›</span></button>`;
+}
+
+/* ---------- swapping one exercise ---------- */
+/* st.swap = {w: "add" (a row of the workout being added) or a homework id, r: row index or id, reason, busy, options, err, note} */
+const isSwap = (w, r) => !!st.swap && st.swap.w === String(w) && st.swap.r === String(r);
+function swapPanel(r){
+  const S = st.swap;
+  const opts = S.busy ? `<div class="skel" style="height:44px"></div>`
+    : S.options ? (S.options.length ? S.options.map((o, i) => `<button class="swap-o" data-act="swappick" data-i="${i}"><b>${esc(o.name)}</b><span class="rx">${esc(o.reps)}</span><span class="muted small">${esc(o.why || "")}</span></button>`).join("")
+      : `<p class="note" style="margin:0">Couldn't find a good swap for this one. Skip it or ask ${esc(V.trainer || "your trainer")}.</p>`) : "";
+  return `<div class="swap-p"><div class="eq-c">${SWAP_REASONS.map(([k, l]) => `<button class="chip" data-act="swapwhy" data-k="${k}" aria-pressed="${S.reason === k}">${esc(l)}</button>`).join("")}</div>
+    ${S.reason === "hurts" || S.reason === "dislike" ? `<div class="row ask-in"><input id="swap-note" type="text" enterkeyhint="go" placeholder="${S.reason === "hurts" ? "What hurts? e.g. my knee" : "Tell us more (optional)"}" aria-label="Tell us more" value="${esc(S.note || "")}"><button class="btn sm" data-act="swapwhy" data-k="${S.reason}">Go</button></div>` : ""}
+    ${S.err ? `<p class="note warn" role="alert" style="margin:0">${esc(S.err)}</p>` : ""}${opts}
+    ${S.reason === "hurts" && S.options ? `<p class="note" style="margin:0">If it still hurts, stop and let ${esc(V.trainer || "your trainer")} know.</p>` : ""}</div>`;
+}
+async function fetchSwaps(row, others){
+  const S = st.swap, p = V.programs[Math.min(st.prog, V.programs.length - 1)];
+  S.busy = true; S.err = ""; S.options = null; render();
+  try { const j = await post({ action: "swap", program_id: p.id, name: row.name, sets: row.sets, reps: row.reps, reason: S.reason, note: S.note || undefined, equipment: eqNow() || undefined, others });
+    if (!Array.isArray(j.options)) throw new Error(j.message || "Couldn't find a swap. Try again.");
+    if (st.swap === S) S.options = j.options; }
+  catch (x){ S.err = x.message; }
+  S.busy = false; render();
+}
+/* The row being swapped, and the other names in its workout (so a swap isn't a repeat). */
+function swapTarget(){
+  const S = st.swap; if (!S) return null;
+  if (S.w === "add"){ const rows = st.add && st.add.workout ? st.add.workout.rows : []; return { row: rows[+S.r], others: rows.map(r => r.name) }; }
+  const p = V.programs[Math.min(st.prog, V.programs.length - 1)], f = findSession(p, S.w), rows = f ? rowsFor(p, f.session) : [];
+  return { row: rows.find(r => r.id === S.r), others: rows.map(r => r.name) };
+}
+function eqLine(){
+  if (!eqUsual() || st.eqOpen) return eqPicker();
+  const cur = eqNow() || [], names = EQUIPMENT.filter(([k]) => cur.includes(k) && k !== "bodyweight").map(e => e[1]);
+  return `<div class="eq-h"><span class="small"><b>Equipment:</b> ${esc(names.join(", ") || "just my body")}</span><button class="linkbtn small" data-act="eqopen">Change</button></div>`;
 }
 
 const fmtR = (a, b) => a.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " – " + b.toLocaleDateString("en-US", a.getMonth() === b.getMonth() ? { day: "numeric" } : { month: "short", day: "numeric" });
@@ -205,9 +249,12 @@ async function setEquipment(list, usual){
 }
 /* A homework's rows for today: swapped to equivalents for the equipment picked, and varied on a repeat. */
 function rowsFor(p, s){
-  const eq = eqNow(); if (!s.homework || st.doing !== s.id || st.plain || (!eq && !st.vary)) return s.rows;
+  const eq = eqNow(); if (!s.homework || st.doing !== s.id || st.plain) return s.rows;
   const lib = Object.entries(V.exercises || {}).map(([id, e]) => ({ id, ...e })), times = new Set(Object.values(logsFor(p.id, s.id)).map(l => l.date)).size;
-  return adaptRows(s.rows, eq || EQUIPMENT.map(e => e[0]), { library: lib, vary: st.vary, seed: times });
+  const rows = !eq && !st.vary ? s.rows : adaptRows(s.rows, eq || EQUIPMENT.map(e => e[0]), { library: lib, vary: st.vary, seed: times });
+  // Swaps the client picked by hand win.
+  const mine = st.swaps[s.id] || {};
+  return rows.map(r => mine[r.id] ? { ...r, ...mine[r.id], weight: "", swappedFrom: r.swappedFrom || s.rows.find(x => x.id === r.id).name } : r);
 }
 
 /* calKey "YYYY-MM-DD|sid": opened from the Calendar on that day. A homework done that day can be changed there. */
@@ -228,7 +275,8 @@ function renderSession(p, s, calKey){
           <input type="number" inputmode="decimal" step="0.5" placeholder="Weight${r.weight ? " (" + esc(r.weight) + ")" : ""}" aria-label="Set ${k + 1} weight" data-act="set" data-s="${s.id}" data-k="${esc(key)}" data-f="weight" value="${esc(l.weight ?? "")}">
           <button class="chk" data-act="done" data-s="${s.id}" data-k="${esc(key)}" aria-pressed="${!!l.done}" aria-label="Set ${k + 1} done">${CHECK}</button></div>`; }).join("")}</div>`;
     }
-    return `<div class="ex${r.group ? " g " + grpClass(r.group) : ""}"><div class="ex-h"><button class="ex-name" data-act="open" data-k="${esc(s.id + r.id)}" aria-expanded="${!!open}">${r.group ? `<span class="gchip ${grpClass(r.group)}">${esc(r.group)}</span>` : ""}<span>${esc(r.name)}</span>${ex && (ex.video || ex.cues) ? `<span class="play">${ex.video ? "▶ video" : "cues"}</span>` : ""}</button><span class="rx">${rx}</span></div>
+    return `<div class="ex${r.group ? " g " + grpClass(r.group) : ""}"><div class="ex-h"><button class="ex-name" data-act="open" data-k="${esc(s.id + r.id)}" aria-expanded="${!!open}">${r.group ? `<span class="gchip ${grpClass(r.group)}">${esc(r.group)}</span>` : ""}<span>${esc(r.name)}</span>${ex && (ex.video || ex.cues) ? `<span class="play">${ex.video ? "▶ video" : "cues"}</span>` : ""}</button><span class="rx">${rx}</span>${s.homework && st.doing === s.id && appKey ? `<button class="btn sm" data-act="swapopen" data-w="${esc(s.id)}" data-r="${esc(r.id)}" aria-expanded="${isSwap(s.id, r.id)}">Swap</button>` : ""}</div>
+      ${isSwap(s.id, r.id) ? swapPanel(r) : ""}
       ${r.swappedFrom ? `<div class="note swap">Instead of ${esc(r.swappedFrom)}</div>` : ""}${r.cantDo ? `<div class="note warn">Needs equipment you didn't pick. Skip it or do what you can.</div>` : ""}
       ${r.note ? `<div class="note">${esc(r.note)}</div>` : ""}
       ${open && ex ? `<div class="detail">${ex.video ? videoEmbed(ex.video) : ""}${ex.cues ? `<div class="note">${esc(ex.cues)}</div>` : ""}</div>` : ""}
@@ -273,7 +321,7 @@ async function appPost(body){
   return j;
 }
 async function post(body){
-  if (demo){ const r = demoPost(body); if (body.action === "suggest") await new Promise(z => setTimeout(z, 500)); return r || { ok: true }; }
+  if (demo){ const r = demoPost(body); if (body.action === "suggest" || body.action === "swap") await new Promise(z => setTimeout(z, 500)); return r || { ok: true }; }
   if (appKey) return appPost(body);
   const r = await fetch("/api/program", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ t: token, ...body }) });
   const j = await r.json().catch(() => ({}));
@@ -308,7 +356,7 @@ document.addEventListener("click", async e => {
   }
   if (a === "tab"){ st.tab = el.getAttribute("data-k"); st.calOpen = null; st.doing = null; st.calScroll = st.tab === "calendar"; render(); if (st.tab !== "calendar") window.scrollTo({ top: 0 }); }
   else if (a === "week"){ st.week = +el.getAttribute("data-i"); render(); }
-  else if (a === "do" || a === "edit"){ const sid = el.getAttribute("data-s"); st.doing = sid; st.doingOn = a === "edit" ? el.getAttribute("data-d") : null; st.plain = false;
+  else if (a === "do" || a === "edit"){ const sid = el.getAttribute("data-s"); st.doing = sid; st.doingOn = a === "edit" ? el.getAttribute("data-d") : null; st.plain = false; st.swap = null; delete st.swaps[sid];
     st.again = a === "do" && Object.keys(logsFor(V.programs[st.prog].id, sid)).length > 0; st.vary = st.again;
     // Changing a logged workout starts from what was saved (one entry per set, so saving again replaces it).
     st.draft[sid] = {}; if (a === "edit"){ const L = logsFor(V.programs[st.prog].id, sid); for (const [k, l] of Object.entries(L)) st.draft[sid][k] = { reps: l.reps, weight: l.weight, done: l.done }; }
@@ -318,11 +366,24 @@ document.addEventListener("click", async e => {
   else if (a === "equsual"){ await setEquipment(eqNow() || [], true); toast("Saved as your usual"); render(); }
   else if (a === "vary"){ st.vary = !st.vary; render(); }
   else if (a === "plain"){ st.plain = !st.plain; render(); }
-  else if (a === "stop"){ st.doing = null; st.doingOn = null; render(); }
-  else if (a === "addopen"){ st.add = { date: el.getAttribute("data-d"), seed: 0 }; st.calOpen = null; st.doing = null; suggest(); }
+  else if (a === "stop"){ delete st.swaps[st.doing]; st.doing = null; st.doingOn = null; st.swap = null; render(); }
+  else if (a === "addopen"){ st.add = { date: el.getAttribute("data-d"), seed: 0, ask: "" }; st.calOpen = null; st.doing = null; st.eqOpen = false; suggest(); }
+  else if (a === "askgo"){ st.add.ask = (document.getElementById("ask") || {}).value || ""; st.add.seed = 0; st.add.workout = null; suggest(); }
+  else if (a === "askchip"){ const w = el.getAttribute("data-w"), A = st.add; A.ask = (document.getElementById("ask") || {}).value || A.ask || "";
+    if (hasWord(A.ask, w)) A.ask = A.ask.replace(new RegExp("(^|[\\s,])" + w.replace(/ /g, "\\s+") + "(?=$|[\\s,.])", "ig"), " ");
+    else { if (QUICK.slice(0, 4).includes(w)) for (const o of QUICK.slice(0, 4)) A.ask = A.ask.replace(new RegExp("(^|[\\s,])" + o.replace(/ /g, "\\s+") + "(?=$|[\\s,.])", "ig"), " "); A.ask = A.ask.trim() + " " + w; }
+    A.ask = A.ask.replace(/\s+/g, " ").replace(/\s+,/g, ",").replace(/,(\s*,)+/g, ",").replace(/^[\s,]+|[\s,]+$/g, ""); A.seed = 0; A.workout = null; suggest(); }
+  else if (a === "eqopen"){ st.eqOpen = true; render(); }
+  else if (a === "swapopen"){ const w = el.getAttribute("data-w"), r = el.getAttribute("data-r"); st.swap = isSwap(w, r) ? null : { w, r, reason: null }; render(); }
+  else if (a === "swapwhy"){ const S = st.swap, T = swapTarget(); if (!S || !T || !T.row) return; S.note = (document.getElementById("swap-note") || {}).value || S.note || ""; S.reason = el.getAttribute("data-k"); fetchSwaps(T.row, T.others); }
+  else if (a === "swappick"){ const S = st.swap, T = swapTarget(), o = S && S.options && S.options[+el.getAttribute("data-i")]; if (!o || !T || !T.row) return;
+    const pick = { name: o.name, exId: o.exId || null, reps: o.reps || T.row.reps, note: o.why || "" };
+    if (S.w === "add"){ const rows = st.add.workout.rows, i = +S.r; rows[i] = { ...rows[i], ...pick, weight: "", swappedFrom: rows[i].swappedFrom || rows[i].name }; }
+    else (st.swaps[S.w] = st.swaps[S.w] || {})[S.r] = pick;
+    st.swap = null; toast("Swapped in " + o.name); render(); }
   else if (a === "addclose"){ st.add = null; render(); }
   else if (a === "sugmore"){ st.add.seed = (st.add.seed || 0) + 1; suggest(); }
-  else if (a === "sugdel"){ st.add.workout.rows.splice(+el.getAttribute("data-i"), 1); render(); }
+  else if (a === "sugdel"){ st.add.workout.rows.splice(+el.getAttribute("data-i"), 1); st.swap = null; render(); }
   else if (a === "addsave"){
     const A = st.add, p = V.programs[Math.min(st.prog, V.programs.length - 1)]; A.saving = true; render();
     try { const j = await post({ action: "addWorkout", program_id: p.id, on_date: A.date, workout: A.workout }); st.add = null; toast("Added to your calendar"); await load(true); st.calOpen = A.date + "|" + (j.id || ""); render(); }
@@ -349,7 +410,10 @@ document.addEventListener("click", async e => {
     try { await post({ action: "weight", weight: w, taken_on: document.getElementById("bw-d").value }); toast("Saved"); await load(true); } catch (x){ toast(x.message); el.disabled = false; }
   }
 });
-document.addEventListener("keydown", e => { if (e.key === "Escape" && (st.flag || st.add) && V){ st.flag = null; st.add = null; render(); } });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && (st.flag || st.add) && V){ st.flag = null; st.add = null; st.swap = null; render(); }
+  if (e.key === "Enter" && V && (e.target.id === "ask" || e.target.id === "swap-note")){ e.preventDefault(); const b = e.target.parentElement.querySelector("button"); if (b) b.click(); }
+});
 document.addEventListener("input", e => {
   const el = e.target;
   if (SI && el.id === "code"){ el.value = el.value.replace(/\D/g, "").slice(0, 4); if (el.value.length === 4) signin(); return; }
@@ -385,7 +449,8 @@ async function load(quiet){
 }
 function demoPost(b){
   if (b.action === "suggest"){ const p = demoStore.programs.find(x => x.id === b.program_id), f = id => { const x = id && findSession(p, id); return x ? x.session : null; };
-    return { workout: suggestWorkout({ last: f(b.last_id), next: f(b.next_id), library: demoStore.exercises, seed: b.seed || 0, equipment: b.equipment }), by: "planner" }; }
+    return { workout: askWorkout({ ask: b.ask, last: f(b.last_id), next: f(b.next_id), library: demoStore.exercises, seed: b.seed || 0, equipment: b.equipment }), by: "planner" }; }
+  if (b.action === "swap") return { options: swapOptions(b.name, { equipment: b.equipment, library: demoStore.exercises, exclude: b.others, reason: b.reason }), by: "planner" };
   if (b.action === "addWorkout"){ const id = "cw" + Date.now(); (demoStore.clientWorkouts = demoStore.clientWorkouts || []).push({ id, program_id: b.program_id, on_date: b.on_date, data: JSON.parse(JSON.stringify(b.workout)) }); return { ok: true, id }; }
   if (b.action === "removeWorkout"){ demoStore.clientWorkouts = (demoStore.clientWorkouts || []).filter(w => w.id !== b.session_id); return { ok: true }; }
   if (b.action === "flag" || b.action === "unflag"){ const F = demoStore.flags = demoStore.flags || [], i = F.findIndex(f => f.at === b.session_at && !f.resolved); if (i >= 0) F.splice(i, 1);

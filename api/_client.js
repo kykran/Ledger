@@ -2,7 +2,7 @@
 // and the client app (/api/client-app, signed in with a code and a cookie). Never prices.
 import { createHash, randomBytes } from "node:crypto";
 import { admin } from "./_lib.js";
-import { clientProgramView, findSession, timedPlan, suggestWorkout, pid } from "../src/programs-core.js";
+import { clientProgramView, findSession, timedPlan, askWorkout, swapOptions, SWAP_REASONS, pid } from "../src/programs-core.js";
 import { modelFor } from "./_sync.js";
 import { clientView } from "../src/engine.js";
 
@@ -86,6 +86,7 @@ export async function clientAction(uid, cid, b, { flags = false } = {}){
     return { status: 200, body: { ok: true } };
   }
   if (flags && b.action === "suggest") return { status: 200, body: await suggestFor(uid, cid, b) };
+  if (flags && b.action === "swap") return { status: 200, body: await swapFor(uid, cid, b) };
   if (flags && b.action === "addWorkout"){
     const { data: pr } = await admin.from("programs").select("id,client_id").eq("user_id", uid).eq("id", String(b.program_id || "")).maybeSingle();
     if (!pr || pr.client_id !== cid) return { status: 404, body: { message: "That program isn't available." } };
@@ -113,7 +114,30 @@ function cleanWorkout(w){
       name: str(r.name, 80), group: str(r.group, 4), sets: str(r.sets, 8), reps: str(r.reps, 20), weight: str(r.weight, 30), note: str(r.note, 160) })) };
 }
 
-/* A homework workout for one day, from the client's last trainer session before it and their next one after it.
+/* Asking Claude for structured JSON (one tool call). Returns the tool input, or null so the caller falls back to the built-in planner. */
+async function askClaude(prompt, tool, maxTokens){
+  const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST",
+    headers: { "content-type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+    body: JSON.stringify({ model: process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001", max_tokens: maxTokens, system: CLIENT_SYSTEM, tools: [tool], tool_choice: { type: "tool", name: tool.name }, messages: [{ role: "user", content: prompt }] }) });
+  const j = await r.json().catch(() => ({}));
+  return (r.ok && ((j.content || []).find(x => x.type === "tool_use") || {}).input) || null;
+}
+const CLIENT_SYSTEM = `You help a personal training client between sessions with their trainer. You write workouts they do on their own and swap exercises they can't do.
+Talk to the client in plain, friendly words, no jargon. Be conservative: never program anything the trainer's notes make risky, and when the client says something hurts, pick gentler options, tell them to stop if it hurts, and to tell their trainer. Never diagnose.
+Use the trainer's exercise names when they fit. Always answer by calling the tool provided, exactly once.`;
+const eqText = eq => eq ? ["bodyweight", ...eq].join(", ") : "bodyweight and light dumbbells";
+const cleanAsk = t => String(t || "").replace(/\s+/g, " ").trim().slice(0, 300);
+
+/* The client's heaviest recent set per exercise, so Claude can suggest loads. */
+async function recentBests(uid, cid){
+  const since = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+  const { data } = await admin.from("program_logs").select("ex_name,reps,weight,logged_on").eq("user_id", uid).eq("client_id", cid).gte("logged_on", since).limit(1000);
+  const best = {}; for (const l of data || []){ if (!l.ex_name || l.weight == null) continue; const b = best[l.ex_name]; if (!b || l.weight > b.weight) best[l.ex_name] = l; }
+  return Object.values(best).slice(0, 40).map(l => `${l.ex_name} ${l.weight}x${l.reps ?? "?"}`).join("; ") || "none yet";
+}
+
+/* A workout for one day. With no ask it fits between the client's last trainer session and their next one;
+ * with an ask ("30 min legs, hotel gym, knee is sore") it's what they asked for.
  * Claude writes it when ANTHROPIC_API_KEY is set (reading the trainer's notes on injuries); otherwise the built-in planner does. */
 async function suggestFor(uid, cid, b){
   const [{ data: pr }, { data: exs }, { data: cl }] = await Promise.all([
@@ -124,34 +148,65 @@ async function suggestFor(uid, cid, b){
   if (!pr || pr.client_id !== cid) return { message: "That program isn't available." };
   const library = (exs || []).map(r => ({ id: r.id, ...r.data }));
   const find = id => { const f = id && findSession(pr.data, String(id)); return f ? f.session : null; };
-  const last = find(b.last_id), next = find(b.next_id), seed = Math.max(0, Math.min(20, +b.seed || 0));
+  const last = find(b.last_id), next = find(b.next_id), seed = Math.max(0, Math.min(20, +b.seed || 0)), ask = cleanAsk(b.ask);
   const equipment = Array.isArray(b.equipment) ? b.equipment.map(String).slice(0, 12) : null;
-  const base = suggestWorkout({ last, next, library, seed, equipment });
-  if (!process.env.ANTHROPIC_API_KEY) return { workout: base, by: "planner" };
+  const base = askWorkout({ ask, last, next, library, seed, equipment });
+  if (!process.env.ANTHROPIC_API_KEY || b.noAi) return { workout: base, by: "planner" };
   try {
     const notes = (cl && cl.data && cl.data.programNotes) || "none";
     const fmt = s => s ? `${s.name}: ` + (s.rows || []).filter(r => r.name).map(r => `${r.name} ${r.sets || ""}x${r.reps || ""}${r.weight ? " @ " + r.weight : ""}`).join("; ") : "none";
     const tool = { name: "homework_workout", description: "Return the workout.", input_schema: { type: "object", properties: {
-      name: { type: "string" }, why: { type: "string", description: "1-2 plain sentences to the client on why this workout" },
-      rows: { type: "array", items: { type: "object", properties: { group: { type: "string" }, name: { type: "string" }, sets: { type: "string" }, reps: { type: "string" }, note: { type: "string" } }, required: ["name", "sets", "reps"] } } }, required: ["name", "why", "rows"] } };
-    const prompt = `A personal training client wants a workout to do on their own on ${day(b.on_date)}, between sessions with their trainer.
+      name: { type: "string", description: "Short name, 1-4 words" }, why: { type: "string", description: "1-2 plain sentences to the client on why this workout and how to do it" },
+      rows: { type: "array", items: { type: "object", properties: { group: { type: "string", description: "Pair label like A1, A2, B1" }, name: { type: "string" }, sets: { type: "string" }, reps: { type: "string" },
+        weight: { type: "string", description: "Suggested load from their recent sets, else empty" }, note: { type: "string", description: "Short cue" } }, required: ["name", "sets", "reps"] } } }, required: ["name", "why", "rows"] } };
+    const prompt = `The client wants a workout to do on their own on ${day(b.on_date)}.
+${ask ? `What they asked for, in their words: "${ask}"\nGive them that (length, focus, place). If it says something hurts, work around it.` : `Write a 25-35 minute workout, 4-6 exercises, that balances their week: accessories that support the primary lifts in those sessions, the movement patterns those sessions skip, and single-leg and core stability. Don't repeat heavy work that would leave them sore for the next session.`}
 Last session with the trainer: ${fmt(last)}
 Next session with the trainer: ${fmt(next)}
 Trainer's notes on this client (injuries, limits, goals): ${notes}
+Their heaviest recent sets (weight x reps): ${await recentBests(uid, cid)}
 Exercise library (use these exact names when they fit): ${library.map(e => e.name).join(", ")}
-
-Equipment they have today: ${equipment ? ["bodyweight", ...equipment].join(", ") : "bodyweight and light dumbbells"}. Use only this.
-Write a 25-35 minute homework workout, 4-6 exercises, that balances their week: accessories that support the primary lifts in those sessions, the movement patterns those sessions skip, and single-leg and core stability. Don't repeat heavy work that would leave them sore for the next session. Never program anything the trainer's notes make risky. Address the client in "why" (no jargon). Call homework_workout.`;
-    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001", max_tokens: 2000, tools: [tool], tool_choice: { type: "tool", name: tool.name }, messages: [{ role: "user", content: prompt }] }) });
-    const j = await r.json().catch(() => ({}));
-    const out = r.ok && ((j.content || []).find(x => x.type === "tool_use") || {}).input;
+Equipment they have today: ${eqText(equipment)}. Use only this.
+${ask ? "" : "Keep it about 30 minutes. "}Call homework_workout.`;
+    const out = await askClaude(prompt, tool, 2500);
     if (!out || !Array.isArray(out.rows) || !out.rows.length) return { workout: base, by: "planner" };
     const lib = Object.fromEntries(library.map(e => [String(e.name).toLowerCase(), e]));
     const w = cleanWorkout({ name: out.name, why: out.why, rows: out.rows.map(x => { const e = lib[String(x.name).toLowerCase()]; return { ...x, id: pid("r"), name: e ? e.name : x.name, exId: e ? e.id : null }; }) });
     return { workout: w, by: "ai" };
   } catch (e){ return { workout: base, by: "planner" }; }
+}
+
+/* Up to 3 swaps for one exercise the client can't (or shouldn't) do: same job, their equipment, their trainer's notes.
+ * b: {program_id, name, sets, reps, reason (equipment|busy|hurts|dislike), note, equipment, others: names already in the workout} */
+async function swapFor(uid, cid, b){
+  const [{ data: pr }, { data: exs }, { data: cl }] = await Promise.all([
+    admin.from("programs").select("id,client_id").eq("user_id", uid).eq("id", String(b.program_id || "")).maybeSingle(),
+    admin.from("exercises").select("id,data").eq("user_id", uid),
+    admin.from("clients").select("data").eq("user_id", uid).eq("id", cid).maybeSingle()
+  ]);
+  if (!pr || pr.client_id !== cid) return { message: "That program isn't available." };
+  const library = (exs || []).map(r => ({ id: r.id, ...r.data })), name = str(b.name, 80);
+  const reason = SWAP_REASONS.some(r => r[0] === b.reason) ? b.reason : "dislike", note = cleanAsk(b.note);
+  const equipment = Array.isArray(b.equipment) ? b.equipment.map(String).slice(0, 12) : null, others = (Array.isArray(b.others) ? b.others : []).slice(0, 15).map(x => str(x, 80));
+  const base = swapOptions(name, { equipment, library, exclude: others, reason, seed: +b.seed || 0 });
+  if (!process.env.ANTHROPIC_API_KEY || b.noAi) return { options: base, by: "planner" };
+  try {
+    const notes = (cl && cl.data && cl.data.programNotes) || "none";
+    const tool = { name: "swap_options", description: "Return the swaps.", input_schema: { type: "object", properties: {
+      options: { type: "array", description: "2-3 swaps, best first", items: { type: "object", properties: { name: { type: "string" }, reps: { type: "string", description: "Reps or time for each set" }, why: { type: "string", description: "Under 12 words, to the client" } }, required: ["name", "reps", "why"] } } }, required: ["options"] } };
+    const why = { equipment: "They don't have the equipment for it.", busy: "The machine or station is taken.", hurts: "It hurts or doesn't feel right.", dislike: "They want something different." }[reason];
+    const prompt = `The client needs a swap for "${name}" (${str(b.sets, 8) || "3"} sets x ${str(b.reps, 20) || "?"}).
+Why: ${why}${note ? ` In their words: "${note}"` : ""}
+Equipment they have: ${eqText(equipment)}${reason === "busy" ? " (not that machine)" : ""}. Use only this.
+Already in this workout, don't repeat: ${others.join(", ") || "nothing else"}
+Trainer's notes on this client (injuries, limits, goals): ${notes}
+Exercise library (use these exact names when they fit): ${library.map(e => e.name).join(", ")}
+Give 2-3 options that do the same job. Call swap_options.`;
+    const out = await askClaude(prompt, tool, 800);
+    const lib = Object.fromEntries(library.map(e => [String(e.name).toLowerCase(), e]));
+    const options = (out && Array.isArray(out.options) ? out.options : []).filter(o => o && o.name).slice(0, 3).map(o => { const e = lib[String(o.name).toLowerCase()]; return { name: e ? e.name : str(o.name, 80), exId: e ? e.id : null, reps: str(o.reps, 20), why: str(o.why, 120) }; });
+    return options.length ? { options, by: "ai" } : { options: base, by: "planner" };
+  } catch (e){ return { options: base, by: "planner" }; }
 }
 
 /* The client's flags from the last few months, for the Sessions tab. */
