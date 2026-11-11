@@ -150,7 +150,12 @@ async function suggestFor(uid, cid, b){
   const find = id => { const f = id && findSession(pr.data, String(id)); return f ? f.session : null; };
   const last = find(b.last_id), next = find(b.next_id), seed = Math.max(0, Math.min(20, +b.seed || 0)), ask = cleanAsk(b.ask);
   const equipment = Array.isArray(b.equipment) ? b.equipment.map(String).slice(0, 12) : null;
-  const base = askWorkout({ ask, last, next, library, seed, equipment });
+  // The client's week: each item {id, on, kind: trainer|homework|added, done}, looked up here so only their own workouts are read.
+  const items = (Array.isArray(b.week) ? b.week : []).slice(0, 16), cwIds = items.filter(x => x && x.kind === "added").map(x => String(x.id || "")).filter(Boolean);
+  const { data: cws } = cwIds.length ? await admin.from("client_workouts").select("id,data").eq("user_id", uid).eq("client_id", cid).in("id", cwIds) : { data: [] };
+  const cwBy = Object.fromEntries((cws || []).map(w => [w.id, w.data]));
+  const week = items.filter(x => x && x.kind).map(x => ({ on: /^\d{4}-\d{2}-\d{2}$/.test(String(x.on || "")) ? x.on : null, kind: String(x.kind), done: !!x.done, s: x.kind === "added" ? cwBy[String(x.id || "")] || null : find(x.id) }));
+  const base = askWorkout({ ask, last, next, week: week.map(x => x.s).filter(Boolean), library, seed, equipment });
   if (!process.env.ANTHROPIC_API_KEY || b.noAi) return { workout: base, by: "planner" };
   try {
     const notes = (cl && cl.data && cl.data.programNotes) || "none";
@@ -160,9 +165,11 @@ async function suggestFor(uid, cid, b){
       rows: { type: "array", items: { type: "object", properties: { group: { type: "string", description: "Pair label like A1, A2, B1" }, name: { type: "string" }, sets: { type: "string" }, reps: { type: "string" },
         weight: { type: "string", description: "Suggested load from their recent sets, else empty" }, note: { type: "string", description: "Short cue" } }, required: ["name", "sets", "reps"] } } }, required: ["name", "why", "rows"] } };
     const prompt = `The client wants a workout to do on their own on ${day(b.on_date)}.
-${ask ? `What they asked for, in their words: "${ask}"\nGive them that (length, focus, place). If it says something hurts, work around it.` : `Write a 25-35 minute workout, 4-6 exercises, that balances their week: accessories that support the primary lifts in those sessions, the movement patterns those sessions skip, and single-leg and core stability. Don't repeat heavy work that would leave them sore for the next session.`}
+${ask ? `What they asked for, in their words: "${ask}"\nGive them that (length, focus, place). If it says something hurts, work around it.` : `Write a 25-35 minute workout, 4-6 exercises, that balances their whole week: accessories that support the primary lifts in those sessions, the movement patterns those sessions skip, and single-leg and core stability. Don't repeat heavy work that would leave them sore for the next session.`}
 Last session with the trainer: ${fmt(last)}
 Next session with the trainer: ${fmt(next)}
+Their whole week (look at all of it: fill what the week is missing, don't repeat what it already has, and don't make them sore before a session):
+${week.length ? week.map(x => `  ${x.on || "any day"} ${{ trainer: "Session with trainer", homework: "Homework from trainer", added: "Workout they added" }[x.kind] || "Workout"}${x.done ? " (done)" : " (planned)"}: ${fmt(x.s)}`).join("\n") : "  nothing else this week"}
 Trainer's notes on this client (injuries, limits, goals): ${notes}
 Their heaviest recent sets (weight x reps): ${await recentBests(uid, cid)}
 Exercise library (use these exact names when they fit): ${library.map(e => e.name).join(", ")}

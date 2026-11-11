@@ -149,11 +149,27 @@ function around(p, k){
   const before = booked.filter(b => ymd(b) < k).reverse().map(at).find(Boolean) || null, after = booked.filter(b => ymd(b) > k).map(at).find(Boolean) || null;
   return { last: before, next: after };
 }
+/* Everything in the client's week around a day: sessions with the trainer (and whether they happened), homework (done or not),
+ * and workouts they added. Sent with a suggestion so the new workout fills the week's gaps instead of repeating it. */
+function weekContext(p, k){
+  if (!p.startDate) return [];
+  const z = weekZero(p), d0 = new Date(k + "T12:00"), wi = Math.floor((d0 - z) / (7 * 864e5) + 0.01), w = p.weeks[wi];
+  const start = new Date(z.getFullYear(), z.getMonth(), z.getDate() + wi * 7), end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7);
+  const booked = bookedDates(), out = [], doneOn = {};
+  for (const l of V.logs) if (l.p === p.id) (doneOn[l.s] = doneOn[l.s] || new Set()).add(l.date);
+  const inWeek = x => { const y = ymd(x); return y >= ymd(start) && y < ymd(end); };
+  for (const b of booked.filter(inWeek).sort((a, c) => a - c)){ const h = sessionForDate(p, b, booked); out.push({ id: h ? h.session.id : null, on: ymd(b), kind: "trainer", done: ymd(b) <= today() }); }
+  for (const s of w ? w.sessions || [] : []){
+    if (s.byClient){ if (s.on !== k) out.push({ id: s.id, on: s.on, kind: "added", done: !!doneOn[s.id] }); }
+    else if (s.homework && s.rows.length){ const dd = [...(doneOn[s.id] || [])].filter(x => x >= ymd(start) && x < ymd(end)); out.push({ id: s.id, on: dd[0] || null, kind: "homework", done: dd.length > 0 }); }
+  }
+  return out.slice(0, 16);
+}
 async function suggest(){
   const A = st.add, p = V.programs[Math.min(st.prog, V.programs.length - 1)], { last, next } = around(p, A.date);
   A.busy = true; A.err = ""; st.swap = null; render();
   try {
-    const j = await post({ action: "suggest", program_id: p.id, on_date: A.date, last_id: last && last.id, next_id: next && next.id, seed: A.seed, equipment: eqNow() || undefined, ask: A.ask || undefined });
+    const j = await post({ action: "suggest", program_id: p.id, on_date: A.date, last_id: last && last.id, next_id: next && next.id, seed: A.seed, equipment: eqNow() || undefined, ask: A.ask || undefined, week: weekContext(p, A.date) });
     if (!j.workout) throw new Error(j.message || "Couldn't come up with one. Try again.");
     A.workout = j.workout; A.last = last && last.name; A.next = next && next.name;
   } catch (x){ A.err = x.message; }
@@ -449,7 +465,8 @@ async function load(quiet){
 }
 function demoPost(b){
   if (b.action === "suggest"){ const p = demoStore.programs.find(x => x.id === b.program_id), f = id => { const x = id && findSession(p, id); return x ? x.session : null; };
-    return { workout: askWorkout({ ask: b.ask, last: f(b.last_id), next: f(b.next_id), library: demoStore.exercises, seed: b.seed || 0, equipment: b.equipment }), by: "planner" }; }
+    const cws = demoStore.clientWorkouts || [], g = id => f(id) || ((cws.find(w => w.id === id) || {}).data) || null;
+    return { workout: askWorkout({ ask: b.ask, last: f(b.last_id), next: f(b.next_id), week: (b.week || []).map(x => g(x.id)).filter(Boolean), library: demoStore.exercises, seed: b.seed || 0, equipment: b.equipment }), by: "planner" }; }
   if (b.action === "swap") return { options: swapOptions(b.name, { equipment: b.equipment, library: demoStore.exercises, exclude: b.others, reason: b.reason }), by: "planner" };
   if (b.action === "addWorkout"){ const id = "cw" + Date.now(); (demoStore.clientWorkouts = demoStore.clientWorkouts || []).push({ id, program_id: b.program_id, on_date: b.on_date, data: JSON.parse(JSON.stringify(b.workout)) }); return { ok: true, id }; }
   if (b.action === "removeWorkout"){ demoStore.clientWorkouts = (demoStore.clientWorkouts || []).filter(w => w.id !== b.session_id); return { ok: true }; }

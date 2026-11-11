@@ -681,9 +681,10 @@ const LABEL = { squat: "squat", hinge: "hinge (deadlift)", push: "push (bench an
 /* A homework workout that fits between the client's last session and their next one:
  * accessories for the main lifts in those sessions, the patterns they skip (balance), and single-leg and core stability.
  * last/next: sessions ({name, rows}) or null. library: the trainer's exercises (names are matched so videos show). seed varies the pick. */
-export function suggestWorkout({ last, next, library = [], seed = 0, equipment = null }){
+export function suggestWorkout({ last, next, week = [], library = [], seed = 0, equipment = null }){
   const rowsOf = s => (s && s.rows || []).filter(r => r.name);
-  const near = [...rowsOf(last), ...rowsOf(next)];
+  // The rest of the week counts too: patterns it already covers aren't "missing", and its exercises aren't repeated.
+  const near = [...rowsOf(last), ...rowsOf(next), ...(week || []).flatMap(rowsOf)];
   const hit = new Set(near.map(r => patternOf(r.name)).filter(Boolean));
   const primaries = [...new Set(near.filter(r => { const p = patternOf(r.name); return PRIMARY[p] && PRIMARY[p].test(r.name); }).map(r => patternOf(r.name)))];
   const used = new Set(near.map(r => r.name.toLowerCase()));
@@ -701,7 +702,7 @@ export function suggestWorkout({ last, next, library = [], seed = 0, equipment =
   while (out.length < 4){ const a = rot(ACCESSORY.pull, seed + out.length)[0]; if (!take(a, "Balances out the week")) break; }
   out.forEach((r, i) => { r.id = pid("r"); r.group = String.fromCharCode(65 + Math.floor(i / 2)) + (i % 2 + 1); });
   const focus = primaries.slice(0, 2).map(p => LABEL[p].replace(/ \(.*/, ""));
-  const why = `${last ? `Last session: ${last.name}.` : ""}${next ? ` Next: ${next.name}.` : ""} This adds ${focus.length ? `accessories for your ${focus.join(" and ")}` : "whole-body work"}${missing.length ? `, some ${missing.slice(0, 2).map(p => LABEL[p].replace(/ \(.*/, "")).join(" and ")} for balance` : ""}, plus single-leg and core control. About 30 minutes.`.trim();
+  const why = `${last ? `Last session: ${last.name}.` : ""}${next ? ` Next: ${next.name}.` : ""} Looking at your whole week, this adds ${focus.length ? `accessories for your ${focus.join(" and ")}` : "whole-body work"}${missing.length ? `, some ${missing.slice(0, 2).map(p => LABEL[p].replace(/ \(.*/, "")).join(" and ")} for balance` : ""}, plus single-leg and core control. About 30 minutes.`.trim();
   // Fit it to the client's equipment: anything they can't do becomes an equivalent (the note stays, the swap isn't flagged).
   const rows = equipment ? adaptRows(out, equipment, { library, seed }).map(r => { const { swappedFrom, cantDo, ...x } = r; return x; }).filter((r, i, a) => a.findIndex(y => y.name === r.name) === i) : out;
   return { name: "Balance + accessories", notes: "", rows, why };
@@ -790,14 +791,16 @@ export function readAsk(text){
 
 /* A workout from what the client asked for. Without a clear focus it's the usual "fits around your sessions" one.
  * Uses only the equipment picked; about 7 minutes an exercise. */
-export function askWorkout({ ask = "", last = null, next = null, library = [], seed = 0, equipment = null }){
+export function askWorkout({ ask = "", last = null, next = null, week = [], library = [], seed = 0, equipment = null }){
   const A = readAsk(ask), eq = equipment || EQUIPMENT.map(e => e[0]);
   let w;
-  if (!A.patterns) w = suggestWorkout({ last, next, library, seed, equipment });
+  if (!A.patterns) w = suggestWorkout({ last, next, week, library, seed, equipment });
   else {
     const n = Math.max(3, Math.min(8, Math.round((A.minutes || 30) / 7))), lib = Object.fromEntries((library || []).filter(e => e && e.name).map(e => [e.name.toLowerCase(), e]));
+    // Skip exercises already in this week's other workouts when there's another option.
+    const done = new Set([last, next, ...(week || [])].flatMap(x => (x && x.rows || []).map(r => String(r.name || "").toLowerCase())));
     const taken = new Set(), rows = [], pats = Array.from({ length: n }, (_, i) => i === n - 1 && A.focus !== "Core" ? "core" : A.patterns[i % A.patterns.length]);
-    pats.forEach((pat, i) => { const opts = ALTS.filter(a => a[0] === pat && canDo(a[2], eq) && !taken.has(a[1].toLowerCase())); if (!opts.length) return;
+    pats.forEach((pat, i) => { const all = ALTS.filter(a => a[0] === pat && canDo(a[2], eq) && !taken.has(a[1].toLowerCase())), fresh = all.filter(a => !done.has(a[1].toLowerCase())), opts = fresh.length ? fresh : all; if (!opts.length) return;
       const a = opts[(seed + Math.floor(i / A.patterns.length)) % opts.length]; taken.add(a[1].toLowerCase()); const e = lib[a[1].toLowerCase()];
       rows.push({ id: pid("r"), name: e ? e.name : a[1], exId: e ? e.id : null, group: "", sets: "3", reps: a[3], weight: "", note: "" }); });
     rows.forEach((r, i) => { r.group = String.fromCharCode(65 + Math.floor(i / 2)) + (i % 2 + 1); });
