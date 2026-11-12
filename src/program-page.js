@@ -132,14 +132,14 @@ function renderWeek(p, wi, booked, isNow){
     for (const b of booked.filter(b => ymd(b) === k)){ const hit = sessionForDate(p, b, booked); const t = b.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
       its.push(hit && hit.weekIndex === wi ? item(hit.session, k + "|" + hit.session.id, `With ${V.trainer || "your trainer"} · ${t}`) : `<div class="cal-it studio flat"><b>Session</b><span>With ${esc(V.trainer || "your trainer")} · ${esc(t)}</span></div>`); }
     for (const s of hw) if (doneOn[s.id] && doneOn[s.id].has(k)) its.push(item(s, k + "|" + s.id, "Homework · done"));
-    for (const s of mine) if (s.on === k) its.push(item(s, k + "|" + s.id, doneOn[s.id] ? "Added by you · done" : "Added by you"));
+    for (const s of mine) if (s.on === k) its.push(item(s, k + "|" + s.id, doneOn[s.id] ? "Your own workout · done" : "Your own workout"));
     const add = appKey && k >= ymd(new Date(Date.now() - 7 * 864e5)) && w ? `<button class="cal-add" data-act="addopen" data-d="${k}" aria-label="Add a workout on ${esc(d.toDateString())}">+ Add</button>` : "";
     const opened = st.calOpen && st.calOpen.startsWith(k + "|");
     return `<div class="cal-day ${k === now ? "today" : ""} ${its.length ? "" : "empty"}"><div class="cal-d"><b>${d.toLocaleDateString("en-US", { weekday: "short" })}</b><span>${d.getDate()}</span></div><div class="cal-its">${its.join("")}${its.length ? (opened ? "" : add) : `<div class="cal-rest"><span class="muted small">Rest</span>${add}</div>`}</div></div>`;
   }).join("");
   const todo = hw.filter(s => !doneOn[s.id]);
   return `<section class="card cal cal-wk ${isNow ? "now" : ""}"><div class="cal-h"><b>${esc(w ? w.label || "Week " + (wi + 1) : "After this program")}</b><span class="muted small">${esc(fmtR(days[0], days[6]))}${isNow ? " · this week" : ""}</span></div>${rows}
-    ${todo.length ? `<div class="cal-todo"><h3>Homework this week · any day</h3>${todo.map(s => item(s, "todo|" + s.id, "On your own")).join("")}</div>` : ""}</section>`;
+    ${todo.length ? `<div class="cal-todo"><h3>Homework to do this week · any day</h3>${todo.map(s => item(s, "todo|" + s.id, "Homework · to do")).join("")}</div>` : ""}</section>`;
 }
 
 /* ---------- adding a workout from the calendar ---------- */
@@ -241,9 +241,18 @@ function sessionsStrip(){
  * Shows this week's homework, or the latest week before it that has some. */
 function renderHomework(p){
   const now = currentWeek(p); let list = [];
-  for (let i = now; i >= 0 && !list.length; i--) list = (p.weeks[i] ? p.weeks[i].sessions : []).filter(s => s.homework && s.rows.length);
-  if (!list.length) return "";
-  return `<h3>Homework · on your own</h3>${list.map(s => renderSession(p, s)).join("")}<h3 style="margin-top:6px">Sessions with ${esc(V.trainer || "your trainer")}</h3>`;
+  for (let i = now; i >= 0 && !list.length; i--) list = (p.weeks[i] ? p.weeks[i].sessions : []).filter(s => s.homework && s.rows.length && !s.byClient);
+  if (!list.length) return `<h3>Your sessions with ${esc(V.trainer || "your trainer")}</h3>`;
+  const lastOn = s => { const d = V.logs.filter(l => l.p === p.id && l.s === s.id).map(l => l.date).sort().pop(); return d || null; };
+  const todo = list.filter(s => !lastOn(s)), done = list.filter(s => lastOn(s));
+  const L = V.sessions ? sessionsLine(V.sessions) : null, by = L && L.next ? L.next.replace(/,? \d{1,2}:\d{2}.*$/, "") : "";
+  // Homework gets its own box at the top: what's left this week, how to do it, and the ones already done folded to one line.
+  const doneRow = s => st.hwShow === s.id ? renderSession(p, s)
+    : `<button class="hw-done" data-act="hwshow" data-s="${esc(s.id)}"><span class="hw-tick" aria-hidden="true">✓</span><span><b>${esc(s.name)}</b><span class="muted small" style="display:block">Done ${esc(lastOn(s) === today() ? "today" : fmt(lastOn(s)))}</span></span><span class="muted small">See or redo ›</span></button>`;
+  return `<section class="hwbox" aria-label="Your homework"><div class="hwbox-h"><h2>Your homework</h2><span class="pill ${todo.length ? "" : "ok"}">${todo.length ? `${done.length} of ${list.length} done` : "All done ✓"}</span></div>
+    <p class="hwbox-how">${todo.length ? `Do ${todo.length === 1 ? "this" : "these"} on your own${by ? ` before ${esc(by)}` : " this week"}. Tap <b>Start</b>, fill in your sets, then <b>Save</b>.` : `Nice work. That's everything ${esc(V.trainer || "your trainer")} set for this week.`}</p>
+    ${todo.map(s => renderSession(p, s)).join("")}${done.map(doneRow).join("")}</section>
+    <h3 style="margin-top:6px">Your sessions with ${esc(V.trainer || "your trainer")}</h3>`;
 }
 
 /* ---------- equipment ---------- */
@@ -300,15 +309,16 @@ function renderSession(p, s, calKey){
   }).join("");
   const doing = s.homework && st.doing === s.id, when = d => d === today() ? "today" : fmt(d);
   // Sessions with the trainer and homework look different: a label and a coloured edge.
-  const kind = s.homework ? (s.byClient ? "Added by you" : s.wasSession ? "Session canceled · do it on your own" : "On your own") : `With ${V.trainer || "your trainer"}${s.day != null ? " · " + DAYS[s.day] : ""}`;
-  return `<section class="card ${s.homework ? "hw" : "studio"} ${doing ? "doing" : ""}" id="s-${esc(s.id)}"><span class="kind">${esc(kind)}</span><div class="sess-h"><h2>${esc(s.name)}</h2>${s.homework ? (doneOn ? `<span class="badge done">Done ${esc(when(doneOn))}</span>` : "") : doneOn ? `<span class="badge done">Done ${esc(fmt(doneOn))}</span>` : ""}</div>
+  const kind = s.homework ? (s.byClient ? "Your own workout" : s.wasSession ? "Homework · session canceled, do it on your own" : "Homework · on your own") : `Session with ${V.trainer || "your trainer"}${s.day != null ? " · " + DAYS[s.day] : ""}`;
+  return `<section class="card ${s.homework ? "hw" : "studio"} ${doing ? "doing" : ""}" id="s-${esc(s.id)}"><span class="kind">${esc(kind)}</span><div class="sess-h"><h2>${esc(s.name)}</h2>${s.homework ? (doneOn ? `<span class="badge done">Done ${esc(when(doneOn))}</span>` : `<span class="badge todo">To do</span>`) : doneOn ? `<span class="badge done">Done ${esc(fmt(doneOn))}</span>` : ""}</div>
     ${s.notes ? `<div class="note">${esc(s.notes)}</div>` : ""}
     ${doing && !st.doingOn ? eqPicker() + `<div class="row eq-opts">${st.again ? `<button class="chip" data-act="vary" aria-pressed="${st.vary}">Mix it up</button>` : ""}${swapped || st.plain ? `<button class="chip" data-act="plain" aria-pressed="${st.plain}">Show the original</button>` : ""}${st.vary && !st.plain ? `<span class="muted small">Same movements, different exercises from last time</span>` : ""}</div>` : ""}
+    ${doing ? `<p class="muted small" style="margin:0">Fill in each set as you go and tap ✓ when it's done. Tap <b>Save workout</b> at the end.</p>` : ""}
     ${exs || `<div class="empty">No exercises yet.</div>`}
     ${s.homework && s.rows.length ? (doing
       ? `<div class="row"><label class="lbl" for="d-${s.id}">Done on</label><input type="date" id="d-${s.id}" value="${st.doingOn || today()}" max="${today()}"><button class="btn" data-act="stop" style="margin-left:auto">Cancel</button><button class="btn primary" data-act="save" data-s="${s.id}">Save workout</button></div>`
       : doneOn ? `<div class="row"><button class="btn" data-act="edit" data-s="${s.id}" data-d="${esc(calDay && any.some(l => l.date === calDay) ? calDay : doneOn)}" style="flex:1">Change what I logged</button><button class="btn primary" data-act="do" data-s="${s.id}" style="flex:1">Do it again</button></div>`
-      : `<button class="btn primary wide" data-act="do" data-s="${s.id}">Do this workout</button>`) : ""}
+      : `<button class="btn primary wide" data-act="do" data-s="${s.id}">Start this homework</button>`) : ""}
     ${s.byClient && !doing ? `<button class="linkbtn small" data-act="mine-del" data-s="${s.id}" style="align-self:flex-start">Remove from my calendar</button>` : ""}
   </section>`;
 }
@@ -382,6 +392,7 @@ document.addEventListener("click", async e => {
   else if (a === "equsual"){ await setEquipment(eqNow() || [], true); toast("Saved as your usual"); render(); }
   else if (a === "vary"){ st.vary = !st.vary; render(); }
   else if (a === "plain"){ st.plain = !st.plain; render(); }
+  else if (a === "hwshow"){ st.hwShow = el.getAttribute("data-s"); render(); }
   else if (a === "stop"){ delete st.swaps[st.doing]; st.doing = null; st.doingOn = null; st.swap = null; render(); }
   else if (a === "addopen"){ st.add = { date: el.getAttribute("data-d"), seed: 0, ask: "" }; st.calOpen = null; st.doing = null; st.eqOpen = false; suggest(); }
   else if (a === "askgo"){ st.add.ask = (document.getElementById("ask") || {}).value || ""; st.add.seed = 0; st.add.workout = null; suggest(); }
