@@ -360,6 +360,10 @@ export function workoutEmail({ first, trainer, session, weekLabel, when, link })
 export function parseSetLog(str, plan = {}){
   let t = String(str || "").toLowerCase().replace(/×|\*/g, "x").replace(/\b(lbs?|kgs?|reps?)\b/g, " ").replace(/(\d)\s*(?:seconds?|secs?|s)(?=x|@|\s|$)/g, "$1s").replace(/\s*x\s*/g, "x").replace(/\s+/g, " ").trim();
   if (!t) return [];
+  // "BWX10" / "bw x 10": that one set is bodyweight for 10 (weight 0 here, cleared below), so "bwx10 10x8" is two sets.
+  t = t.replace(/\b(?:bw|bodyweight)x(\d+)\b/g, "0x$1");
+  // "green bandx10, 10, 10": a word stuck to x and reps is what they used (band, block, box), so it's a set of 10 too.
+  t = t.replace(/\b([a-z]{3,})x(\d+)\b/g, (m, w, r) => /^(sets?|reps?|bw)$/.test(w) ? m : `${w} 0x${r}`);
   t = dropNotes(t); if (!t) return [];
   // A number ending in s is seconds: "30s", "3x30s", "3x30s@25", "45s 45s 30s". Bare numbers on a timed exercise are seconds too.
   if (/\ds(?=x|@|\s|$)/.test(t) || plan.timed) return parseTimed(t, plan);
@@ -384,7 +388,7 @@ export function parseSetLog(str, plan = {}){
     for (let k = 0; k < Math.min(12, c || 1); k++) out.push({ reps: r, weight: W(w) });            // weight x reps (x sets)
     if (out.length >= 12) break;
   }
-  return out.slice(0, 12).map((x, k) => ({ reps: x.reps ?? planReps(k), weight: x.weight }));
+  return out.slice(0, 12).map((x, k) => ({ reps: x.reps ?? planReps(k), weight: x.weight === 0 ? null : x.weight }));
 }
 /* Words after a set are a note ("35x6 clean set. 35x5 added pause"): only the sets count.
  * Once a note starts, everything up to the next weight x reps chunk is part of it, numbers included ("pause 2s"). */
@@ -398,6 +402,46 @@ function dropNotes(t){
     note = true;
   }
   return keep.join(" ").trim();
+}
+/* The words of a typed line, without the sets: "15, 15, 10 on the floor, up on knees." -> "on the floor, up on knees." */
+export function noteOf(line){
+  const raw = String(line || "").trim(); if (!raw) return "";
+  const out = []; let note = false;
+  for (const w of raw.split(/\s+/)){
+    const lw = w.toLowerCase().replace(/×|\*/g, "x"), bare = lw.replace(/[,;:.!]+$/, "");
+    const set = SET_TOK.test(lw) || /^(?:bw|bodyweight)x[\d.]+[,;:.!]*$/.test(lw);
+    const stuck = !set && lw.match(/^([a-z]{3,})x[\d.]+[,;:.!]*$/); if (stuck){ out.push(stuck[1]); note = false; continue; }
+    if (set && (!note || /x/.test(lw))){ note = false; continue; }
+    if (!note && (GRAMMAR.has(bare) || /^(lbs?|kgs?|reps?)$/.test(bare))) continue;
+    note = true; out.push(w);
+  }
+  return out.join(" ").replace(/^[,;:.!\s-]+/, "").trim();
+}
+/* One-tap next steps from last time's note and numbers. Each: {label, note?, reps?, weight?}: what to write into
+ * today's plan for that exercise. Note words come first ("up on knees" -> "On toes all sets"); then a rep or weight step. */
+const HARDER = { "on knees": "on toes", "knees": "on toes", "with block": "no block", "with a block": "no block", "with box": "no box", "with a box": "no box",
+  "assisted": "less assist", "with band": "lighter band", "with a band": "lighter band", "band": "lighter band", "elevated": "lower incline",
+  "incline": "lower incline", "both hands": "one hand", "holding on": "no hands", "with support": "no support", "partial": "full range", "half": "full range" };
+const fmtW1 = w => String(Math.round(w * 10) / 10);
+export function noteNext(note, sets = [], plan = {}){
+  const t = String(note || "").toLowerCase(), out = [], seen = new Set();
+  const add = x => { if (!seen.has(x.label.toLowerCase())){ seen.add(x.label.toLowerCase()); out.push(x); } };
+  const hard = /\b(hard|tough|grind\w*|struggl\w*|pain|hurt\w*|sore|tweak\w*|form broke|broke down|failed|couldn'?t|could not|too heavy)\b/.test(t);
+  const easy = /\b(easy|too light|light|fast|clean|smooth|crisp|solid|more in the tank|could do more|felt good|strong)\b/.test(t);
+  if (t && !hard){
+    for (const [k, v] of Object.entries(HARDER)) if (new RegExp(`\\b${k}\\b`).test(t)){ const l = v[0].toUpperCase() + v.slice(1) + " all sets"; add({ label: l, note: l }); break; }
+    if (/\bpause\w*\b/.test(t)) add({ label: "Pause every rep", note: "Pause every rep" });
+  }
+  const done = sets.filter(x => x && x.reps != null), w = done.length ? done.reduce((m, x) => Math.max(m, x.weight ?? -1), -1) : -1;
+  const pr = n(plan.reps), top = done.length ? Math.max(...done.map(x => x.reps)) : null, low = done.length ? Math.min(...done.map(x => x.reps)) : null;
+  if (hard){ add({ label: "Same again", ...(w >= 0 ? { weight: fmtW1(w) } : {}) }); if (w > 5) add({ label: `Drop to ${fmtW1(w - 5)}`, weight: fmtW1(w - 5) }); return out.slice(0, 3); }
+  if (done.length){
+    const up = w + (w >= 200 ? 10 : 5);
+    if (w >= 0 && (easy || (pr != null && low >= pr))) add({ label: `Go to ${fmtW1(up)}`, weight: fmtW1(up) });
+    else if (w < 0 && top != null){ const r = low < top ? top : top + 1; add({ label: `${r} reps all sets`, reps: String(r) }); }
+    else if (w >= 0 && pr != null && low < pr) add({ label: `Stay at ${fmtW1(w)}`, weight: fmtW1(w) });
+  }
+  return out.slice(0, 3);
 }
 function parseTimed(t, plan){
   const bw = /\b(bw|bodyweight|body weight)\b/.test(t); t = t.replace(/\b(bw|bodyweight|body weight)\b/g, " ").trim();

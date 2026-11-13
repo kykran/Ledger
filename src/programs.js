@@ -3,7 +3,7 @@
  * app.js calls attach(ctx) once and then render()/onClick()/onChange()/onInput() while the Programs tab is open.
  * Data goes through ctx.A.programs (see adapter-hosted.js / programs-demo.js). */
 import { pid, newRow, newSession, newWeek, newProgram, copySession, copyWeek, repeatSession, repeatWeek, setCount,
-  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, timedPlan, sessionForDate, weekZero, weekStartDay, weeksSince, sessionBrief, findSession, parseTrueCoach, truecoachToProgram, topSet, liftDelta, STANDARD_LIFTS, standardLiftHistory } from "./programs-core.js";
+  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, noteOf, noteNext, timedPlan, sessionForDate, weekZero, weekStartDay, weeksSince, sessionBrief, findSession, parseTrueCoach, truecoachToProgram, topSet, liftDelta, STANDARD_LIFTS, standardLiftHistory } from "./programs-core.js";
 import { STARTER_EXERCISES } from "./exercise-seed.js";
 import { accessBlock, accessAct, loadAccess } from "./client-access.js";
 import { createVoice, voiceContext, VOICE_CSS } from "./programs-voice.js";
@@ -691,13 +691,30 @@ function typedLineOf(progId, sid, rid){
   for (const p of PG.progs || []){ if (progId && p.id !== progId) continue; for (const w of p.weeks || []) for (const x of w.sessions || []) if (x.id === sid) return (x.lines || {})[rid] || ""; }
   return "";
 }
+/* Last time's note and the one-tap next steps it suggests, for the row being recorded. */
+function lastInfo(name, excludeSid){
+  const key = String(name || "").trim().toLowerCase(); if (!key) return null;
+  const by = {};
+  for (const l of PG.logs[PG.clientId] || []){ if (l.session_id === excludeSid || String(l.ex_name || "").trim().toLowerCase() !== key || (!l.done && l.reps == null && l.weight == null)) continue; const d = String(l.logged_on).slice(0, 10); (by[d] = by[d] || []).push(l); }
+  const day = Object.keys(by).sort().pop(); if (!day) return null;
+  const first = by[day][0], note = noteOf(typedLineOf(first.program_id, first.session_id, first.row_id)); if (!note) return null;
+  return { day, note, sets: by[day].sort((a, b) => a.set_no - b.set_no).map(l => ({ reps: l.reps == null ? null : +l.reps, weight: l.weight == null ? null : +l.weight })) };
+}
+function nextSteps(s, si, r, ri){
+  const L = lastInfo(r.name, s.id); if (!L) return "";
+  const opts = noteNext(L.note, L.sets, { reps: repsFor(r, 0) }), tapped = PG.nxTapped || (PG.nxTapped = new Set());
+  const on = o => (o.note == null || r.note === o.note) && (o.reps == null || String(r.reps) === o.reps) && (o.weight == null || String(r.weight) === o.weight);
+  // A number already in today's plan isn't worth a chip, unless it's the one just tapped.
+  const chips = opts.map((o, i) => o.note == null && on(o) && !tapped.has(r.id + "|" + o.label) ? "" : `<button class="pg-nx ${on(o) ? "on" : ""}" data-act="pg-next" data-s="${si}" data-r="${ri}" data-i="${i}" aria-pressed="${on(o)}" title="Write this into today's plan">${on(o) ? "✓ " : "+ "}${esc(o.label)}</button>`).join("");
+  return `<div class="pg-lnote"><span class="pg-lnote-t">“${esc(L.note)}”</span>${chips ? `<span class="pg-nxs">${chips}</span>` : ""}</div>`;
+}
 function lastTime(name, excludeSid){
   const key = String(name || "").trim().toLowerCase(); if (!key) return "";
   const by = {};
   for (const l of PG.logs[PG.clientId] || []){ if (l.session_id === excludeSid || String(l.ex_name || "").trim().toLowerCase() !== key || (!l.done && l.reps == null && l.weight == null)) continue; const d = String(l.logged_on).slice(0, 10); (by[d] = by[d] || []).push(l); }
   const day = Object.keys(by).sort().pop(); if (!day) return "";
   const first = by[day][0], line = typedLineOf(first.program_id, first.session_id, first.row_id);
-  if (line) return fmtDay(day) + ": " + line;
+  if (line && !noteOf(line)) return fmtDay(day) + ": " + line;
   return fmtDay(day) + ": " + by[day].sort((a, b) => a.set_no - b.set_no).map(l => l.weight != null ? `${l.weight}×${l.reps ?? "?"}${secsU(l)}` : l.timed ? `${l.reps ?? "?"}s` : `${l.reps ?? "?"} bw`).join(", ");
 }
 function recordBar(s, si){
@@ -750,7 +767,7 @@ function recordRows(p, s, si, r, ri){
   return `<tr class="pg-recrow ${grpClass(r.group)}"><td colspan="2"></td><td colspan="6"><div class="pg-rhead">${grip}${head}</div>${editor}<div class="pg-logline">
       <input class="pg-in pg-login ${have.length ? "on" : ""}" data-pg="logline" data-s="${si}" data-r="${ri}" value="${esc(shownLine(s, r, have))}" placeholder="${esc(typed || (timedPlan(r) ? "30s 30s 30s" : "135x8 135x8 145x6"))}" aria-label="${esc(r.name)} sets done, weight x reps, e.g. 215x5 215x5 225x4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next">
       ${have.length ? `<span class="pg-logok" aria-label="${have.length} sets logged">✓ ${have.length}</span>${deltaBadge(deltaFor(s, r))}` : plan ? `<button class="btn sm" data-act="pg-asplanned" data-s="${si}" data-r="${ri}" title="Log every set as written: ${esc(plan)}">✓ As planned</button>` : ""}
-    </div><div class="small muted pg-logprev" id="pg-lp-${esc(r.id)}">${last ? "Last time " + esc(last) : ""}</div></td></tr>`;
+    </div><div class="small muted pg-logprev" id="pg-lp-${esc(r.id)}">${last ? "Last time " + esc(last) : ""}</div>${p.shared || p.imported ? "" : nextSteps(s, si, r, ri)}${r.note && !ed && !/ all sets$/.test(r.note) ? `<div class="small pg-rnote">${esc(r.note)}</div>` : ""}</td></tr>`;
 }
 /* Show the line as it was typed ("3x8@44", "44x8 44x8 44x8") while it still matches what's saved; otherwise the saved sets. */
 const typedLines = {};
@@ -1163,6 +1180,8 @@ async function onClick(el, e){
         if (cur.weight == null) patch.weight = prev.weight ?? (isFinite(parseFloat(r.weight)) ? parseFloat(r.weight) : null);
       }
       putSet(si, ri, no, patch, true); redraw(); break; }
+    case "pg-next": { const s = p.weeks[wi].sessions[si], r = s.rows[ri], L = lastInfo(r.name, s.id), o = L && noteNext(L.note, L.sets, { reps: repsFor(r, 0) })[+el.getAttribute("data-i")]; if (!o) break;
+      mutate(() => { PG.nxTapped = PG.nxTapped || new Set(); PG.nxTapped.add(r.id + "|" + o.label); if (o.note != null) r.note = r.note === o.note ? "" : o.note; if (o.reps != null) r.reps = o.reps; if (o.weight != null) r.weight = o.weight; }); break; }
     case "pg-asplanned": { const r = p.weeks[wi].sessions[si].rows[ri]; const n = Math.max(1, setCount(r) || 1), w = num(r.weight);
       commitLine(si, ri, fmtSetLog(Array.from({ length: n }, (_, k) => ({ reps: repsFor(r, k), weight: w, timed: timedPlan(r) })))); redraw(); break; }
     case "pg-layout": {
@@ -1630,6 +1649,12 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-logprev{min-height:1.3em;padding-bottom:4px}
 /* Record: tight rows, no empty gaps (Kyle 2026-10-30: "remove dead space"). */
 .pg-logprev:empty{display:none}
+.pg-lnote{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:13px;padding:0 0 4px}
+.pg-lnote-t{color:var(--text);font-style:italic;opacity:.85}
+.pg-nxs{display:inline-flex;flex-wrap:wrap;gap:6px}
+.pg-nx{font:inherit;font-size:12.5px;font-weight:600;padding:3px 10px;border-radius:999px;border:1px solid color-mix(in srgb,var(--accent,#4a7dff) 45%,transparent);background:color-mix(in srgb,var(--accent,#4a7dff) 10%,transparent);color:var(--accent,#4a7dff);cursor:pointer}
+.pg-nx.on{background:var(--accent,#4a7dff);color:#fff;border-color:transparent}
+.pg-rnote{color:var(--muted);padding:0 0 4px}
 .pg-sess.rec .pg-recrow td{padding:8px 0 2px 10px!important}
 .pg-sess.rec .pg-logname{position:relative;margin-bottom:4px;padding-right:24px;row-gap:0}
 .pg-sess.rec .pg-logname .pg-pen{position:absolute;right:0;top:2px}
