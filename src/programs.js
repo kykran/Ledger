@@ -3,7 +3,7 @@
  * app.js calls attach(ctx) once and then render()/onClick()/onChange()/onInput() while the Programs tab is open.
  * Data goes through ctx.A.programs (see adapter-hosted.js / programs-demo.js). */
 import { pid, newRow, newSession, newWeek, newProgram, copySession, copyWeek, repeatSession, repeatWeek, setCount,
-  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, timedPlan, sessionForDate, weekZero, weekStartDay, weeksSince, sessionBrief, findSession, parseTrueCoach, truecoachToProgram, topSet, liftDelta, STANDARD_LIFTS, standardLiftHistory } from "./programs-core.js";
+  bodyFat4, ageOn, liftHistory, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, segments, moveRow, moveBlock, relabel, letterOf, normalizeBlocks, linkUp, splitAt, addToBlocks, parseSetsReps, fmtSetsReps, repsFor, programTodos, parseSetLog, fmtSetLog, timedPlan, sessionForDate, weekZero, weekStartDay, weeksSince, sessionBrief, findSession, parseTrueCoach, truecoachToProgram, topSet, liftDelta, STANDARD_LIFTS, standardLiftHistory, parsePace, fmtPace, beatsPerMile, cleanRun } from "./programs-core.js";
 import { STARTER_EXERCISES } from "./exercise-seed.js";
 import { accessBlock, accessAct, loadAccess } from "./client-access.js";
 import { createVoice, voiceContext, VOICE_CSS } from "./programs-voice.js";
@@ -814,7 +814,8 @@ function renderProgress(c){
         <div class="small muted">Best ${fmtTop(best)}${best && best.date !== last.date ? " · " + fmtDay(best.date) : ""} · ${h.length} session${h.length === 1 ? "" : "s"}</div>
         ${h.length > 1 ? lineChart(h.map(x => ({ date: x.date, value: x.weight, label: x.reps ? x.reps + " reps" : "" })), { height: 110 }) : ""}`
       : `<div class="empty small">No ${L.label.toLowerCase()} logged yet.</div>`}</section>`; }).join("");
-  return `<div class="pg-lifts">${liftCards}</div><div class="grid2">
+  const runs = Array.isArray(c.runs) && c.runs.length;
+  return `${runs ? runCard(c) : ""}<div class="pg-lifts">${liftCards}</div><div class="grid2">
     <section class="card"><div class="card-h"><h2>Bodyweight</h2><span class="small muted">${wPts.length ? `latest ${wPts[wPts.length - 1].value}` : ""}</span></div>${lineChart(wPts, { unit: "" })}</section>
     <section class="card"><div class="card-h"><h2>Body fat (4-site)</h2><span class="small muted">${bPts.length ? `latest ${bPts[bPts.length - 1].value}%` : ""}</span></div>${lineChart(bPts, { unit: "%" })}
       ${!sex || !by ? `<p class="small muted">Add ${esc(c.name.split(" ")[0])}'s sex and birth year below so body fat can be calculated.</p>` : ""}</section>
@@ -841,8 +842,112 @@ function renderProgress(c){
       ${rows.slice().reverse().map(m => { const S4 = [m.triceps, m.abdomen, m.suprailiac, m.thigh].map(num); const sum = S4.every(x => x != null) ? S4.reduce((a, b) => a + b, 0) : null; const bf = bfOf(m);
         return `<tr><td>${fmtDay(m.taken_on)}${m.source === "client" ? ` <span class="tag">client</span>` : ""}</td><td class="num">${m.weight ?? "–"}</td><td class="num">${sum ?? "–"}</td><td class="num">${bf != null ? bf + "%" : "–"}</td><td><button class="btn sm ghost" data-act="pg-delmeas" data-id="${esc(m.id)}" aria-label="Delete">✕</button></td></tr>`; }).join("")}</tbody></table></div>` : `<div class="empty">No measurements yet.</div>`}</section>
     <section class="card"><h2>Recent logs</h2>${hist.length ? `<div class="list">${hist.map(h => `<div><span><b>${fmtDay(h.day)}</b> · ${esc(sessName(h.session))}${h.client ? ` <span class="tag">client</span>` : ""}</span><span class="small muted">${h.done}/${h.sets} sets</span></div>`).join("")}</div>` : `<div class="empty">Nothing logged yet.</div>`}</section>
-  </div>`;
+  </div>${runs ? "" : runCard(c)}`;
 }
+/* ---------- running: Garmin run summaries, chart, AI feedback ---------- */
+const RUN_METRICS = [["bpm", "Beats per mile"], ["pace", "Pace"], ["hr", "Heart rate"], ["miles", "Miles"]];
+const runLabel = (r, i) => r.date ? fmtDay(r.date) : "Run " + (i + 1);
+function runCard(c){
+  const runs = Array.isArray(c.runs) ? c.runs : [], first = esc(c.name.split(" ")[0]), ai = !!C.A.programs.ai && !c.shared;
+  const buttons = `<label class="btn sm ${runs.length ? "" : "primary"}">📷 Add from screenshots<input type="file" accept="image/*" multiple data-pg="runfile" hidden></label><button class="btn sm" data-act="pg-run-type">+ Type a run</button>${ai && runs.length ? `<button class="btn sm primary" data-act="pg-run-coach">✦ Feedback &amp; next runs</button>` : ""}`;
+  if (!runs.length) return `<section class="card"><div class="card-h"><h2>Running</h2></div><p class="small muted">Track ${first}'s runs. Add screenshots of the Garmin run summary and the numbers are read for you.</p><div class="pg-row">${buttons}</div></section>`;
+  const m = PG.runMetric || "bpm", last = runs[runs.length - 1], prev = runs[runs.length - 2];
+  const val = r => m === "bpm" ? beatsPerMile(r) : m === "pace" ? r.paceSec : m === "hr" ? r.hr : r.miles;
+  const pts = runs.map((r, i) => ({ value: val(r), xl: r.date ? r.date.slice(5).replace("-", "/").replace(/^0/, "") : "#" + (i + 1), tip: runLabel(r, i) })).filter(p => p.value != null);
+  const opt = m === "pace" ? { fmtV: fmtPace, unit: "/mi" } : m === "miles" ? { unit: " mi", decimals: 2 } : { unit: m === "hr" ? " bpm" : "", decimals: 0 };
+  const help = { bpm: "Heart rate × minutes per mile. Going down means she runs a mile on fewer heartbeats: fitter.", pace: "Average minutes per mile. Lower is faster.", hr: "Average heart rate for the run.", miles: "Distance of each run." }[m];
+  const b1 = beatsPerMile(last), b0 = beatsPerMile(prev);
+  const plan = c.runPlan && (c.runPlan.nextRuns || []).length ? `<div class="pg-runplan"><b>Next runs</b>${c.runPlan.at ? ` <span class="small muted">planned ${fmtDay(c.runPlan.at)}</span>` : ""}<ol>${c.runPlan.nextRuns.map(x => `<li><b>${esc(x.label)}</b>: ${esc(String(x.miles))} mi @ ${esc(x.pace)}${x.hr ? `, HR ${esc(x.hr)}` : ""}${x.note ? ` <span class="muted">· ${esc(x.note)}</span>` : ""}</li>`).join("")}</ol></div>` : "";
+  const list = (PG.runAll ? runs : runs.slice(-6)).map(r => ({ r, i: runs.indexOf(r) })).reverse();
+  return `<section class="card pg-run"><div class="card-h"><h2>Running</h2><span class="small muted">${runs.length} run${runs.length === 1 ? "" : "s"}</span></div>
+    <div class="pg-runlast"><span class="small muted">Latest${last.date ? " · " + fmtDay(last.date) : ""}</span><b>${last.miles} mi · ${fmtPace(last.paceSec)}/mi${last.hr ? ` · ${last.hr} bpm` : ""}</b>${b1 ? `<span class="small">${b1} beats/mile${b0 ? ` <span class="pg-delta ${b1 <= b0 ? "up" : "down"}">${b1 <= b0 ? "▼" : "▲"} ${Math.abs(b1 - b0)} vs last run</span>` : ""}</span>` : ""}</div>
+    <div class="seg pg-runseg" role="group" aria-label="Chart">${RUN_METRICS.map(([k, l]) => `<button data-act="pg-run-metric" data-k="${k}" aria-pressed="${m === k}">${l}</button>`).join("")}</div>
+    ${pts.length ? lineChart(pts, { seq: true, height: 160, ...opt }) : `<div class="lc-empty">Add heart rate to see this.</div>`}
+    <p class="small muted">${help}</p>
+    ${plan}
+    <div class="pg-row">${buttons}</div>
+    <details class="pg-runlist" ${PG.runAll ? "open" : ""}><summary class="small muted">All runs</summary><div class="tablewrap"><table><thead><tr><th>Run</th><th class="num">Miles</th><th class="num">Pace</th><th class="num">HR</th><th class="num">Beats/mi</th><th></th></tr></thead><tbody>
+      ${list.map(({ r, i }) => `<tr><td>${esc(runLabel(r, i))}</td><td class="num">${r.miles}</td><td class="num">${fmtPace(r.paceSec)}</td><td class="num">${r.hr ?? "–"}</td><td class="num">${beatsPerMile(r) ?? "–"}</td><td><button class="btn sm ghost" data-act="pg-run-del" data-id="${esc(r.id)}" aria-label="Delete run">✕</button></td></tr>`).join("")}</tbody></table></div>
+      ${runs.length > 6 && !PG.runAll ? `<button class="btn sm ghost" data-act="pg-run-all">Show all ${runs.length}</button>` : ""}</details>
+  </section>`;
+}
+// Shrink a photo to a small JPEG so several fit in one request.
+function shrinkImage(file, max = 1100){
+  return new Promise((ok, bad) => { const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => { const k = Math.min(1, max / Math.max(img.width, img.height)), cv = document.createElement("canvas"); cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+      cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height); URL.revokeObjectURL(url); ok({ media_type: "image/jpeg", data: cv.toDataURL("image/jpeg", 0.82).split(",")[1] }); };
+    img.onerror = () => { URL.revokeObjectURL(url); bad(new Error("Couldn't open that image")); }; img.src = url; });
+}
+const isoOf = t => { const d = new Date(t); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
+function runSheet(){
+  const R = PG.runAdd; if (!R) return;
+  if (R.busy) return sheet("Add runs", `<div class="empty"><b>Reading ${R.n} screenshot${R.n === 1 ? "" : "s"}…</b><span>Pulling out distance, pace and heart rate.</span></div>`);
+  sheet(R.rows.length > 1 ? `Add ${R.rows.length} runs` : "Add a run", `${R.error ? `<div class="banner err"><span>${esc(R.error)}</span></div>` : ""}
+    <p class="small muted">Check the numbers, then save. Leave the date blank if you don't know it.</p>
+    ${R.rows.map((r, i) => `<div class="pg-runedit" data-ri="${i}">
+      <div class="field"><label>Date</label><input type="date" data-run="${i}" data-f="date" value="${esc(r.date || "")}"></div>
+      <div class="field"><label>Miles</label><input inputmode="decimal" data-run="${i}" data-f="miles" value="${esc(r.miles ?? "")}"></div>
+      <div class="field"><label>Pace /mi</label><input data-run="${i}" data-f="pace" placeholder="13:23" value="${esc(r.pace ?? "")}"></div>
+      <div class="field"><label>Avg HR</label><input inputmode="numeric" data-run="${i}" data-f="hr" value="${esc(r.hr ?? "")}"></div>
+      <button class="btn sm ghost" data-act="pg-run-rmrow" data-i="${i}" aria-label="Remove">✕</button></div>`).join("")}
+    <div class="actions"><button class="btn primary" data-act="pg-run-save">Save ${R.rows.length > 1 ? R.rows.length + " runs" : "run"}</button><button class="btn ghost" data-act="close">Cancel</button></div>`);
+}
+async function runFiles(files){
+  const list = [...files].slice(0, 10); if (!list.length) return;
+  PG.runAdd = { busy: true, n: list.length, rows: [] }; runSheet();
+  try {
+    const images = []; for (const f of list) images.push(await shrinkImage(f));
+    const r = await C.A.programs.ai({ action: "readrun", images });
+    // One run per screenshot: date it by the photo. Several runs in one screenshot (a gallery grid): leave the date for you to fill.
+    const per = {}; for (const x of r.result.runs || []) per[x.image || 1] = (per[x.image || 1] || 0) + 1;
+    const rows = (r.result.runs || []).map(x => { const f = list[(x.image || 1) - 1]; return { date: x.date || (f && per[x.image || 1] === 1 ? isoOf(f.lastModified) : ""), miles: x.miles, pace: x.pace, hr: x.hr || "", note: x.note || "", source: "screenshot" }; });
+    PG.runAdd = { rows: rows.length ? rows : [{ date: today() }], error: rows.length ? "" : "Couldn't find a run in that screenshot. Type it in instead." };
+  } catch (e){ PG.runAdd = { rows: [{ date: today() }], error: e.code === "ai_not_setup" ? "Reading screenshots needs the AI assistant switched on. Type the run in for now." : (e.message || "Couldn't read that screenshot.") + " Type it in instead." }; }
+  if (PG.runAdd) runSheet();
+}
+function runCoachSheet(){
+  const X = PG.runCoach, c = client(PG.clientId), first = esc(c.name.split(" ")[0]); if (!X) return;
+  if (X.step === "loading") return sheet("✦ Running feedback", `<div class="empty"><b>Thinking…</b><span>Reading ${first}'s runs and your notes.</span></div>`);
+  if (X.step === "error") return sheet("✦ Running feedback", `<div class="banner err"><span>${esc(X.error)}</span></div><div class="actions"><button class="btn" data-act="pg-run-coach">Try again</button></div>`);
+  const R = X.result, li = a => (a || []).map(x => `<li>${esc(x)}</li>`).join("");
+  sheet("✦ Running feedback", `<p>${esc(R.summary)}</p>
+    ${(R.flags || []).length ? `<div class="ai-flags"><h3>⚠ Check</h3>${R.flags.map(x => `<div><b>${esc(x.exercise)}</b>: ${esc(x.concern)}${x.alternative ? ` <span class="muted">Try: ${esc(x.alternative)}</span>` : ""}</div>`).join("")}</div>` : ""}
+    ${(R.wentWell || []).length ? `<h3>Going well</h3><ul class="ai-list">${li(R.wentWell)}</ul>` : ""}
+    ${(R.adjust || []).length ? `<h3>To adjust</h3><ul class="ai-list">${li(R.adjust)}</ul>` : ""}
+    <h3>Next runs</h3><ol class="ai-list">${(R.nextRuns || []).map(x => `<li><b>${esc(x.label)}</b>: ${esc(String(x.miles))} mi @ ${esc(x.pace)}${x.hr ? `, HR ${esc(x.hr)}` : ""}${x.note ? `<div class="small muted">${esc(x.note)}</div>` : ""}</li>`).join("")}</ol>
+    <div class="field"><label for="pg-run-goal">${first}'s running goal (optional)</label><input id="pg-run-goal" placeholder="e.g. run a 5K without walking by March" value="${esc(c.runGoal || "")}"></div>
+    <div class="actions"><button class="btn primary" data-act="pg-run-keep">Save next runs</button><button class="btn" data-act="pg-run-coach">Run again</button><button class="btn ghost" data-act="close">Close</button></div>`);
+}
+async function runAct(act, el){
+  const c = client(PG.clientId); if (!c) return;
+  const save = (patch, msg) => { const nc = { ...c, ...patch }; Object.assign(c, patch); redraw(); return C.saveClient(nc).then(() => msg && C.toast(msg)).catch(() => C.toast("Couldn't save. Check your connection.")); };
+  switch (act){
+    case "pg-run-metric": PG.runMetric = el.getAttribute("data-k"); redraw(); break;
+    case "pg-run-all": PG.runAll = true; redraw(); break;
+    case "pg-run-type": PG.runAdd = { rows: [{ date: today(), miles: "", pace: "", hr: "" }] }; runSheet(); break;
+    case "pg-run-rmrow": { const R = PG.runAdd; runEditsIn(); R.rows.splice(+el.getAttribute("data-i"), 1); if (!R.rows.length){ PG.runAdd = null; C.closeModal(); } else runSheet(); break; }
+    case "pg-run-save": {
+      const R = PG.runAdd; runEditsIn();
+      const good = R.rows.map(cleanRun).filter(Boolean);
+      if (!good.length){ C.toast("Enter miles and pace"); break; }
+      // Oldest first. Undated runs keep the order they were added; dated runs slot in by date.
+      const all = [...(c.runs || []), ...good.sort((a, b) => (a.date || "~").localeCompare(b.date || "~"))];
+      const dated = all.filter(r => r.date).sort((a, b) => a.date.localeCompare(b.date)); let k = 0;
+      const runs = all.map(r => r.date ? dated[k++] : r);
+      PG.runAdd = null; C.closeModal(); await save({ runs }, good.length > 1 ? `${good.length} runs saved` : "Run saved"); break; }
+    case "pg-run-del": { const id = el.getAttribute("data-id"); await save({ runs: (c.runs || []).filter(r => r.id !== id) }, "Run deleted"); break; }
+    case "pg-run-coach": {
+      const goal = valIn("pg-run-goal"); if (goal !== "" && goal !== (c.runGoal || "")) save({ runGoal: goal.trim() });
+      PG.runCoach = { step: "loading" }; runCoachSheet();
+      try { const r = await C.A.programs.ai({ action: "runcoach", clientId: c.id, goal: goal || c.runGoal || "" }); PG.runCoach = { step: "result", result: r.result }; }
+      catch (e){ PG.runCoach = { step: "error", error: e.code === "ai_not_setup" ? "The AI assistant isn't switched on yet." : (e.message || "Something went wrong. Try again.") }; }
+      runCoachSheet(); break; }
+    case "pg-run-keep": { const R = PG.runCoach && PG.runCoach.result; if (!R) break; const goal = valIn("pg-run-goal").trim();
+      C.closeModal(); PG.runCoach = null; await save({ runPlan: { at: today(), summary: R.summary, nextRuns: R.nextRuns || [] }, ...(goal ? { runGoal: goal } : {}) }, "Next runs saved"); break; }
+  }
+}
+function runEditsIn(){ const R = PG.runAdd; if (!R) return; document.querySelectorAll("[data-run]").forEach(inp => { const r = R.rows[+inp.getAttribute("data-run")]; if (r) r[inp.getAttribute("data-f")] = inp.value; }); }
+
 const valIn = id => { const el = document.getElementById(id); return el ? el.value : ""; };
 
 /* ---------- library ---------- */
@@ -1054,6 +1159,7 @@ async function onClick(el, e){
   const act = el.getAttribute("data-act"), si = +el.getAttribute("data-s"), ri = +el.getAttribute("data-r");
   if (act !== "pg-confirm" && !["pg-delweek", "pg-delprog", "pg-delsess", "pg-exdel"].includes(act)) PG.confirm = null;
   if (!["pg-more", "pg-confirm", "pg-repeat"].includes(act)) PG.more = null;
+  if (/^pg-run-/.test(act || "")) return runAct(act, el);
   const p = P(), wi = PG.week;
   switch (act){
     case "pg-retry": PG.ready = null; redraw(); break;
@@ -1334,6 +1440,7 @@ function onChange(t){
     if (v !== (c.email || "")) C.saveClient({ ...c, email: v }).then(() => C.toast("Email saved")).catch(() => {}); return true; }
   if (k === "cnotes"){ const c = client(PG.clientId); if (c && !c.shared && (c.programNotes || "") !== t.value){ C.saveClient({ ...c, programNotes: t.value.trim() }).then(() => C.toast("Notes saved")).catch(() => {}); } return true; }
   if (k === "lift"){ PG.lift = t.value; redraw(); return true; }
+  if (k === "runfile"){ const f = t.files; if (f && f.length) runFiles(f); t.value = ""; return true; }
   if (k === "who"){ const c = client(PG.clientId); C.saveClient({ ...c, sex: valIn("pg-sex"), birthYear: num(valIn("pg-by")) }).catch(() => {}); return true; }
   const p = P(); if (!p) return true;
   if (k === "sess" && t.type === "checkbox"){ mutate(p => { const x = p.weeks[PG.week].sessions[si]; x.homework = t.checked; if (!t.checked) delete x.wasSession; }); return true; }
@@ -1544,6 +1651,11 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-delta{display:inline-flex;align-items:center;gap:3px;font-size:12px;font-weight:600;padding:1px 7px;border-radius:999px;white-space:nowrap;background:var(--surface2);color:var(--muted)}
 .pg-delta.up{color:var(--pos);background:color-mix(in srgb,var(--pos) 13%,transparent)}
 .pg-delta.down{color:var(--neg,#c0392b);background:color-mix(in srgb,var(--neg,#c0392b) 12%,transparent)}
+.pg-runlast{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;margin:2px 0 10px}.pg-runlast b{font-size:18px}
+.pg-runseg{margin-bottom:8px;flex-wrap:wrap}.pg-runplan{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:8px 0}.pg-runplan ol{margin:6px 0 0;padding-left:20px}.pg-runplan li{margin:3px 0}
+.pg-runlist{margin-top:10px}.pg-runlist summary{cursor:pointer}
+.pg-runedit{display:grid;grid-template-columns:1.3fr .8fr .9fr .8fr auto;gap:8px;align-items:end;margin-bottom:8px}.pg-runedit .field{margin:0}.pg-runedit input{width:100%;min-width:0}
+@media (max-width:560px){.pg-runedit{grid-template-columns:1fr 1fr;border-bottom:1px solid var(--line);padding-bottom:8px}}
 .pg-lifts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
 .pg-liftcard{gap:6px}
 .pg-liftcard h2{font-size:15px}

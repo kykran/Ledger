@@ -105,7 +105,7 @@ export function buildDemo(now = new Date()){
   const curM = mkey(now), prevM = mkey(new Date(now.getFullYear(), now.getMonth() - 1, 1)), prev2M = mkey(new Date(now.getFullYear(), now.getMonth() - 2, 1));
 
   const clients = [
-    { id: "maya", name: "Maya Chen", aliases: ["Maya"], sex: "female", birthYear: new Date().getFullYear() - 34, billing: "package", rate: 110, packageSize: 24, packagePrice: 2640, email: "maya@example.com", phone: "(617) 555-0142", ...pkg("maya", C.maya, 24, 2640, 13) },
+    { id: "maya", name: "Maya Chen", aliases: ["Maya"], runs: [[3.18,707,145],[2.95,787,134],[3.13,733,131],[2.54,856,132],[3.20,830,129],[4.01,793,133],[3.13,822,136],[3.15,724,132],[3.19,658,136],[3.21,687,131],[4.05,781,136],[2.71,689,141],[3.06,730,141]].map(([miles, paceSec, hr], i) => ({ id: "dr" + i, date: "", miles, paceSec, hr, note: "", source: "demo" })), sex: "female", birthYear: new Date().getFullYear() - 34, billing: "package", rate: 110, packageSize: 24, packagePrice: 2640, email: "maya@example.com", phone: "(617) 555-0142", ...pkg("maya", C.maya, 24, 2640, 13) },
     { id: "jordan", name: "Jordan Reyes", billing: "package", rate: 120, packageSize: 10, packagePrice: 1200, phone: "(617) 555-0187", ...pkg("jordan", C.jordan, 10, 1200, 8) },
     { id: "priya", name: "Priya Patel", billing: "package", rate: 100, packageSize: 24, packagePrice: 2400, email: "priya@example.com", ...pkg("priya", C.priya, 24, 2400, 26) },
     { id: "taylor", name: "Taylor Brooks", billing: "package", rate: 115, packageSize: 12, packagePrice: 1380, phone: "(617) 555-0119", ...pkg("taylor", C.taylor, 12, 1380, 7, false) },

@@ -69,6 +69,10 @@ export function demoProgramsAdapter(){
     // Demo stand-in for the AI assistant: canned but shaped exactly like the real /api/ai results.
     async ai(b){
       await new Promise(r => setTimeout(r, 400));
+      if (b.action === "readrun") return { result: { runs: (b.images || []).map((_, i) => ({ image: i + 1, miles: 3.1, pace: "12:48", hr: 136, note: "Demo: numbers are made up here; the live app reads the screenshot" })) } };
+      if (b.action === "runcoach") return { result: { summary: "Demo: she's running about 3 miles, 2-3 times a week. Heart rate is steady in the low-to-mid 130s, and recent runs are a little slower at the same heart rate, so keep most runs easy and build distance slowly.",
+        wentWell: ["Very consistent: a run every few days", "Heart rate stays in a comfortable range"], adjust: ["Add one slightly longer run each week (+0.25-0.5 mi)", "Hold easy runs under 140 bpm, even if it means slowing down"],
+        nextRuns: [{ label: "Easy run", miles: 3, pace: "13:15-13:45", hr: "under 140", note: "Conversational the whole way" }, { label: "Steady with pickups", miles: 3, pace: "12:45-13:15", hr: "under 150", note: "4 × 30 s a little faster in the second mile" }, { label: "Longer easy run", miles: 3.5, pace: "13:30-14:00", hr: "under 140", note: "Walk breaks are fine" }], flags: [] } };
       const prog = P.programs.find(p => p.id === b.programId);
       const bump = r => ({ ...r, weight: /^\d+$/.test(r.weight || "") ? String(+r.weight + 5) : r.weight || "RPE 7", note: "Demo suggestion" });
       if (b.action === "critique") return { result: { summary: "Demo critique: solid split between lower and upper days with sensible supersets. Pulling volume is a little light compared with pushing.",
