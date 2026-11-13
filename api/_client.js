@@ -2,7 +2,7 @@
 // and the client app (/api/client-app, signed in with a code and a cookie). Never prices.
 import { createHash, randomBytes } from "node:crypto";
 import { admin } from "./_lib.js";
-import { clientProgramView, findSession, timedPlan, askWorkout, swapOptions, SWAP_REASONS, pid } from "../src/programs-core.js";
+import { clientProgramView, findSession, timedPlan, askWorkout, swapOptions, SWAP_REASONS, pid, RUN_PROGRAM, cleanPlannedRun, cleanDoneRun } from "../src/programs-core.js";
 import { modelFor } from "./_sync.js";
 import { clientView } from "../src/engine.js";
 
@@ -92,12 +92,35 @@ export async function clientAction(uid, cid, b, { flags = false } = {}){
     if (!pr || pr.client_id !== cid) return { status: 404, body: { message: "That program isn't available." } };
     const w = cleanWorkout(b.workout);
     if (!w.rows.length) return { status: 400, body: { message: "Add at least one exercise." } };
-    const { count } = await admin.from("client_workouts").select("id", { count: "exact", head: true }).eq("user_id", uid).eq("client_id", cid).eq("on_date", day(b.on_date));
+    const { count } = await admin.from("client_workouts").select("id", { count: "exact", head: true }).eq("user_id", uid).eq("client_id", cid).neq("program_id", RUN_PROGRAM).eq("on_date", day(b.on_date));
     if ((count || 0) >= 3) return { status: 400, body: { message: "That day already has 3 workouts you added." } };
     const id = pid("cw");
     const { error } = await admin.from("client_workouts").insert({ id, user_id: uid, client_id: cid, program_id: pr.id, on_date: day(b.on_date), data: w });
     if (error) throw error;
     return { status: 200, body: { ok: true, id } };
+  }
+  // Runs on days (client app). The client can plan one, log one (planned or not), and remove ones they planned.
+  if (flags && (b.action === "runAdd" || b.action === "runLog")){
+    const done = b.action === "runLog" ? cleanDoneRun(b.done || {}) : null;
+    if (b.action === "runLog" && !done) return { status: 400, body: { message: "Enter miles and pace." } };
+    if (b.id){
+      const { data: w } = await admin.from("client_workouts").select("id,data").eq("user_id", uid).eq("client_id", cid).eq("program_id", RUN_PROGRAM).eq("id", String(b.id)).maybeSingle();
+      if (!w) return { status: 404, body: { message: "That run isn't on your calendar anymore." } };
+      const { error } = await admin.from("client_workouts").update({ ...(b.on_date ? { on_date: day(b.on_date) } : {}), data: { ...(w.data || {}), ...(done ? { done } : {}) } }).eq("id", w.id).eq("user_id", uid);
+      if (error) throw error;
+      return { status: 200, body: { ok: true, id: w.id } };
+    }
+    const { count } = await admin.from("client_workouts").select("id", { count: "exact", head: true }).eq("user_id", uid).eq("client_id", cid).eq("program_id", RUN_PROGRAM).eq("on_date", day(b.on_date));
+    if ((count || 0) >= 3) return { status: 400, body: { message: "That day already has 3 runs." } };
+    const id = pid("rn"), plan = cleanPlannedRun(b.run || {});
+    if (!done && !plan.miles) return { status: 400, body: { message: "How many miles?" } };
+    const { error } = await admin.from("client_workouts").insert({ id, user_id: uid, client_id: cid, program_id: RUN_PROGRAM, on_date: day(b.on_date), data: { ...plan, by: "client", ...(done ? { done } : {}) } });
+    if (error) throw error;
+    return { status: 200, body: { ok: true, id } };
+  }
+  if (flags && b.action === "runRemove"){
+    await admin.from("client_workouts").delete().eq("user_id", uid).eq("client_id", cid).eq("program_id", RUN_PROGRAM).eq("id", String(b.id || "")).filter("data->>by", "eq", "client");
+    return { status: 200, body: { ok: true } };
   }
   if (flags && b.action === "removeWorkout"){
     await admin.from("client_workouts").delete().eq("user_id", uid).eq("client_id", cid).eq("id", String(b.session_id || ""));

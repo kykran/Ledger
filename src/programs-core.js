@@ -145,7 +145,7 @@ export function clientProgramView({ client, trainerName, programs, exercises, lo
     first: String(client.name || "").trim().split(/[\s+&]/)[0] || "there", trainer: trainerName || "",
     programs: active.map(strip), exercises: ex,
     logs: (logs || []).map(l => ({ p: l.program_id, s: l.session_id, r: l.row_id, n: l.set_no, reps: l.reps != null ? Number(l.reps) : null, weight: l.weight != null ? Number(l.weight) : null, timed: !!l.timed, done: !!l.done, date: String(l.logged_on).slice(0, 10), by: l.source, ex: l.ex_name })),
-    measurements: meas, updated: new Date().toISOString()
+    measurements: meas, runs: (() => { const rows = runRowsOf(clientWorkouts); return { done: allRuns(client.runs, rows), planned: rows }; })(), updated: new Date().toISOString()
   };
 }
 
@@ -848,4 +848,24 @@ export function cleanRun(r){
   if (!(miles > 0) || !paceSec) return null;
   const date = /^\d{4}-\d{2}-\d{2}$/.test(String(r.date || "")) ? r.date : "";
   return { id: r.id || "run" + Math.random().toString(36).slice(2, 9), date, miles: Math.round(miles * 100) / 100, paceSec, hr: hr > 40 && hr < 230 ? hr : null, note: String(r.note || "").slice(0, 200), source: r.source || "" };
+}
+// Runs on days live in client_workouts with program_id "runs": {id, on_date, data:{kind:"run", label, miles, pace, hr, note, by, done?:{miles, paceSec, hr}}}.
+// The trainer or the client can put one on a day; whoever logs it fills `done`.
+export const RUN_PROGRAM = "runs";
+export const runRowsOf = cws => (cws || []).filter(w => w.program_id === RUN_PROGRAM)
+  .map(w => ({ ...(w.data || {}), id: w.id, on: String(w.on_date).slice(0, 10) })).sort((a, b) => a.on.localeCompare(b.on));
+// Every finished run, oldest first: the trainer's (screenshots, maybe undated) plus runs logged on a day.
+export function allRuns(clientRuns, rows){
+  const own = (clientRuns || []).filter(Boolean);
+  const done = (rows || []).filter(r => r.done && r.done.miles && r.done.paceSec).map(r => ({ id: r.id, date: r.on, miles: r.done.miles, paceSec: r.done.paceSec, hr: r.done.hr || null, note: r.label || "", source: r.by === "client" ? "client" : "trainer", row: true }));
+  return [...own.filter(r => !r.date), ...[...own.filter(r => r.date), ...done].sort((a, b) => a.date.localeCompare(b.date))];
+}
+export function cleanPlannedRun(x){
+  const n = v => { const f = parseFloat(v); return f > 0 && f < 100 ? Math.round(f * 100) / 100 : null; };
+  return { kind: "run", label: String(x.label || "Run").trim().slice(0, 60) || "Run", miles: n(x.miles), pace: String(x.pace || "").trim().slice(0, 30), hr: String(x.hr || "").trim().slice(0, 30), note: String(x.note || "").trim().slice(0, 200) };
+}
+export function cleanDoneRun(x){
+  const miles = parseFloat(x.miles), paceSec = parsePace(x.pace ?? x.paceSec), hr = parseInt(x.hr, 10);
+  if (!(miles > 0 && miles < 100) || !paceSec) return null;
+  return { miles: Math.round(miles * 100) / 100, paceSec, hr: hr > 40 && hr < 230 ? hr : null };
 }

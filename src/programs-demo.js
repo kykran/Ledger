@@ -112,6 +112,7 @@ export function demoProgramsAdapter(){
     async clientWorkouts(clientId){ if (clientId !== "maya") return []; P.cw = P.cw || [{ id: "cw-demo", client_id: "maya", program_id: P.programs[0].id, on_date: (d => d.toISOString().slice(0, 10))(new Date(Date.now() - 2 * 864e5)),
       data: { name: "Balance + accessories", why: "", rows: [{ id: "r1", name: "Single-Leg RDL", group: "A1", sets: "3", reps: "8 each" }, { id: "r2", name: "Push-Up", group: "A2", sets: "3", reps: "10-15" }, { id: "r3", name: "Side Plank", group: "B1", sets: "3", reps: "20-30s each" }] } }]; return c(P.cw); },
     async deleteClientWorkout(id){ P.cw = (P.cw || []).filter(w => w.id !== id); },
+    async saveClientWorkout(row){ P.cw = P.cw || []; const i = P.cw.findIndex(w => w.id === row.id); if (i >= 0) P.cw[i] = c(row); else P.cw.push(c(row)); },
     async measurements(clientId){ return c(P.measurements.filter(m => m.client_id === clientId)); },
     async saveMeasurement(m){ const row = c(m); if (!row.id) row.id = "m" + Date.now(); const i = P.measurements.findIndex(x => x.id === row.id); if (i >= 0) P.measurements[i] = row; else P.measurements.push(row); },
     async deleteMeasurement(id){ P.measurements = P.measurements.filter(m => m.id !== id); },

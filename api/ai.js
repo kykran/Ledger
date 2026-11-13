@@ -158,14 +158,20 @@ export default async function handler(req, res){
     if (!cl.data) return send(res, 404, { message: "Client not found." });
     const c = cl.data.data || {}, p = prog.data && prog.data.data;
     if (action === "runcoach"){
-      const runs = (Array.isArray(c.runs) ? c.runs : []).slice(-20);
+      const { data: rr } = await admin.from("client_workouts").select("id,program_id,on_date,data").eq("user_id", owner).eq("client_id", cid).eq("program_id", "runs");
+      const rows = (rr || []).map(w => ({ ...(w.data || {}), on: String(w.on_date).slice(0, 10) })).sort((x, y) => x.on.localeCompare(y.on));
+      const doneRows = rows.filter(r => r.done && r.done.miles && r.done.paceSec).map(r => ({ date: r.on, miles: r.done.miles, paceSec: r.done.paceSec, hr: r.done.hr, note: r.label ? "planned: " + r.label : "" }));
+      const own = Array.isArray(c.runs) ? c.runs : [];
+      const runs = [...own.filter(r => !r.date), ...[...own.filter(r => r.date), ...doneRows].sort((x, y) => x.date.localeCompare(y.date))].slice(-20);
+      const todayIso = new Date().toISOString().slice(0, 10), ahead = rows.filter(r => !r.done && r.on >= todayIso);
       if (!runs.length) return send(res, 400, { message: "Add a run first." });
       const pace = s => Math.floor(s / 60) + ":" + String(Math.round(s % 60)).padStart(2, "0");
       const lines = runs.map((r, i) => `  ${i + 1}. ${r.date || "date unknown"}: ${r.miles} mi @ ${pace(r.paceSec)}/mi${r.hr ? `, avg HR ${r.hr}, ${Math.round(r.hr * r.paceSec / 60)} beats/mile` : ""}${r.note ? " (" + r.note + ")" : ""}`).join("\n");
       const rctx = [`CLIENT: ${String(c.name || "").split(/[\s+&]/)[0] || "Client"}${c.sex ? ", " + c.sex : ""}${age ? ", age " + age : ""}`,
         `TRAINER'S NOTES (injuries, limitations, goals): ${c.programNotes ? c.programNotes : "none given"}`,
         `RUNNING GOAL: ${b.goal ? String(b.goal).slice(0, 300) : c.runGoal || "not given; assume building general aerobic fitness and consistency"}`,
-        `RUNS, OLDEST FIRST:\n${lines}`].join("\n\n");
+        `RUNS, OLDEST FIRST:\n${lines}`,
+        ahead.length ? `ALREADY ON HER CALENDAR: ${ahead.map(r => `${r.on} ${r.label || "run"}${r.miles ? " " + r.miles + " mi" : ""}`).join("; ")}` : ""].filter(Boolean).join("\n\n");
       const out = await ask(RUN_SYSTEM, TOOLS.runcoach, [{ type: "text", text: `${rctx}\n\nTASK:\nGive feedback on her running and plan her next 3 runs. Call run_feedback with your answer.` }], 3000);
       return send(res, out.status, out.body);
     }

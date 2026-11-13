@@ -164,7 +164,8 @@ export const adapter = {
       async leave(ownerId, programId){ const me = (session.user.email || "").toLowerCase(); await sb.from("program_shares").delete().eq("owner_id", ownerId).eq("program_id", programId).ilike("shared_email", me); }
     },
     // Workouts the client added from their app (client_workouts). Empty until the client app's setup has been run.
-    async clientWorkouts(clientId){ const { data, error } = await sb.from("client_workouts").select("*").eq("user_id", session.user.id).eq("client_id", clientId).order("on_date", { ascending: false }).limit(30); return error ? [] : data || []; },
+    async clientWorkouts(clientId){ const { data, error } = await sb.from("client_workouts").select("*").eq("user_id", session.user.id).eq("client_id", clientId).order("on_date", { ascending: false }).limit(80); return error ? [] : data || []; },
+    async saveClientWorkout(row){ const { error } = await sb.from("client_workouts").upsert({ ...row, user_id: session.user.id }); if (error) throw fail(error); },
     async deleteClientWorkout(id){ const { error } = await sb.from("client_workouts").delete().eq("user_id", session.user.id).eq("id", id); if (error) throw fail(error); },
     async measurements(clientId){ const { data, error } = await query(() => sb.from("measurements").select("*").eq("user_id", session.user.id).eq("client_id", clientId).order("taken_on")); if (error) throw fail(error); return data || []; },
     async saveMeasurement(m){ const row = { ...m, user_id: session.user.id }; if (!row.id) delete row.id; const { error } = await sb.from("measurements").upsert(row); if (error) throw fail(error); },

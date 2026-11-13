@@ -3,7 +3,7 @@
  * Two ways in: the program link (/p/<token>), or the client app (/c/<key>), where the client signs in once with a 4-digit code
  * and can tap any session date to flag it for the trainer. ?demo=maya&app shows the client app on sample data (any code works). */
 import { sessionCards, sessionsLine } from "./sessions-view.js";
-import { clientProgramView, sessionForDate, askWorkout, swapOptions, SWAP_REASONS, adaptRows, EQUIPMENT, findSession, weekZero, setCount, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, repsFor, timedPlan } from "./programs-core.js";
+import { clientProgramView, sessionForDate, askWorkout, swapOptions, SWAP_REASONS, adaptRows, EQUIPMENT, findSession, weekZero, setCount, lineChart, LINECHART_CSS, videoEmbed, VIDEO_CSS, grpClass, GROUP_CSS, repsFor, timedPlan, fmtPace, beatsPerMile, parsePace } from "./programs-core.js";
 
 const $m = document.getElementById("m");
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -37,7 +37,7 @@ function render(){
   const sessions = () => `<div class="sv">${appKey ? `<p class="note" style="margin:0">Something look wrong? Tap the date and let ${esc(V.trainer || "your trainer")} know.</p>` : ""}${sessionCards(V.sessions, { tap: !!appKey, flags: appKey ? flagMap() : {}, due: true })}</div>`;
   const body = st.tab === "metrics" ? renderProgress() : st.tab === "billing" && V.sessions ? sessions() : st.tab === "calendar" ? renderCalendar() : renderProgram();
   $m.innerHTML = head + homeTip() + body
-    + `<footer>Trainer Tally${appKey ? ` · <button class="linkbtn" data-act="signout">Sign out</button>` : ""}</footer>` + (st.flag ? flagSheet() : st.add ? addSheet() : "");
+    + `<footer>Trainer Tally${appKey ? ` · <button class="linkbtn" data-act="signout">Sign out</button>` : ""}</footer>` + (st.flag ? flagSheet() : st.add ? addSheet() : st.run ? runSheet() : "");
   if (st.tab === "calendar" && st.calScroll){ st.calScroll = false; const t = document.querySelector(".cal-wk.now"); if (t) t.scrollIntoView({ block: "start" }); }
 }
 
@@ -93,7 +93,7 @@ function renderProgram(){
   const pick = V.programs.length > 1 ? `<select data-act="prog" aria-label="Program">${V.programs.map((x, i) => `<option value="${i}" ${i === st.prog ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : `<h3>${esc(p.name)}</h3>`;
   const tabs = `<div class="tabs" role="tablist">${p.weeks.map((w, i) => `<button role="tab" aria-selected="${i === st.week}" data-act="week" data-i="${i}">${esc(w.label || "Week " + (i + 1))}</button>`).join("")}</div>`;
   const studio = wk ? wk.sessions.filter(s => !s.homework) : [];
-  return sessionsStrip() + makeBtn() + renderHomework(p) + pick + tabs + (studio.length ? studio.map(s => renderSession(p, s)).join("") : `<div class="card"><div class="empty">${V.trainer ? `Your sessions with ${esc(V.trainer)}` : "Your sessions"} show here once they're written.</div></div>`);
+  return sessionsStrip() + runStrip() + makeBtn() + renderHomework(p) + pick + tabs + (studio.length ? studio.map(s => renderSession(p, s)).join("") : `<div class="card"><div class="empty">${V.trainer ? `Your sessions with ${esc(V.trainer)}` : "Your sessions"} show here once they're written.</div></div>`);
 }
 /* Calendar: one week, a row per day. Sessions with the trainer sit on their booked days (same matching as the trainer's Calendar),
  * homework sits on the day it was done, and homework not done yet waits under the week. Tap one to open it right there. */
@@ -133,9 +133,12 @@ function renderWeek(p, wi, booked, isNow){
       its.push(hit && hit.weekIndex === wi ? item(hit.session, k + "|" + hit.session.id, `With ${V.trainer || "your trainer"} · ${t}`) : `<div class="cal-it studio flat"><b>Session</b><span>With ${esc(V.trainer || "your trainer")} · ${esc(t)}</span></div>`); }
     for (const s of hw) if (doneOn[s.id] && doneOn[s.id].has(k)) its.push(item(s, k + "|" + s.id, "Homework · done"));
     for (const s of mine) if (s.on === k) its.push(item(s, k + "|" + s.id, doneOn[s.id] ? "Added by you · done" : "Added by you"));
-    const add = appKey && k >= ymd(new Date(Date.now() - 7 * 864e5)) && w ? `<button class="cal-add" data-act="addopen" data-d="${k}" aria-label="Add a workout on ${esc(d.toDateString())}">+ Add</button>` : "";
+    for (const r of runsOn(k)) its.push(runItem(r));
+    const recent = appKey && k >= ymd(new Date(Date.now() - 7 * 864e5));
+    const add = (recent && w ? `<button class="cal-add" data-act="addopen" data-d="${k}" aria-label="Add a workout on ${esc(d.toDateString())}">+ Add</button>` : "")
+      + (recent ? `<button class="cal-add" data-act="runopen" data-d="${k}" aria-label="Add a run on ${esc(d.toDateString())}">+ Run</button>` : "");
     const opened = st.calOpen && st.calOpen.startsWith(k + "|");
-    return `<div class="cal-day ${k === now ? "today" : ""} ${its.length ? "" : "empty"}"><div class="cal-d"><b>${d.toLocaleDateString("en-US", { weekday: "short" })}</b><span>${d.getDate()}</span></div><div class="cal-its">${its.join("")}${its.length ? (opened ? "" : add) : `<div class="cal-rest"><span class="muted small">Rest</span>${add}</div>`}</div></div>`;
+    return `<div class="cal-day ${k === now ? "today" : ""} ${its.length ? "" : "empty"}"><div class="cal-d"><b>${d.toLocaleDateString("en-US", { weekday: "short" })}</b><span>${d.getDate()}</span></div><div class="cal-its">${its.join("")}${its.length ? (opened ? "" : `<div class="cal-adds">${add}</div>`) : `<div class="cal-rest"><span class="muted small">Rest</span><span class="cal-adds">${add}</span></div>`}</div></div>`;
   }).join("");
   const todo = hw.filter(s => !doneOn[s.id]);
   return `<section class="card cal cal-wk ${isNow ? "now" : ""}"><div class="cal-h"><b>${esc(w ? w.label || "Week " + (wi + 1) : "After this program")}</b><span class="muted small">${esc(fmtR(days[0], days[6]))}${isNow ? " · this week" : ""}</span></div>${rows}
@@ -313,6 +316,56 @@ function renderSession(p, s, calKey){
   </section>`;
 }
 
+/* ---------- runs on days ---------- */
+const runsOn = k => ((V.runs && V.runs.planned) || []).filter(r => r.on === k);
+const planTxt = r => [r.miles ? r.miles + " mi" : "", r.pace ? "@ " + r.pace : "", r.hr ? "HR " + r.hr : ""].filter(Boolean).join(" ");
+const doneTxt = d => `${d.miles} mi · ${fmtPace(d.paceSec)}/mi${d.hr ? " · " + d.hr + " bpm" : ""}`;
+function runItem(r){
+  const who = r.by === "client" ? "Added by you" : `From ${V.trainer || "your trainer"}`;
+  return `<button class="cal-it run ${r.done ? "done" : ""}" data-act="runopen" data-id="${esc(r.id)}"><b>🏃 ${esc(r.label || "Run")}${r.done ? " ✓" : ""}</b><span>${esc(r.done ? doneTxt(r.done) : [planTxt(r), who].filter(Boolean).join(" · "))}</span></button>`;
+}
+/* Program tab: the next run on the calendar (or one to log), plus logging a run any time. */
+function runStrip(){
+  const P = (V.runs && V.runs.planned) || [], t = today();
+  if (!appKey && !P.length) return "";
+  const due = P.filter(r => !r.done && r.on <= t && r.on >= ymd(new Date(Date.now() - 3 * 864e5))), next = P.find(r => !r.done && r.on > t);
+  const r = due[due.length - 1] || next;
+  if (!r && !appKey) return "";
+  return `<div class="strip runs">${r ? `<button class="run-next" data-act="runopen" data-id="${esc(r.id)}"><b>🏃 ${esc(r.label || "Run")} · ${r.on === t ? "today" : esc(fmt(r.on))}</b><span class="muted small">${esc(planTxt(r))}${r.note ? " · " + esc(r.note) : ""}</span></button>` : `<span><b>🏃 Running</b> <span class="muted small">Nothing planned</span></span>`}${appKey ? `<button class="btn" data-act="runopen" data-d="${t}" data-log="1">Log a run</button>` : ""}</div>`;
+}
+/* st.run = {id} (a run on the calendar) or {date, log} (a new one: plan it, or log one already done). */
+function runSheet(){
+  const R = st.run, r = R.id ? ((V.runs && V.runs.planned) || []).find(x => x.id === R.id) : null;
+  if (R.id && !r){ st.run = null; return ""; }
+  const date = r ? r.on : R.date, when = date === today() ? "today" : fmt(date), logging = R.log || (r && (R.logging || r.done));
+  const f = (id, label, val, ph, mode) => `<label class="fld"><span>${label}</span><input id="${id}" ${mode ? `inputmode="${mode}"` : ""} placeholder="${esc(ph || "")}" value="${esc(val ?? "")}"></label>`;
+  let body;
+  if (r && !logging) body = `<p style="margin:0"><b>${esc(r.label || "Run")}</b> ${esc(planTxt(r))}</p>${r.note ? `<p class="note" style="margin:0">${esc(r.note)}</p>` : ""}
+      <p class="note" style="margin:0">${r.by === "client" ? "You added this." : `From ${esc(V.trainer || "your trainer")}.`}</p>
+      ${appKey ? `<div class="row">${r.by === "client" ? `<button class="btn" data-act="runrm">Remove</button>` : ""}<button class="btn" data-act="runclose">Close</button><button class="btn primary" data-act="runlogit" style="margin-left:auto">Log it</button></div>` : `<button class="btn wide" data-act="runclose">Close</button>`}`;
+  else if (logging){ const d = (r && r.done) || {};
+    body = `<p class="note" style="margin:0">From your watch: distance, average pace and average heart rate.</p>
+      <div class="flds">${f("rn-mi", "Miles", d.miles ?? (r && !r.done ? "" : ""), "3.1", "decimal")}${f("rn-pace", "Pace /mi", d.paceSec ? fmtPace(d.paceSec) : "", "12:30")}${f("rn-hr", "Avg heart rate", d.hr ?? "", "optional", "numeric")}</div>
+      ${!r ? `<label class="fld"><span>Day</span><input type="date" id="rn-d" value="${esc(date)}" max="${today()}"></label>` : ""}
+      ${R.err ? `<p class="note warn" role="alert" style="margin:0">${esc(R.err)}</p>` : ""}
+      <div class="row"><button class="btn" data-act="runclose">Cancel</button><button class="btn primary" data-act="runsave" style="margin-left:auto" ${R.busy ? "disabled" : ""}>${R.busy ? "Saving…" : "Save run"}</button></div>`; }
+  else body = `<div class="flds">${f("rn-label", "Run", "Easy run", "")}${f("rn-mi", "Miles", "", "3", "decimal")}${f("rn-pace", "Pace /mi", "", "optional")}</div>
+      ${R.err ? `<p class="note warn" role="alert" style="margin:0">${esc(R.err)}</p>` : ""}
+      <div class="row"><button class="btn" data-act="runclose">Cancel</button><button class="btn" data-act="runlognew">I already ran</button><button class="btn primary" data-act="runsave" style="margin-left:auto" ${R.busy ? "disabled" : ""}>${R.busy ? "Adding…" : "Add to my calendar"}</button></div>`;
+  return `<div class="scrim" data-act="runclose"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Run"><h2>${r && !logging ? "Run " + esc(when) : logging ? "Log your run · " + esc(when) : "Plan a run · " + esc(when)}</h2>${body}</div>`;
+}
+async function runSave(){
+  const R = st.run, r = R.id ? V.runs.planned.find(x => x.id === R.id) : null, logging = R.log || (r && (R.logging || r.done));
+  const v = id => (document.getElementById(id) || {}).value || "";
+  const body = logging ? { action: "runLog", id: r ? r.id : undefined, on_date: r ? undefined : v("rn-d") || R.date, run: r ? undefined : { label: "Run" }, done: { miles: v("rn-mi"), pace: v("rn-pace"), hr: v("rn-hr") } }
+    : { action: "runAdd", on_date: R.date, run: { label: v("rn-label"), miles: v("rn-mi"), pace: v("rn-pace") } };
+  if (logging && (!(parseFloat(body.done.miles) > 0) || !parsePace(body.done.pace))){ R.err = "Enter miles and pace (like 12:30)."; return render(); }
+  if (!logging && !(parseFloat(body.run.miles) > 0)){ R.err = "How many miles?"; return render(); }
+  R.busy = true; R.err = ""; render();
+  try { await post(body); st.run = null; toast(logging ? "Run saved" : "Added to your calendar"); await load(true); }
+  catch (x){ R.busy = false; R.err = x.message; render(); }
+}
+
 function renderProgress(){
   const w = V.measurements.filter(m => m.weight != null).map(m => ({ date: m.date, value: m.weight }));
   const bf = V.measurements.filter(m => m.bodyFat != null).map(m => ({ date: m.date, value: m.bodyFat }));
@@ -321,7 +374,9 @@ function renderProgress(){
   const names = Object.keys(H).sort((a, b) => Object.keys(H[b]).length - Object.keys(H[a]).length || a.localeCompare(b));
   if (!st.lift || !H[st.lift]) st.lift = names[0] || "";
   const lift = st.lift ? Object.entries(H[st.lift]).map(([date, value]) => ({ date, value })) : [];
-  return `<section class="card"><h3>Log your weight</h3>
+  const R = (V.runs && V.runs.done) || [], rp = R.map((r, i) => ({ value: r.paceSec, xl: r.date ? r.date.slice(5).replace("-", "/").replace(/^0/, "") : "#" + (i + 1), tip: r.date ? fmt(r.date) : "Run " + (i + 1) }));
+  const runCardC = R.length ? `<section class="card"><div class="sess-h"><h2>Running pace</h2><span class="muted small">latest ${fmtPace(R[R.length - 1].paceSec)}/mi · ${R[R.length - 1].miles} mi</span></div>${lineChart(rp, { seq: true, fmtV: fmtPace, unit: "/mi" })}<p class="muted small" style="margin:0">Minutes per mile. Lower is faster.</p></section>` : "";
+  return runCardC + `<section class="card"><h3>Log your weight</h3>
       <div class="row"><input type="number" id="bw" inputmode="decimal" step="0.1" placeholder="Weight" style="width:120px"><input type="date" id="bw-d" value="${today()}"><button class="btn primary" data-act="bw">Save</button></div></section>
     <section class="card"><div class="sess-h"><h2>Bodyweight</h2><span class="muted small">${w.length ? "latest " + w[w.length - 1].value : ""}</span></div>${lineChart(w)}</section>
     ${bf.length ? `<section class="card"><div class="sess-h"><h2>Body fat</h2><span class="muted small">latest ${bf[bf.length - 1].value}%</span></div>${lineChart(bf, { unit: "%" })}</section>` : ""}
@@ -370,6 +425,12 @@ document.addEventListener("click", async e => {
     catch (x){ F.busy = false; render(); toast(x.message); }
     return;
   }
+  if (a === "runopen"){ st.run = el.getAttribute("data-id") ? { id: el.getAttribute("data-id") } : { date: el.getAttribute("data-d") || today(), log: !!el.getAttribute("data-log") || el.getAttribute("data-d") < today() }; return render(); }
+  if (a === "runclose"){ st.run = null; return render(); }
+  if (a === "runlogit"){ st.run.logging = true; return render(); }
+  if (a === "runlognew"){ st.run.log = true; st.run.err = ""; return render(); }
+  if (a === "runsave") return runSave();
+  if (a === "runrm"){ if (!confirm("Remove this run from your calendar?")) return; try { await post({ action: "runRemove", id: st.run.id }); st.run = null; toast("Removed"); await load(true); } catch (x){ toast(x.message); } return; }
   if (a === "tab"){ st.tab = el.getAttribute("data-k"); st.calOpen = null; st.doing = null; st.calScroll = st.tab === "calendar"; render(); if (st.tab !== "calendar") window.scrollTo({ top: 0 }); }
   else if (a === "week"){ st.week = +el.getAttribute("data-i"); render(); }
   else if (a === "do" || a === "edit"){ const sid = el.getAttribute("data-s"); st.doing = sid; st.doingOn = a === "edit" ? el.getAttribute("data-d") : null; st.plain = false; st.swap = null; delete st.swaps[sid];
@@ -448,7 +509,12 @@ document.addEventListener("change", e => {
 async function load(quiet){
   if (appKey && demo && !localStorage.getItem("tt-demo-in")){ SI = { first: "Maya", trainer: "Alex", canEmail: true, emailHint: "m•••@example.com" }; return renderSignin(); }
   if (demo){
-    if (!demoStore){ const { buildProgramsDemo } = await import("./programs-demo.js"); demoStore = buildProgramsDemo(); }
+    if (!demoStore){ const { buildProgramsDemo } = await import("./programs-demo.js"); demoStore = buildProgramsDemo();
+      const dd = n => ymd(new Date(Date.now() + n * 864e5));
+      demoStore.clientWorkouts = [...(demoStore.clientWorkouts || []),
+        { id: "rn-d1", program_id: "runs", on_date: dd(-2), data: { kind: "run", label: "Easy run", miles: 3, pace: "13:15-13:45", hr: "under 140", note: "", by: "trainer", done: { miles: 3.05, paceSec: 795, hr: 137 } } },
+        { id: "rn-d2", program_id: "runs", on_date: dd(1), data: { kind: "run", label: "Steady with pickups", miles: 3, pace: "12:45-13:15", hr: "under 150", note: "4 × 30 s a little faster in mile 2", by: "trainer" } },
+        { id: "rn-d3", program_id: "runs", on_date: dd(3), data: { kind: "run", label: "Longer easy run", miles: 3.5, pace: "13:30-14:00", hr: "under 140", note: "Walk breaks are fine", by: "trainer" } }]; }
     V = clientProgramView({ client: { name: "Maya Chen", sex: "female", birthYear: new Date().getFullYear() - 34 }, trainerName: "Alex", programs: demoStore.programs.filter(p => p.clientId === demo), exercises: demoStore.exercises, logs: demoStore.logs, measurements: demoStore.measurements, clientWorkouts: demoStore.clientWorkouts || [] });
     try { const E = await import("./engine.js"); globalThis.TallyEngine = E; const { buildDemo } = await import("./demo-data.js"), { demoModel } = await import("./demo-core.js");
       const D = buildDemo(), b = E.clientView(demoModel(D, D.profile, D.clients), demo); if (b) V.sessions = b; } catch (x){}
@@ -469,6 +535,11 @@ function demoPost(b){
     return { workout: askWorkout({ ask: b.ask, last: f(b.last_id), next: f(b.next_id), week: (b.week || []).map(x => g(x.id)).filter(Boolean), library: demoStore.exercises, seed: b.seed || 0, equipment: b.equipment }), by: "planner" }; }
   if (b.action === "swap") return { options: swapOptions(b.name, { equipment: b.equipment, library: demoStore.exercises, exclude: b.others, reason: b.reason }), by: "planner" };
   if (b.action === "addWorkout"){ const id = "cw" + Date.now(); (demoStore.clientWorkouts = demoStore.clientWorkouts || []).push({ id, program_id: b.program_id, on_date: b.on_date, data: JSON.parse(JSON.stringify(b.workout)) }); return { ok: true, id }; }
+  if (b.action === "runAdd" || b.action === "runLog"){ const L = demoStore.clientWorkouts = demoStore.clientWorkouts || [];
+    const done = b.done ? { miles: +b.done.miles, paceSec: parsePace(b.done.pace), hr: +b.done.hr || null } : null;
+    if (b.id){ const w = L.find(x => x.id === b.id); if (w && done) w.data = { ...w.data, done }; return { ok: true }; }
+    L.push({ id: "rn" + Date.now(), program_id: "runs", on_date: b.on_date, data: { kind: "run", label: (b.run && b.run.label) || "Run", miles: b.run && +b.run.miles || null, pace: (b.run && b.run.pace) || "", hr: "", note: "", by: "client", ...(done ? { done } : {}) } }); return { ok: true }; }
+  if (b.action === "runRemove"){ demoStore.clientWorkouts = (demoStore.clientWorkouts || []).filter(w => w.id !== b.id); return { ok: true }; }
   if (b.action === "removeWorkout"){ demoStore.clientWorkouts = (demoStore.clientWorkouts || []).filter(w => w.id !== b.session_id); return { ok: true }; }
   if (b.action === "flag" || b.action === "unflag"){ const F = demoStore.flags = demoStore.flags || [], i = F.findIndex(f => f.at === b.session_at && !f.resolved); if (i >= 0) F.splice(i, 1);
     if (b.action === "flag"){ if (b.reason === "Something else" && !b.note) throw new Error("Add a short note so your trainer knows what's up."); F.push({ at: b.session_at, reason: b.reason, note: b.note || "", resolved: false }); } }
