@@ -208,7 +208,7 @@ function renderClientList(){
       <button class="btn primary" data-act="pg-open" data-id="${esc(up.c.id)}" data-week="${wi}">${p ? "Open program" : "Start program"}</button></div>${renderBrief(up.c, p, up.next)}</section>`;
   }
   return hero + renderTodos() + `<section class="card"><div class="card-h"><h2>Client programs</h2><span class="small muted">${loading ? "Reading your calendar…" : "next session first"}</span></div>
-    ${list.length ? `<div class="tablewrap"><table><thead><tr><th>Client</th><th>Next session</th><th>Program</th><th class="num">Weeks</th><th></th></tr></thead><tbody>
+    ${list.length ? `<div class="tablewrap"><table class="pg-clist"><thead><tr><th>Client</th><th>Next session</th><th>Program</th><th class="num">Weeks</th><th></th></tr></thead><tbody>
     ${list.map(({ c, next }) => { const ps = progOf(c.id), p = ps[0];
       return `<tr><td><div class="who">${C.avatar(c)}<a href="#" class="n" data-act="pg-open" data-id="${esc(c.id)}"${next && p ? ` data-week="${weekIndexFor(p, next)}"` : ""}>${esc(c.name)}</a></div></td>
         <td class="small">${next ? esc(whenLabel(next)) : `<span class="muted">–</span>`}</td>
@@ -557,8 +557,8 @@ function renderSession(p, wi, si, s, dates){
   if (!board && MODE === "record" && !written(s)) return `<section class="card pg-sess pg-sess-empty" id="pg-s-${esc(s.id)}"><div class="pg-row"><b>${esc(s.name)}</b><span class="small muted">Nothing written yet</span><button class="btn sm" data-act="pg-editsess" data-s="${si}" style="margin-left:auto">✎ Write it in Plan</button></div></section>`;
   return `<section class="card pg-sess ${s.homework ? "hw" : ""} ${recS ? "rec" : ""} ${board ? "pg-mini" : ""}" id="pg-s-${esc(s.id)}" data-si="${si}">
     ${board ? boardHead(p, si, s, dates, cKey, rep) : `<div class="card-h"><div class="pg-row" style="flex:1"><input class="pg-in pg-sname" data-pg="sess" data-s="${si}" data-f="name" value="${esc(s.name)}" aria-label="Session name">
-      <label class="check small pg-planonly"><input type="checkbox" data-pg="sess" data-s="${si}" data-f="homework" ${s.homework ? "checked" : ""}> Homework <span class="muted">(client can log)</span></label></div>
-      <div class="pg-acts">${hwSwitch(si, s)}${recS ? `<button class="btn sm" data-act="pg-editsess" data-s="${si}" title="Switch to Plan to rewrite this workout">✎ Edit workout</button>` : ""}${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress" data-s="${si}">✦ Progress</button>` : ""}${!p.shared && C.A.programs.emailWorkout ? `<button class="btn sm" data-act="pg-mail" data-s="${si}" title="Email this workout to the client now">✉ Email</button>` : ""}<button class="btn sm" data-act="pg-copysess" data-s="${si}">⧉ Copy</button>
+      <label class="check small pg-planonly"><input type="checkbox" data-pg="sess" data-s="${si}" data-f="homework" ${s.homework ? "checked" : ""}> Homework <span class="muted">(client can log)</span></label>${recS ? `<button class="btn sm ghost pg-dots pg-recdots" data-act="pg-more" data-id="${esc(s.id)}" aria-expanded="${PG.more === s.id}" aria-label="More for ${esc(s.name)}">⋯</button>` : ""}</div>
+      <div class="pg-acts ${recS ? "pg-recacts" : ""} ${recS && PG.more === s.id ? "open" : ""}">${hwSwitch(si, s)}${recS ? `<button class="btn sm" data-act="pg-editsess" data-s="${si}" title="Switch to Plan to rewrite this workout">✎ Edit workout</button>` : ""}${C.A.programs.ai ? `<button class="btn sm" data-act="pg-ai" data-mode="progress" data-s="${si}">✦ Progress</button>` : ""}${!p.shared && C.A.programs.emailWorkout ? `<button class="btn sm" data-act="pg-mail" data-s="${si}" title="Email this workout to the client now">✉ Email</button>` : ""}<button class="btn sm" data-act="pg-copysess" data-s="${si}">⧉ Copy</button>
         ${rep ? "" : `<button class="btn sm pg-planonly" data-act="pg-repeat" data-s="${si}">Repeat…</button>`}
         <button class="btn sm ghost pg-planonly" data-act="pg-up" data-s="${si}" aria-label="Move up" ${si ? "" : "disabled"}>↑</button>
         ${PG.confirm === cKey ? `<button class="btn sm danger" data-act="pg-delsess" data-s="${si}">Delete?</button>` : `<button class="btn sm ghost pg-planonly" data-act="pg-confirm" data-k="${cKey}">Delete</button>`}</div></div>`}
@@ -1495,6 +1495,31 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-sess.rec .pg-logname:hover,.pg-sess.rec .pg-logname:focus-visible,.pg-sess.rec .pg-logname[aria-expanded="true"]{background:var(--surface2)}
 .pg-sess.rec .pg-logname:focus-visible{outline:2px solid var(--accent)}
 @media (max-width:760px){.pg-sess>.card-h{flex-wrap:wrap}.pg-sess>.card-h>.pg-row{flex:1 1 100%!important}.pg-sess>.card-h .pg-sname{width:100%}}
+/* Phone, recording: the workout's extra buttons sit behind ⋯ so the first exercise is higher up; date, sets and Say it share one line. */
+.pg-recdots{display:none}
+/* Phone: the client list is two short lines per client instead of a table cut off at the side. */
+@media (max-width:760px){
+  .pg-clist thead,.pg-clist td.num{display:none}
+  .pg-clist,.pg-clist tbody{display:block}
+  .pg-clist tr{display:grid;grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"who who btn" "when prog btn";column-gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
+  .pg-clist td{display:block;padding:0!important;border:0!important}
+  .pg-clist td:nth-child(1){grid-area:who}
+  .pg-clist td:nth-child(2){grid-area:when;padding-left:42px!important}
+  .pg-clist td:nth-child(3){grid-area:prog;font-size:13px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pg-clist td:nth-child(5){grid-area:btn}
+  .pg-clist .tablewrap{overflow:visible}
+}
+@media (max-width:760px){
+  .pg-sess.rec>.card-h>.pg-row{flex-wrap:nowrap}
+  .pg-sess.rec>.card-h .pg-sname{width:auto;flex:1;min-width:0}
+  .pg-recdots{display:inline-flex;flex:0 0 auto}
+  .pg-recacts:not(.open){display:none}
+  .pg-recacts.open{justify-content:flex-start;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--surface2);width:100%}
+  .pg-sess.rec .pg-recbar{flex-wrap:nowrap;gap:8px}
+  .pg-sess.rec .pg-recbar label{display:flex;gap:6px;align-items:center;white-space:nowrap}
+  .pg-sess.rec .pg-recbar span{white-space:nowrap}
+  .pg-sess.rec .pg-recbar .pg-mic{margin-left:auto;white-space:nowrap}
+}
 /* ---------- compact top ---------- */
 .pg-setup{padding:10px 16px;gap:10px}
 .pg-setup summary{display:flex;gap:8px;align-items:baseline;cursor:pointer;list-style:none;min-width:0;font-size:13px}
