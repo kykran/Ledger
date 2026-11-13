@@ -3,6 +3,8 @@
 //   {action:"critique", clientId, ownerId?, programId}
 //   {action:"progress", clientId, ownerId?, programId, week, session?, direction, notes}
 //      session given -> progress that one session; omitted -> progress the whole week
+//   {action:"readrun",  images:[{media_type, data}]}   read Garmin/watch run summaries from screenshots
+//   {action:"runcoach", clientId, ownerId?, goal?}      feedback on the client's saved runs + the next 3 runs
 // Reads the client's programming notes (injuries, goals, limitations), the program, the exercise
 // library and recent logs, asks Claude, and returns a draft. Nothing is saved here: the trainer
 // reviews the draft in the app and decides what to keep.
@@ -31,6 +33,16 @@ How to work:
 - Keep sessions realistic for a 45-60 minute one-on-one session unless told otherwise. Homework sessions should be doable alone with minimal equipment.
 Always answer by calling the tool provided, exactly once.`;
 
+
+const RUN_SYSTEM = `You are the running coach inside Trainer Tally, working for a personal trainer whose client is building up her running.
+Read her recent runs (distance, average pace, average heart rate) and her trainer's notes, then give short, practical feedback and plan her next 3 runs.
+- Heartbeats per mile = average heart rate x minutes per mile. Lower means more efficient; it is the clearest sign of aerobic fitness when paces vary.
+- Most runs for a newer runner should be easy (conversational, roughly zone 2-3). Grow weekly distance gradually (about 10% a week at most).
+- If heart rate is high for the pace, suggest slowing down rather than pushing. If notes mention an injury or condition, be conservative and flag it; never diagnose.
+- Write plainly for a trainer: no jargon, no long explanations.
+Always answer by calling the tool provided, exactly once.`;
+const READ_SYSTEM = `You read running summaries from screenshots of watch or phone apps (Garmin, Apple Watch, Strava). Return exactly the numbers shown; never guess a number that isn't visible. Always answer by calling the tool provided, exactly once.`;
+
 const rowSchema = { type: "object", properties: {
   group: { type: "string", description: "Superset/circuit label like A1, A2, B1. Empty if none." },
   name: { type: "string" }, sets: { type: "string" }, reps: { type: "string" },
@@ -56,7 +68,25 @@ const TOOLS = {
     summary: { type: "string", description: "1-3 sentences on what changed and why" },
     changes: { type: "array", items: { type: "string" }, description: "Bullet list of specific changes vs the current version" },
     sessions: { type: "array", items: sessionSchema, description: "The new version: one session if one was given, otherwise every session of the week in the same order" },
-    flags: flagSchema }, required: ["summary", "changes", "sessions", "flags"] } }
+    flags: flagSchema }, required: ["summary", "changes", "sessions", "flags"] } }  ,
+  readrun: { name: "read_runs", description: "Return the runs read from the screenshots.", input_schema: { type: "object", properties: {
+    runs: { type: "array", description: "One entry per run summary visible, in the order the images were given", items: { type: "object", properties: {
+      image: { type: "integer", description: "1-based index of the image this run came from" },
+      date: { type: "string", description: "YYYY-MM-DD only if a date is visible in the image, else empty" },
+      miles: { type: "number", description: "Distance in miles (convert km x 0.621371)" },
+      pace: { type: "string", description: "Average pace per mile as m:ss (convert from per-km if needed)" },
+      hr: { type: "integer", description: "Average heart rate in bpm, if shown" },
+      note: { type: "string", description: "Anything else useful that is visible (time, elevation, cadence), short" } }, required: ["miles", "pace"] } } }, required: ["runs"] } },
+  runcoach: { name: "run_feedback", description: "Return running feedback and the next runs.", input_schema: { type: "object", properties: {
+    summary: { type: "string", description: "2-3 plain sentences on how her running is trending, for the trainer" },
+    wentWell: { type: "array", items: { type: "string" }, description: "1-3 short points" },
+    adjust: { type: "array", items: { type: "string" }, description: "1-3 short, specific things to change" },
+    nextRuns: { type: "array", description: "The next 3 runs", items: { type: "object", properties: {
+      label: { type: "string", description: "e.g. Easy run, Intervals, Long run" },
+      miles: { type: "number" }, pace: { type: "string", description: "Target pace or range per mile, e.g. 13:30-14:00" },
+      hr: { type: "string", description: "Target heart rate or range, e.g. under 140" },
+      note: { type: "string", description: "One line on how to run it" } }, required: ["label", "miles", "pace"] } },
+    flags: flagSchema }, required: ["summary", "wentWell", "adjust", "nextRuns", "flags"] } }
 };
 
 const fmtRows = s => (s.rows || []).filter(r => r.name).map(r => `    ${r.group ? r.group + " " : ""}${r.name}: ${r.sets || "?"} x ${r.reps || "?"}${r.weight ? " @ " + r.weight : ""}${r.note ? " (" + r.note + ")" : ""}`).join("\n");
@@ -74,6 +104,25 @@ function logSummary(logs){
   }).join("\n");
 }
 
+// One structured call to Claude. Returns {status, body} ready to send.
+async function ask(system, tool, content, maxTokens){
+  const call = async (toolChoice) => {
+    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, system, tools: [tool], tool_choice: toolChoice, messages: [{ role: "user", content }] }) });
+    return { r, j: await r.json().catch(() => ({})) };
+  };
+  try {
+    let { r, j } = await call({ type: "tool", name: tool.name });
+    if (!r.ok && /tool_choice|thinking/i.test((j.error && j.error.message) || "")) ({ r, j } = await call({ type: "auto" }));
+    if (!r.ok) return { status: 502, body: { code: "ai_error", message: (j.error && j.error.message) || "The AI service didn't answer. Try again." } };
+    let result = ((j.content || []).find(x => x.type === "tool_use") || {}).input;
+    if (!result){ const text = (j.content || []).filter(x => x.type === "text").map(x => x.text).join("\n"), m = text.match(/\{[\s\S]*\}/); try { result = m ? JSON.parse(m[0]) : null; } catch (e){ result = null; } }
+    if (!result) return { status: 502, body: { code: "ai_error", message: "The AI didn't return a usable answer. Try again." } };
+    return { status: 200, body: { action: tool.name, result, model: MODEL, usage: j.usage } };
+  } catch (e){ return { status: 500, body: { message: "Something went wrong. Try again in a minute." } }; }
+}
+
 export default async function handler(req, res){
   if (req.method !== "POST") return send(res, 405, { message: "Method not allowed" });
   const user = await userFrom(req);
@@ -81,6 +130,14 @@ export default async function handler(req, res){
   if (!process.env.ANTHROPIC_API_KEY) return send(res, 503, { code: "ai_not_setup", message: "The AI assistant isn't switched on yet. Add ANTHROPIC_API_KEY to the app's Vercel environment variables." });
   const b = await readJson(req);
   const action = b.action; if (!TOOLS[action]) return send(res, 400, { message: "Unknown action" });
+  if (action === "readrun"){
+    const imgs = (Array.isArray(b.images) ? b.images : []).filter(x => x && /^image\/(png|jpeg|webp|gif)$/.test(x.media_type) && typeof x.data === "string").slice(0, 10);
+    if (!imgs.length) return send(res, 400, { message: "Add a screenshot of the run." });
+    const content = [...imgs.flatMap((x, i) => [{ type: "text", text: `Image ${i + 1}:` }, { type: "image", source: { type: "base64", media_type: x.media_type, data: x.data } }]),
+      { type: "text", text: "Read every run summary in these images. Call read_runs with your answer." }];
+    const out = await ask(READ_SYSTEM, TOOLS.readrun, content, 2000);
+    return send(res, out.status, out.body);
+  }
 
   try {
     // Whose data: mine, or a program another trainer shared with me (checked against program_shares).
@@ -100,6 +157,24 @@ export default async function handler(req, res){
     ]);
     if (!cl.data) return send(res, 404, { message: "Client not found." });
     const c = cl.data.data || {}, p = prog.data && prog.data.data;
+    if (action === "runcoach"){
+      const { data: rr } = await admin.from("client_workouts").select("id,program_id,on_date,data").eq("user_id", owner).eq("client_id", cid).eq("program_id", "runs");
+      const rows = (rr || []).map(w => ({ ...(w.data || {}), on: String(w.on_date).slice(0, 10) })).sort((x, y) => x.on.localeCompare(y.on));
+      const doneRows = rows.filter(r => r.done && r.done.miles && r.done.paceSec).map(r => ({ date: r.on, miles: r.done.miles, paceSec: r.done.paceSec, hr: r.done.hr, note: r.label ? "planned: " + r.label : "" }));
+      const own = Array.isArray(c.runs) ? c.runs : [];
+      const runs = [...own.filter(r => !r.date), ...[...own.filter(r => r.date), ...doneRows].sort((x, y) => x.date.localeCompare(y.date))].slice(-20);
+      const todayIso = new Date().toISOString().slice(0, 10), ahead = rows.filter(r => !r.done && r.on >= todayIso);
+      if (!runs.length) return send(res, 400, { message: "Add a run first." });
+      const pace = s => Math.floor(s / 60) + ":" + String(Math.round(s % 60)).padStart(2, "0");
+      const lines = runs.map((r, i) => `  ${i + 1}. ${r.date || "date unknown"}: ${r.miles} mi @ ${pace(r.paceSec)}/mi${r.hr ? `, avg HR ${r.hr}, ${Math.round(r.hr * r.paceSec / 60)} beats/mile` : ""}${r.note ? " (" + r.note + ")" : ""}`).join("\n");
+      const rctx = [`CLIENT: ${String(c.name || "").split(/[\s+&]/)[0] || "Client"}${c.sex ? ", " + c.sex : ""}${age ? ", age " + age : ""}`,
+        `TRAINER'S NOTES (injuries, limitations, goals): ${c.programNotes ? c.programNotes : "none given"}`,
+        `RUNNING GOAL: ${b.goal ? String(b.goal).slice(0, 300) : c.runGoal || "not given; assume building general aerobic fitness and consistency"}`,
+        `RUNS, OLDEST FIRST:\n${lines}`,
+        ahead.length ? `ALREADY ON HER CALENDAR: ${ahead.map(r => `${r.on} ${r.label || "run"}${r.miles ? " " + r.miles + " mi" : ""}`).join("; ")}` : ""].filter(Boolean).join("\n\n");
+      const out = await ask(RUN_SYSTEM, TOOLS.runcoach, [{ type: "text", text: `${rctx}\n\nTASK:\nGive feedback on her running and plan her next 3 runs. Call run_feedback with your answer.` }], 3000);
+      return send(res, out.status, out.body);
+    }
     if (action !== "create" && !p) return send(res, 404, { message: "Program not found." });
     const lib = (exs.data || []).map(r => r.data).filter(e => e && e.name);
     const age = c.birthYear ? new Date().getFullYear() - Number(c.birthYear) : null;

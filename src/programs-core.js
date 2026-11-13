@@ -76,29 +76,33 @@ export function liftHistory(logs){
 }
 
 /* Small dependency-free SVG line chart. points: [{date:"YYYY-MM-DD", value, label?}]. One series, one axis. */
-export function lineChart(points, { unit = "", height = 150, decimals = 1 } = {}){
-  const pts = (points || []).filter(p => p && isFinite(p.value)).sort((a, b) => a.date.localeCompare(b.date));
+export function lineChart(points, { unit = "", height = 150, decimals = 1, seq = false, fmtV = null } = {}){
+  // seq: points are already in order and spaced evenly (e.g. runs without dates); each point's xl is its axis label.
+  const pts = (points || []).filter(p => p && isFinite(p.value) && (seq || p.date));
+  if (!seq) pts.sort((a, b) => a.date.localeCompare(b.date));
   if (!pts.length) return `<div class="lc-empty">No entries yet.</div>`;
   const W = 600, H = height, L = 44, R = 12, T = 12, B = 24;
-  const xs = pts.map(p => new Date(p.date + "T12:00:00").getTime());
+  const xs = seq ? pts.map((_, i) => i) : pts.map(p => new Date(p.date + "T12:00:00").getTime());
   const x0 = Math.min(...xs), x1 = Math.max(...xs), span = Math.max(1, x1 - x0);
   let lo = Math.min(...pts.map(p => p.value)), hi = Math.max(...pts.map(p => p.value));
   if (hi - lo < 1e-9){ lo -= 1; hi += 1; } const pad = (hi - lo) * 0.15; lo -= pad; hi += pad;
   const X = t => pts.length === 1 ? (L + W - R) / 2 : L + (t - x0) / span * (W - L - R);
   const Y = v => T + (hi - v) / (hi - lo) * (H - T - B);
-  const fmt = v => (Math.round(v * Math.pow(10, decimals)) / Math.pow(10, decimals)).toLocaleString("en-US");
-  const md = d => { const [, m, dd] = d.split("-").map(Number); return m + "/" + dd; };
+  const fmt = v => fmtV ? fmtV(v) : (Math.round(v * Math.pow(10, decimals)) / Math.pow(10, decimals)).toLocaleString("en-US");
+  const md0 = d => { const [, m, dd] = d.split("-").map(Number); return m + "/" + dd; };
+  const md = (d, i) => seq ? String(pts[i].xl || "#" + (i + 1)) : md0(d);
   const ticks = [lo + (hi - lo) * 0.15, (lo + hi) / 2, hi - (hi - lo) * 0.15];
   const grid = ticks.map(v => `<line x1="${L}" x2="${W - R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" class="lc-grid"/><text x="${L - 6}" y="${(Y(v) + 3.5).toFixed(1)}" text-anchor="end" class="lc-ax">${fmt(v)}</text>`).join("");
   const path = pts.map((p, i) => (i ? "L" : "M") + X(xs[i]).toFixed(1) + " " + Y(p.value).toFixed(1)).join(" ");
   const idx = pts.length <= 2 ? pts.map((_, i) => i) : [0, Math.floor((pts.length - 1) / 2), pts.length - 1];
-  const xl = [...new Set(idx)].map(i => `<text x="${X(xs[i]).toFixed(1)}" y="${H - 6}" text-anchor="middle" class="lc-ax">${md(pts[i].date)}</text>`).join("");
-  const mon = d => new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const xl = [...new Set(idx)].map(i => `<text x="${X(xs[i]).toFixed(1)}" y="${H - 6}" text-anchor="middle" class="lc-ax">${md(pts[i].date, i)}</text>`).join("");
+  const mon0 = d => new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const mon = (d, i) => seq ? String(pts[i].tip || pts[i].xl || "Run " + (i + 1)) : mon0(d);
   const dots = pts.map((p, i) => `<circle cx="${X(xs[i]).toFixed(1)}" cy="${Y(p.value).toFixed(1)}" r="4" class="lc-dot"/>`).join("");
   // Hover or tap anywhere over a date: its number and date pop up. Each point owns the band halfway to its neighbours.
   const tips = pts.map((p, i) => {
     const x = X(xs[i]), y = Y(p.value), a = i ? (X(xs[i - 1]) + x) / 2 : L, b = i < pts.length - 1 ? (x + X(xs[i + 1])) / 2 : W - R;
-    const rp = /^(\d+) reps?$/.exec(p.label || ""), txt = `${fmt(p.value)}${unit}${rp ? " × " + rp[1] : p.label ? " · " + p.label : ""} · ${mon(p.date)}`, w = txt.length * 6.6 + 16, h = 22;
+    const rp = /^(\d+) reps?$/.exec(p.label || ""), txt = `${fmt(p.value)}${unit}${rp ? " × " + rp[1] : p.label ? " · " + p.label : ""} · ${mon(p.date, i)}`, w = txt.length * 6.6 + 16, h = 22;
     const tx = Math.max(2, Math.min(W - w - 2, x - w / 2)), ty = y - h - 10 < 0 ? y + 10 : y - h - 10;
     return `<g class="lc-pt" tabindex="0" aria-label="${txt}"><rect x="${a.toFixed(1)}" y="0" width="${Math.max(1, b - a).toFixed(1)}" height="${H}" class="lc-hit"/><line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${T}" y2="${H - B}" class="lc-cross"/><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="6" class="lc-on"/><g class="lc-tip"><rect x="${tx.toFixed(1)}" y="${ty.toFixed(1)}" width="${w.toFixed(1)}" height="${h}" rx="6"/><text x="${(tx + w / 2).toFixed(1)}" y="${(ty + 15).toFixed(1)}" text-anchor="middle">${txt}</text></g></g>`;
   }).join("");
@@ -141,7 +145,7 @@ export function clientProgramView({ client, trainerName, programs, exercises, lo
     first: String(client.name || "").trim().split(/[\s+&]/)[0] || "there", trainer: trainerName || "",
     programs: active.map(strip), exercises: ex,
     logs: (logs || []).map(l => ({ p: l.program_id, s: l.session_id, r: l.row_id, n: l.set_no, reps: l.reps != null ? Number(l.reps) : null, weight: l.weight != null ? Number(l.weight) : null, timed: !!l.timed, done: !!l.done, date: String(l.logged_on).slice(0, 10), by: l.source, ex: l.ex_name })),
-    measurements: meas, updated: new Date().toISOString()
+    measurements: meas, runs: (() => { const rows = runRowsOf(clientWorkouts); return { done: allRuns(client.runs, rows), planned: rows }; })(), updated: new Date().toISOString()
   };
 }
 
@@ -825,4 +829,43 @@ export function swapOptions(name, { equipment = null, library = [], exclude = []
   else opts = opts.map((_, i) => opts[(i + seed) % opts.length]);
   const why = { equipment: "Same movement, with what you have", busy: "Same movement, no machine needed", hurts: "Gentler on the joints. Go light and stop if it hurts", dislike: "Same movement, different exercise" }[reason] || "Same movement";
   return opts.slice(0, n).map(a => { const e = lib[a[1].toLowerCase()]; return { name: e ? e.name : a[1], exId: e ? e.id : null, reps: a[3], why }; });
+}
+
+/* ---------- running (Garmin run summaries) ---------- */
+// Pace as seconds per mile. Accepts "13:23", "13:23 /mi", "13.5" (minutes), or a number of seconds.
+export function parsePace(v){
+  if (v == null || v === "") return null;
+  if (typeof v === "number") return v > 0 ? Math.round(v) : null;
+  const t = String(v).trim(), m = /^(\d{1,2}):(\d{2})/.exec(t);
+  if (m) return +m[1] * 60 + +m[2];
+  const n = parseFloat(t); return isFinite(n) && n > 0 ? Math.round(n < 40 ? n * 60 : n) : null;
+}
+export const fmtPace = s => s == null || !isFinite(s) ? "–" : Math.floor(s / 60) + ":" + String(Math.round(s % 60)).padStart(2, "0");
+// Heartbeats per mile: average heart rate × minutes per mile. Lower means she covers a mile on fewer beats, i.e. fitter.
+export const beatsPerMile = r => r && r.hr && r.paceSec ? Math.round(r.hr * r.paceSec / 60) : null;
+export function cleanRun(r){
+  const miles = parseFloat(r.miles), paceSec = parsePace(r.paceSec ?? r.pace), hr = parseInt(r.hr, 10);
+  if (!(miles > 0) || !paceSec) return null;
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(r.date || "")) ? r.date : "";
+  return { id: r.id || "run" + Math.random().toString(36).slice(2, 9), date, miles: Math.round(miles * 100) / 100, paceSec, hr: hr > 40 && hr < 230 ? hr : null, note: String(r.note || "").slice(0, 200), source: r.source || "" };
+}
+// Runs on days live in client_workouts with program_id "runs": {id, on_date, data:{kind:"run", label, miles, pace, hr, note, by, done?:{miles, paceSec, hr}}}.
+// The trainer or the client can put one on a day; whoever logs it fills `done`.
+export const RUN_PROGRAM = "runs";
+export const runRowsOf = cws => (cws || []).filter(w => w.program_id === RUN_PROGRAM)
+  .map(w => ({ ...(w.data || {}), id: w.id, on: String(w.on_date).slice(0, 10) })).sort((a, b) => a.on.localeCompare(b.on));
+// Every finished run, oldest first: the trainer's (screenshots, maybe undated) plus runs logged on a day.
+export function allRuns(clientRuns, rows){
+  const own = (clientRuns || []).filter(Boolean);
+  const done = (rows || []).filter(r => r.done && r.done.miles && r.done.paceSec).map(r => ({ id: r.id, date: r.on, miles: r.done.miles, paceSec: r.done.paceSec, hr: r.done.hr || null, note: r.label || "", source: r.by === "client" ? "client" : "trainer", row: true }));
+  return [...own.filter(r => !r.date), ...[...own.filter(r => r.date), ...done].sort((a, b) => a.date.localeCompare(b.date))];
+}
+export function cleanPlannedRun(x){
+  const n = v => { const f = parseFloat(v); return f > 0 && f < 100 ? Math.round(f * 100) / 100 : null; };
+  return { kind: "run", label: String(x.label || "Run").trim().slice(0, 60) || "Run", miles: n(x.miles), pace: String(x.pace || "").trim().slice(0, 30), hr: String(x.hr || "").trim().slice(0, 30), note: String(x.note || "").trim().slice(0, 200) };
+}
+export function cleanDoneRun(x){
+  const miles = parseFloat(x.miles), paceSec = parsePace(x.pace ?? x.paceSec), hr = parseInt(x.hr, 10);
+  if (!(miles > 0 && miles < 100) || !paceSec) return null;
+  return { miles: Math.round(miles * 100) / 100, paceSec, hr: hr > 40 && hr < 230 ? hr : null };
 }
