@@ -45,7 +45,7 @@ export async function programView(uid, cid){
     const { data: signed } = await admin.storage.from("exercise-videos").createSignedUrls(paths, 6 * 3600);
     for (const s of signed || []) if (s.signedUrl) videoUrls[s.path] = s.signedUrl;
   }
-  const v = clientProgramView({ client: cl.data, trainerName: prof.data && prof.data.data && prof.data.data.trainerName, programs, exercises, logs: logs.data, measurements: meas.data, videoUrls, clientWorkouts: cw.data || [] });
+  const v = clientProgramView({ client: cl.data, trainerName: prof.data && prof.data.data && prof.data.data.trainerName, liftMerges: prof.data && prof.data.data && prof.data.data.liftMerges, programs, exercises, logs: logs.data, measurements: meas.data, videoUrls, clientWorkouts: cw.data || [] });
   // Sessions left / this month, from the calendar. The page still works if this fails.
   try { const model = await modelFor(uid), b = model && clientView(model.M, cid); if (b){ b.timeZone = model.profile.timeZone || process.env.TZ; v.sessions = b; } } catch (e){}
   return v;

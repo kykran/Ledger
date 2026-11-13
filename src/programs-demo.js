@@ -28,6 +28,13 @@ export function buildProgramsDemo(){
         reps: r.name === "Hamstring Curl" ? 11 - k : parseInt(r.reps, 10) || null, weight: r.weight ? Number(r.weight) + (k === n && r.name !== "Hamstring Curl" ? 5 : 0) : null, timed: /^\s*\d+\s*s\b/.test(r.reps || ""), done: true, logged_on: day, source: s.homework ? "client" : "trainer" });
     }
   }
+  // Older history typed under other names (as imported from another app), so the demo shows names counted together.
+  const old = [["DB Chest Press", 30], ["Dumbell chest press", 35], ["DB bench press", 40], ["DB Chest Press for Depth", 25], ["Barbell Deadlift", 135], ["Conventional Deadlift", 145], ["deadlift", 155]];
+  for (let wk = 12; wk >= 4; wk--) old.forEach(([name, w], j) => {
+    if ((wk + j) % 3) return;
+    const day = iso(addDays(start, -wk * 7 - (j % 2) * 2)), sid = `old-${wk}-${j}`;
+    for (let k = 1; k <= 3; k++) logs.push({ program_id: "prog-maya-old", session_id: sid, row_id: "r-" + j, set_no: k, client_id: "maya", ex_name: name, reps: 8, weight: w + (12 - wk) * 2.5, timed: false, done: true, logged_on: day, source: "trainer" });
+  });
   const sites = [[14, 22, 17, 24, 141.2], [13, 21, 16, 23, 140.4], [13, 20, 15, 22, 139.6], [12, 19, 15, 21, 138.8]];
   const measurements = sites.map(([t, a, s, th, w], i) => ({ id: "m" + i, client_id: "maya", taken_on: iso(addDays(new Date(), -84 + i * 28)), weight: w, triceps: t, abdomen: a, suprailiac: s, thigh: th, body_fat: null, source: "trainer" }));
   measurements.push({ id: "m-c", client_id: "maya", taken_on: iso(addDays(new Date(), -3)), weight: 138.2, source: "client" });
