@@ -362,6 +362,8 @@ export function parseSetLog(str, plan = {}){
   if (!t) return [];
   // "BWX10" / "bw x 10": that one set is bodyweight for 10 (weight 0 here, cleared below), so "bwx10 10x8" is two sets.
   t = t.replace(/\b(?:bw|bodyweight)x(\d+)\b/g, "0x$1");
+  // "green bandx10, 10, 10": a word stuck to x and reps is what they used (band, block, box), so it's a set of 10 too.
+  t = t.replace(/\b([a-z]{3,})x(\d+)\b/g, (m, w, r) => /^(sets?|reps?|bw)$/.test(w) ? m : `${w} 0x${r}`);
   t = dropNotes(t); if (!t) return [];
   // A number ending in s is seconds: "30s", "3x30s", "3x30s@25", "45s 45s 30s". Bare numbers on a timed exercise are seconds too.
   if (/\ds(?=x|@|\s|$)/.test(t) || plan.timed) return parseTimed(t, plan);
@@ -408,6 +410,7 @@ export function noteOf(line){
   for (const w of raw.split(/\s+/)){
     const lw = w.toLowerCase().replace(/×|\*/g, "x"), bare = lw.replace(/[,;:.!]+$/, "");
     const set = SET_TOK.test(lw) || /^(?:bw|bodyweight)x[\d.]+[,;:.!]*$/.test(lw);
+    const stuck = !set && lw.match(/^([a-z]{3,})x[\d.]+[,;:.!]*$/); if (stuck){ out.push(stuck[1]); note = false; continue; }
     if (set && (!note || /x/.test(lw))){ note = false; continue; }
     if (!note && (GRAMMAR.has(bare) || /^(lbs?|kgs?|reps?)$/.test(bare))) continue;
     note = true; out.push(w);
