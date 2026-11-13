@@ -704,7 +704,7 @@ function recordBar(s, si){
   const R = recOf(s); let done = 0, total = 0;
   for (const r of s.rows || []){ if (!r.name) continue; const d = setsDone(s, r); done += d.n; total += Math.max(setCount(r), d.total, (R.extra[r.id] || 0)); }
   return `<div class="pg-recbar"><label class="small">Date <input type="date" class="pg-in" data-pg="recdate" data-s="${si}" value="${esc(R.date)}" style="width:auto"></label>
-    ${R.date < today() && done ? `<span class="pg-donebadge" id="pg-recstat-${esc(s.id)}">✓ Done ${esc(new Date(R.date + "T12:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }))} · ${done} set${done === 1 ? "" : "s"}</span>` : `<span class="small muted" id="pg-recstat-${esc(s.id)}">${done}/${total} sets</span>`}${micButton(si, s)}${saveButton(s, si)}</div>${voiceCard(s)}`;
+    <span class="small muted" id="pg-recstat-${esc(s.id)}">${done}/${total} sets</span>${micButton(si, s)}${saveButton(s, si)}</div>${voiceCard(s)}`;
 }
 /* A real Save button: every set is already saved as you go, but this sends the whole workout again and says so. */
 function saveButton(s, si){
@@ -755,7 +755,7 @@ function recordRows(p, s, si, r, ri){
   const grip = p.shared ? "" : `<button class="pg-grip pg-rgrip" data-drag="row" data-s="${si}" data-r="${ri}" title="Drag to move this exercise" aria-label="Move ${esc(r.name || "exercise")}. Drag, or use arrow keys">⠿</button>`;
   return `<tr class="pg-recrow ${grpClass(r.group)}"><td colspan="2"></td><td colspan="6"><div class="pg-rhead">${grip}${head}</div>${editor}<div class="pg-logline">
       <input class="pg-in pg-login ${have.length ? "on" : ""}" data-pg="logline" data-s="${si}" data-r="${ri}" value="${esc(shownLine(s, r, have))}" placeholder="${esc(!have.length && recOf(s).date < today() && sessLogged(s) ? "not logged" : typed || (timedPlan(r) ? "30s 30s 30s" : "135x8 135x8 145x6"))}" aria-label="${esc(r.name)} sets done, weight x reps, e.g. 215x5 215x5 225x4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next">
-      ${!have.length && recOf(s).date < today() && sessLogged(s) ? "" : have.length ? `<span class="pg-logok" aria-label="${have.length} sets logged">✓ ${have.length}</span>${deltaBadge(deltaFor(s, r))}` : plan ? `<button class="btn sm" data-act="pg-asplanned" data-s="${si}" data-r="${ri}" title="Log every set as written: ${esc(plan)}">✓ As planned</button>` : ""}
+      ${have.length ? `<span class="pg-logok" aria-label="${have.length} sets logged">✓ ${have.length}</span>${deltaBadge(deltaFor(s, r))}` : plan ? `<button class="btn sm" data-act="pg-asplanned" data-s="${si}" data-r="${ri}" title="Log every set as written: ${esc(plan)}">✓ As planned</button>` : ""}
     </div><div class="small muted pg-logprev" id="pg-lp-${esc(r.id)}">${last ? "Last time " + esc(last) : ""}</div></td></tr>`;
 }
 const sessLogged = s => (PG.logs[PG.clientId] || []).some(l => l.session_id === s.id && l.done);
@@ -1405,8 +1405,6 @@ tr.pg-drop-after td{box-shadow:inset 0 -3px 0 var(--accent)!important}
 .pg-rgrip{margin:0 2px 0 -8px;padding:4px 3px!important}
 body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:none!important;-webkit-user-select:none!important}
 .pg-savebtn{margin-left:auto}
-.pg-donebadge{font-size:13px;font-weight:600;color:var(--pos);background:color-mix(in srgb,var(--pos) 13%,transparent);padding:2px 10px;border-radius:999px;white-space:nowrap}
-.pg-login[placeholder="not logged"]::placeholder{font-style:italic;opacity:.55}
 .pg-savebtn.pg-saved{color:var(--pos);border-color:color-mix(in srgb,var(--pos) 45%,transparent)}
 .pg-recbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:color-mix(in srgb,var(--accent) 10%,var(--surface));border:1px solid color-mix(in srgb,var(--accent) 40%,var(--line));border-radius:10px;padding:8px 12px}
 .pg-weekbar{flex-wrap:nowrap;align-items:center}
