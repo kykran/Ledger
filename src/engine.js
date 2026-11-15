@@ -429,6 +429,11 @@ export function packageFromNumbers(list, now, dSize){
 
 export function fillTpl(t, vars){ return String(t||"").replace(/\{(\w+)\}/g, (m,k) => vars[k] !== undefined ? vars[k] : m); }
 /* "Paid for by": a client can be billed to another client (e.g. a spouse or parent pays). */
+/* Labels for each person on a shared client link: first names, or full names when two share a first name ("Lauren" and "Lauren + Scott"). */
+function whoName(people){
+  const firsts = people.map(p => firstName(p.name).toLowerCase());
+  return p => { const f = firstName(p.name); return firsts.filter(x => x === f.toLowerCase()).length > 1 ? String(p.name || "").trim() : f; };
+}
 export function payerOf(M, c){
   if (!c || !c.paidBy || c.paidBy === c.id) return null;
   const p = (M.ctx.clients || []).find(x => x.id === c.paidBy);
@@ -454,8 +459,9 @@ function ownMessage(M, c, kind, monthK, first){
 /* One line per client this person pays for, added to their own messages. */
 function dependentLines(M, c, kind, monthK){
   const lines = []; let extraAmt = 0;
+  const nm = whoName([c, ...dependentsOf(M, c)]);
   for (const d of dependentsOf(M, c)){
-    const st = M.stats[d.id], dn = firstName(d.name);
+    const st = M.stats[d.id], dn = nm(d);
     if (st.bill === "package"){
       if (st.status === "setup" || st.sharedPkg) continue;
       if (st.unpaidAmt > 0.5) lines.push(`${dn}'s package (${money(st.unpaidAmt)}) is also still open.`);
@@ -485,7 +491,8 @@ export function messageText(M, c, kind, monthK, link){
   if (kind === "monthlink"){
     const list = monthSessions(M, c, monthK), deps = dependentsOf(M, c).filter(d => list.some(x => x.who.id === d.id));
     const cnt = p => list.filter(x => x.who.id === p.id).length;
-    const parts = deps.length ? ` (${[`${cnt(c)} for you`, ...deps.map(d => `${cnt(d)} for ${firstName(d.name)}`)].join(", ")})` : ` (${cnt(c)})`;
+    const nm = whoName([c, ...deps]);
+    const parts = deps.length ? ` (${[`${cnt(c)} for you`, ...deps.map(d => `${cnt(d)} for ${nm(d)}`)].join(", ")})` : ` (${cnt(c)})`;
     return `Hi ${firstName(c.name)}! Here are your ${mLabel(monthK, true).replace(/ \d{4}$/, "")} sessions${parts}: ${link || "[link]"}${me ? " - " + me : ""}`;
   }
   const payer = payerOf(M, c);
@@ -496,7 +503,7 @@ export function messageText(M, c, kind, monthK, link){
     // Addressed to whoever pays, about this client's sessions.
     const t = ownMessage(M, c, kind, monthK, firstName(payer.name)); if (!t) return "";
     const {body, tail} = sign(t);
-    return `${body} (This is for ${firstName(c.name)}'s training.)${tail}`;
+    return `${body} (This is for ${whoName([payer, c])(c)}'s training.)${tail}`;
   }
   const t = ownMessage(M, c, kind, monthK, firstName(c.name));
   const {lines, extraAmt} = dependentLines(M, c, kind, monthK);
@@ -653,15 +660,15 @@ export function clientView(M, clientId){
     const inPack = PAST.filter(s => s.pkg === ci || s.over);
     if (inPack.length > v.recent.length) v.recent = inPack.slice().reverse().map(s => s.date.toISOString());
     // Who did each session, when more than one person shares this package.
-    if (st.sharedBy && st.sharedBy.length){ v.who = {}; v.people = [c, ...st.sharedBy].map(p => firstName(p.name));
-      for (const p of [c, ...st.sharedBy]) for (const x of [...M.stats[p.id].past, ...M.stats[p.id].future]) v.who[x.date.toISOString()] = firstName(p.name); }
+    if (st.sharedBy && st.sharedBy.length){ v.who = {}; const nm = whoName([c, ...st.sharedBy]); v.people = [c, ...st.sharedBy].map(nm);
+      for (const p of [c, ...st.sharedBy]) for (const x of [...M.stats[p.id].past, ...M.stats[p.id].future]) v.who[x.date.toISOString()] = nm(p); }
     v.packSessions = true; }
   else { const k = M.curM; v.thisMonth = st.past.filter(s => mkey(s.date) === k).length; v.bookedThisMonth = st.future.filter(s => mkey(s.date) === k).length;
     if (st.bill === "membership" && num(c.included)) v.included = num(c.included);
     // Dated session lists for this month and last, including anyone this client pays for.
-    const deps = dependentsOf(M, c), people = [c, ...deps], who = p => deps.length ? firstName(p.name) : "";
+    const deps = dependentsOf(M, c), people = [c, ...deps], nm = whoName(people), who = p => deps.length ? nm(p) : "";
     const pk = mkey(new Date(now.getFullYear(), now.getMonth() - 1, 1));
-    v.people = deps.length ? people.map(p => firstName(p.name)) : null;
+    v.people = deps.length ? people.map(nm) : null;
     // From the oldest month still unpaid (theirs or anyone they pay for) through this month; at least last month.
     let from = pk;
     for (const p of people) for (const inv of (M.stats[p.id].invoices || [])) if (inv.due && inv.amount > 0.5 && inv.state !== "paid" && inv.month < from) from = inv.month;
