@@ -624,6 +624,15 @@ export function simulateRate(M, {increase = 0, mode = "amount", clientIds = null
 }
 
 /* What a client sees on their private "sessions left" page. No prices. */
+/* One month's bill on a monthly client link: amount, what's been paid, and a line per person ("4 × $105"). */
+function monthBill(M, people, m, who){
+  let amount = 0, paid = 0, running = false; const lines = [];
+  for (const p of people){ const inv = (M.stats[p.id].invoices || []).find(i => i.month === m); if (!inv || inv.amount <= 0) continue;
+    amount += inv.amount; paid += inv.paid || 0; running = running || !!inv.running;
+    lines.push({who: who(p), text: M.stats[p.id].bill === "tab" ? `${inv.n} × ${money(M.stats[p.id].rate)}` : inv.details, amount: inv.amount}); }
+  const state = amount <= 0 ? "none" : paid >= amount - 0.5 ? "paid" : paid > 0.5 ? "partial" : running ? "running" : "open";
+  return {amount: Math.round(amount), paid: Math.round(paid), state, lines};
+}
 export function clientView(M, clientId){
   CTX = M.ctx;
   const c = M.ctx.clients.find(x => x.id === clientId); if (!c) return null;
@@ -632,7 +641,7 @@ export function clientView(M, clientId){
   if (st.sharedPkg && M.stats[st.sharedPkg.id]){ const v = clientView(M, st.sharedPkg.id); CTX = M.ctx;
     return {...v, first: firstName(c.name), sharedWith: firstName(st.sharedPkg.name), next: st.future.slice(0, 6).map(s => s.date.toISOString())}; }
   const PAST = st.pkPast || st.past, FUT = st.pkFuture || st.future;
-  // due: whether a package (or a monthly bill) is open. Never the amount.
+  // due: whether a package (or a monthly bill) is open. Package links never show amounts; monthly links show each month's bill (below).
   const v = {first: firstName(c.name), trainer: P("trainerName") || "", billing: st.bill, due: st.bill === "package" ? !!(st.unpaid && st.unpaid.length) : st.balance > 0.5,
     next: st.future.slice(0, 6).map(s => s.date.toISOString()), recent: st.past.slice(-6).reverse().map(s => s.date.toISOString()),
     updated: now.toISOString()};
@@ -675,7 +684,12 @@ export function clientView(M, clientId){
     const keys = []; for (let m = from; m <= k; m = mNext(m)) keys.push(m);
     v.months = keys.map(m => ({month:m, label:mLabel(m, true),
       done: monthSessions(M, c, m).map(x => ({at:x.date.toISOString(), who:who(x.who)})),
-      booked: m === k ? people.flatMap(p => M.stats[p.id].future.filter(s => mkey(s.date) === k).map(s => ({at:s.date.toISOString(), who:who(p)}))).sort((a,b) => a.at.localeCompare(b.at)) : []})); }
+      booked: m === k ? people.flatMap(p => M.stats[p.id].future.filter(s => mkey(s.date) === k).map(s => ({at:s.date.toISOString(), who:who(p)}))).sort((a,b) => a.at.localeCompare(b.at)) : [],
+      ...monthBill(M, people, m, who)}));
+    // Monthly bills: what's open across everyone on this link, and every payment recorded.
+    v.balance = Math.round(people.reduce((a, p) => a + (M.stats[p.id].balance || 0), 0));
+    v.payments = people.flatMap(p => (p.payments || []).filter(x => num(x.amount) > 0).map(x => ({date: x.date || "", amount: num(x.amount), method: x.method || "", who: who(p)})))
+      .sort((a, b) => String(b.date).localeCompare(String(a.date))); }
   return v;
 }
 
