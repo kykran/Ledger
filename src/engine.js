@@ -82,6 +82,8 @@ export function normalizeEvents(rows, profile){
     const key = cal.id + ":" + e.id; if (seen.has(key)) continue; seen.add(key);
     if (!keepEvent(e, cal, profile)) continue;
     const mins = e.end && e.end.dateTime ? (new Date(e.end.dateTime) - new Date(e.start.dateTime)) / 60000 : 60;
+    // A block longer than 4 hours ("Claire out" across a week, a vacation) is a note, not a session.
+    if (mins > 240) continue;
     evs.push({id:e.id, title:(e.summary||"").trim(), date:new Date(e.start.dateTime), cal:cal.id, calName:cal.name, studio:!!cal.studio, half: mins > 0 && mins <= 35});
   }
   return evs.sort((a,b)=>a.date-b.date);
@@ -150,7 +152,12 @@ export function compute({profile, clients, events, now} = {}){
       u.count++; u.dates.push(e.date); if (e.date < now){ u.past++; u.last = e.date; } else if (!u.next) u.next = e.date;
       continue;
     }
-    byClient[id].push({date:e.date, cal:e.cal, calName:e.calName, studio:e.studio, half:!!e.half, title:e.title, clientId:id, billable:!skip, future:e.date >= now, value:0, rent:0});
+    const row = {date:e.date, cal:e.cal, calName:e.calName, studio:e.studio, half:!!e.half, title:e.title, clientId:id, billable:!skip, future:e.date >= now, value:0, rent:0};
+    // The same session on two calendars (the trainer's own and the studio's) counts once: same client, a different calendar, starting within 30 minutes.
+    // The studio copy wins so studio rent still applies; a full hour wins over a half hour.
+    const list = byClient[id], dup = list.find(x => x.cal !== e.cal && Math.abs(x.date - e.date) < 30*60000);
+    if (dup){ if (!dup.studio && row.studio) Object.assign(dup, {cal:row.cal, calName:row.calName, studio:true, title:row.title}); if (dup.half && !row.half) dup.half = false; if (!dup.billable && row.billable) dup.billable = true; continue; }
+    list.push(row);
   }
   const stats = {};
   // Shared packages: a client paid for by someone else can use the payer's package, so both people's sessions count down one package.
