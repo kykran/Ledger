@@ -1,7 +1,8 @@
-/* The "sessions left" cards a client sees: on their sessions page (/s/<token>) and the Sessions tab of their program page (/p/<token>). Read-only, no prices. */
+/* The "sessions left" cards a client sees: on their sessions page (/s/<token>) and the Sessions tab of their program page (/p/<token>). Read-only. Package clients see no prices; monthly-bill clients see each month's bill and their payments. */
+const money = n => "$" + Math.round(Number(n) || 0).toLocaleString("en-US");
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 /* opts.tap: each date is a button (data-act="flag") so the client can question it; opts.flags maps a date to its flag;
- * opts.due: a card at the top saying whether a package (or payment) is due. Never an amount. */
+ * opts.due: a card at the top saying whether a package is due (monthly links show their balance line instead). */
 export function sessionCards(v, opts = {}){
   const tz = v.timeZone || undefined;
   const day = iso => new Date(iso).toLocaleDateString("en-US", {weekday:"short", month:"short", day:"numeric", timeZone: tz});
@@ -53,14 +54,22 @@ export function sessionCards(v, opts = {}){
     const items = list => list.length ? `<ul>${list.map(x => li(x.at, "", esc(day(x.at)), esc(x.who || ""))).join("")}</ul>` : `<p class="empty">None.</p>`;
     const by = list => v.people ? `<p class="note">${v.people.map(n => `${esc(n)}: ${list.filter(x => x.who === n).length}`).join(" · ")}</p>` : "";
     // Oldest open month first, this month last.
-    const card = (m, isCur) => `<div class="card"><h2>${esc(m.label)}</h2><div><span class="big">${m.done.length}</span><span class="of">session${m.done.length === 1 ? "" : "s"}${isCur ? " so far" : ""}</span></div>${by(m.done)}
+    // The month's bill, kept quiet: "$500 · 2 × $105 + 2 × $145" (who did which is on the line above), tagged paid when it is.
+    const bill = (m, isCur) => m.amount > 0 ? `<p class="note mbill">${money(m.amount)}${isCur && m.state === "running" ? " so far" : ""}${m.lines && m.lines.length ? " · " + m.lines.map(l => esc(l.text)).join(" + ") : ""}${m.state === "paid" ? ` <span class="due paid">paid</span>` : m.state === "partial" ? ` · ${money(m.paid)} paid` : ""}</p>` : "";
+    const card = (m, isCur) => `<div class="card"><h2>${esc(m.label)}</h2><div><span class="big">${m.done.length}</span><span class="of">session${m.done.length === 1 ? "" : "s"}${isCur ? " so far" : ""}</span></div>${by(m.done)}${bill(m, isCur)}
       ${items(m.done)}${m.booked.length ? `<p class="note" style="margin-top:10px">${m.booked.length} more booked this month.</p>` : ""}</div>`;
     const ms = v.months, total = ms.reduce((a, m) => a + m.done.length, 0);
-    head = (ms.length > 2 ? `<div class="card"><h2>Since ${esc(ms[0].label.replace(/ \d{4}$/, ""))}</h2><div><span class="big">${total}</span><span class="of">sessions</span></div>${by(ms.flatMap(m => m.done))}</div>` : "")
+    // Total at the top, as a plain line rather than a warning.
+    const balLine = v.balance != null && ms.some(m => m.amount > 0) ? `<p class="note mbal">${v.balance > 0.5 ? `Balance ${money(v.balance)} · by month below` : "All paid up"}</p>` : "";
+    head = (ms.length > 2 ? `<div class="card"><h2>Since ${esc(ms[0].label.replace(/ \d{4}$/, ""))}</h2><div><span class="big">${total}</span><span class="of">sessions</span></div>${by(ms.flatMap(m => m.done))}${balLine}</div>` : balLine ? `<div class="card">${balLine}</div>` : "")
       + ms.map((m, i) => card(m, i === ms.length - 1)).join("");
-    recent = "";
+    // Every payment recorded, folded away.
+    if (v.payments) recent = `<details class="card pays"><summary>Payments recorded${v.payments.length ? ` (${v.payments.length})` : ""}</summary>${v.payments.length
+      ? `<ul>${v.payments.map(x => `<li><span>${x.date ? esc(new Date(x.date + "T12:00:00").toLocaleDateString("en-US", {month:"short", day:"numeric", year:"numeric"})) : "No date"}${x.who && new Set(v.payments.map(y => y.who)).size > 1 ? ` · ${esc(x.who)}` : ""}</span><span>${money(x.amount)}${x.method ? ` · ${esc(x.method)}` : ""}</span></li>`).join("")}</ul>`
+      : `<p class="empty">None yet.</p>`}</details>`;
+    else recent = "";
   }
-  const due = opts.due && v.due != null ? `<div class="card duecard ${v.due ? "is-due" : ""}"><b>${v.due ? (v.billing === "package" ? "Package due" : "Payment due") : "All paid up"}</b><span class="note">${v.due ? `${esc(v.trainer || "Your trainer")} will sort out payment with you.` : "Nothing due right now."}</span></div>` : "";
+  const due = opts.due && v.due != null && !v.months ? `<div class="card duecard ${v.due ? "is-due" : ""}"><b>${v.due ? (v.billing === "package" ? "Package due" : "Payment due") : "All paid up"}</b><span class="note">${v.due ? `${esc(v.trainer || "Your trainer")} will sort out payment with you.` : "Nothing due right now."}</span></div>` : "";
   return due + head + upcoming + recent;
 }
 /* One line for the top of the program page: "11 of 24 sessions left · next Thu Oct 29, 7:00 AM". */

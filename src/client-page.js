@@ -27,7 +27,12 @@ async function load(){
       c.packages = [{ id: "c1", size: 24, price: 2400, start: old.toISOString(), used0: 0, paidDate: "2026-08-10", paidNote: "Paid in cash", onLink: true }, { id: "c2", size: 24, price: 2400 }]; }
     // ?demo=shared (or =david): Leslie uses David's package, so both of their sessions count down one package. Shown from Leslie's side.
     if (demo === "shared" || demo === "david") D.clients.push({ id: "leslie", name: "Leslie", aliases: [], billing: "package", paidBy: "david", sharePackage: true, packages: [], payments: [], active: true });
-    const v = E.clientView(demoModel(D, D.profile, D.clients), demo === "owed" || demo === "cash" ? "priya" : demo === "shared" ? "leslie" : demo);
+    // ?demo=couple: Sam's monthly bill also covers "Sam + Ana" duet sessions (Paid for by Sam), so his link lists both with each month's bill.
+    if (demo === "couple"){ const sam = D.events.filter(e => e.summary === "Sam Okafor"), ev0 = sam[0];
+      D.clients.push({ id: "sam-ana", name: "Sam + Ana", billing: "tab", rate: 140, billingStart: D.clients.find(x => x.id === "sam").billingStart, paidBy: "sam", aliases: [], payments: [], active: true });
+      sam.forEach((e, i) => { if (i % 3 === 1){ const s = new Date(new Date(e.start.dateTime).getTime() + 2 * 864e5), en = new Date(+s + 36e5);
+        D.events.push({ ...ev0, id: "duo" + i, summary: "Sam + Ana", start: { dateTime: s.toISOString() }, end: { dateTime: en.toISOString() } }); } }); }
+    const v = E.clientView(demoModel(D, D.profile, D.clients), demo === "owed" || demo === "cash" ? "priya" : demo === "shared" ? "leslie" : demo === "couple" ? "sam" : demo);
     if (v) return render(v);
   }
   try {
