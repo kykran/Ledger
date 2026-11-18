@@ -168,7 +168,15 @@ function saveSoon(p){
 function setSaveLabel(){ const el = document.getElementById("pg-save"); if (el) el.textContent = PG.save; }
 
 /* ---------- render ---------- */
+/* If drawing a client's page throws, show what broke (so it can be reported) and a way out, instead of a dead page. */
 function render(){
+  try { return renderPage(); }
+  catch (e){ console.error(e); lastErr = String(e && e.message || e);
+    return `<div class="card"><div class="empty"><b>This page hit a problem</b><span class="small muted">${esc(lastErr)}</span>
+      <div class="pg-acts"><button class="btn primary" data-act="pg-resetview">Reset the view</button><button class="btn" data-act="pg-back">← All clients</button></div></div></div>`; }
+}
+let lastErr = "";
+function renderPage(){
   if (!C.A.programs) return `<div class="card"><div class="empty">Programs are available in the hosted app.</div></div>`;
   if (!PG.ready){ load(); return `<div class="card"><div class="empty"><b>Loading programs…</b></div></div>`; }
   if (!PG.ready.ok) return PG.ready.code === "not_setup"
@@ -414,11 +422,15 @@ function zoom(from, change, to){
   const land = () => { const el = to(); if (el) el.scrollIntoView({ block: "center", inline: "center" }); return el; };
   const still = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
   if (!from || still){ change(); land(); return; }
-  if (document.startViewTransition){
-    from.style.viewTransitionName = "pg-zoom";
-    const vt = document.startViewTransition(() => { change(); const el = land(); if (el) el.style.viewTransitionName = "pg-zoom"; });
-    vt.finished.finally(() => { const el = to(); if (el) el.style.viewTransitionName = ""; });
-    return;
+  // View Transitions only in Chrome/Safari; a transition that never finishes leaves the whole page unclickable, so cut it short.
+  if (document.startViewTransition && !/Firefox\//.test(navigator.userAgent)){
+    try {
+      from.style.viewTransitionName = "pg-zoom";
+      const vt = document.startViewTransition(() => { change(); const el = land(); if (el) el.style.viewTransitionName = "pg-zoom"; });
+      const off = () => { const el = to(); if (el) el.style.viewTransitionName = ""; if (from) from.style.viewTransitionName = ""; };
+      vt.finished.then(off, off); setTimeout(() => { try { vt.skipTransition(); } catch (x){} }, 800);
+      return;
+    } catch (x){ from.style.viewTransitionName = ""; }
   }
   const r = from.getBoundingClientRect(); change(); const el = land(); if (!el || !el.animate) return;
   const t = el.getBoundingClientRect();
@@ -1087,6 +1099,7 @@ async function onClick(el, e){
       const f = p0 && !c0.shared && focusOf(c0, p0); if (f){ PG.week = f.weekIndex; PG.scrollTo = f.session.id; }
       loadClient(PG.clientId); redraw(); if (!f) window.scrollTo({ top: 0 }); break; }
     case "pg-back": PG.clientId = null; redraw(); break;
+    case "pg-resetview": PG.layout = "days"; PG.mode = "record"; PG.calOpen = null; PG.calPlan = false; PG.clip = null; PG.more = null; PG.editRow = null; PG.repeat = null; PG.scrollTo = null; try { localStorage.setItem("tt.pg.layout", "days"); localStorage.setItem("tt.pg.mode", "record"); } catch (x){} redraw(); break;
     case "pg-sub": PG.sub = el.getAttribute("data-v"); redraw(); break;
     case "pg-new": case "pg-newprog": {
       const name = act === "pg-new" ? (valIn("pg-newname").trim() || "Program") : "New program";
@@ -1931,6 +1944,10 @@ function onDragKey(e){
 
 function attach(ctx){
   C = ctx;
+  let errAt = 0; // a broken button shouldn't fail silently: say what went wrong, so it can be reported
+  const onErr = m => { if (!PG.clientId || Date.now() - errAt < 4000) return; errAt = Date.now(); try { C.toast("Something went wrong: " + String(m).slice(0, 140)); } catch (x){} };
+  window.addEventListener("error", e => onErr(e.message || e.error));
+  window.addEventListener("unhandledrejection", e => onErr(e.reason && e.reason.message || e.reason));
   document.addEventListener("toggle", e => { if (e.target.classList && e.target.classList.contains("pg-briefbox")) PG.briefOpen = e.target.open; else if (e.target.classList && e.target.classList.contains("pg-setup")) PG.setupOpen = e.target.open; }, true);
   if (C.A.programs && C.A.programs.voice){
     VOICE = createVoice({ api: b => C.A.programs.voice(b), onState: () => redraw(),
