@@ -620,8 +620,9 @@ export function sessionBrief({ session, logs = [], notes = "", billing = null, b
     if (!r.name) continue;
     const days = byEx[r.name.trim().toLowerCase()] || {}, dates = Object.keys(days).sort(), lastDate = dates[dates.length - 1];
     if (!lastDate){ lines.push({ rowId: r.id, name: r.name, last: "", lastDate: "", say: "First time", dir: "new", stuck: false }); continue; }
-    const sets = days[lastDate].sort((a, b) => a.set_no - b.set_no).map(l => ({ reps: n(l.reps), weight: n(l.weight), timed: !!l.timed })), secs = sets.some(x => x.timed);
-    const last = fmtSetLog(sets), top = topSet(sets), pw = n(r.weight), range = repRange(r);
+    const sets = days[lastDate].sort((a, b) => a.set_no - b.set_no).map(l => ({ reps: n(l.reps), weight: n(l.weight), timed: !!l.timed, done: true })), secs = sets.some(x => x.timed);
+    // Sets ticked done with no numbers (e.g. the client tapped done in their app) still count, as empty.
+    const last = fmtSetLog(sets), top = topSet(sets) || { weight: null, reps: null }, pw = n(r.weight), range = repRange(r);
     const goal = k => range ? range[0] : repsFor(r, k);
     const full = sets.length >= setCount(r), hitAll = full && sets.every((s, k) => s.reps != null && (goal(k) == null || s.reps >= goal(k)));
     const hitTop = range ? full && sets.every(s => s.reps != null && s.reps >= range[1]) : hitAll;
@@ -636,7 +637,7 @@ export function sessionBrief({ session, logs = [], notes = "", billing = null, b
     } else if (secs){ say = hitAll ? "Add 5–10s" : "Same again, came up short"; dir = hitAll ? "reps" : "hold"; }
     else { say = hitAll ? "Add a rep" : "Same again, missed reps"; dir = hitAll ? "reps" : "hold"; }
     // Stuck: not ready to go up, and the last 3 times the top set never beat the first of them.
-    const tops = dates.slice(-3).map(d => topSet(days[d]));
+    const tops = dates.slice(-3).map(d => topSet(days[d]) || { weight: null, reps: null });
     const stuck = (dir === "hold" || (dir === "reps" && range)) && tops.length === 3 && tops.slice(1).every(t => (t.weight ?? -1) < (tops[0].weight ?? -1) || ((t.weight ?? -1) === (tops[0].weight ?? -1) && (t.reps ?? 0) <= (tops[0].reps ?? 0)));
     if (stuck && dir === "hold" && top.weight != null && top.weight > 5){ weight = top.weight - 5; say = `Try ${fmtW(weight)} or swap it`; }
     if (weight != null && pw != null && weight === pw) weight = null;
