@@ -343,11 +343,16 @@ function copySource(p, wi, d){
 /* While a workout is copied, every day gets a Paste button. */
 function pasteBtn(p, d, when, wi){
   const cl = PG.clip; if (!cl || cl.type !== "session" || p.shared) return "";
+  if (cl.on && cl.on.has(p.id + "|" + (wi != null ? wi : PG.week) + "|" + d)) return `<span class="pg-paste pg-pasted small muted">✓ Pasted</span>`;
   return `<button class="pg-paste" data-act="pg-pasteday" data-d="${d}"${wi != null ? ` data-w="${wi}"` : ""} aria-label="Paste ${esc(cl.data.name)} on ${esc(when)}">⧉ Paste</button>`;
 }
 /* Paste the copied workout onto weekday d of week wi (adding weeks if the calendar runs ahead). */
 function pasteOn(wi, d, when){
   const p = P(), cl = PG.clip; if (!p || !cl || cl.type !== "session") return;
+  // One paste per day: a second tap (or a slow page tapped again) mustn't stack copies.
+  const at = p.id + "|" + wi + "|" + d; cl.on = cl.on || new Set();
+  if (cl.on.has(at)){ C.toast(`Already pasted on ${when}`); return; }
+  cl.on.add(at);
   padWeeks(p, wi); const ss = p.weeks[wi].sessions, s = copySession(cl.data); s.day = d;
   if (/^Day [A-Z]$/.test(s.name) && ss.some(x => x.name === s.name)) s.name = "Day " + String.fromCharCode(65 + Math.min(ss.filter(x => !x.homework).length, 25));
   ss.push(s); saveSoon(p); redraw(); C.toast(`Pasted ${s.name} on ${when}`);
@@ -392,7 +397,7 @@ function renderBoard(c, p, wi, week){
   for (const d of dates){
     const dow = d.getDay(), k = ymd(d), here = all.filter(x => hasDay(x.s) && +x.s.day === dow), bk = booked[k];
     const head = `<div class="pg-colh ${k === tk ? "today" : ""}"><span class="pg-colday">${DOW[dow]} <b>${d.getDate()}</b></span>${bk ? `<span class="pg-booked" title="${esc(c.name.split(" ")[0])} is booked">📅 ${esc(bk.map(tm).join(", "))}</span>` : ""}${here.length ? `<button class="pg-colplus" data-act="pg-addday" data-d="${dow}" title="Add another workout on ${DOW[dow]}" aria-label="Add another workout on ${DOW[dow]} ${d.getDate()}">+</button>` : ""}</div>`;
-    const paste = pasteBtn(p, dow, `${DOW[dow]} ${d.getDate()}`);
+    const paste = pasteBtn(p, dow, `${DOW[dow]} ${d.getDate()}`, wi);
     cols.push(`<div class="pg-col ${here.length ? "" : "empty"} ${bk ? "booked" : ""}" data-day="${dow}">${head}${here.length ? "" : paste}${here.map(x => renderSession(p, wi, x.si, x.s, dates)).join("")}${here.length ? paste : `<button class="pg-col-add" data-act="pg-addday" data-d="${dow}" aria-label="Add a workout on ${DOW[dow]} ${d.getDate()}"><span>+</span>Workout</button>${bk && (() => { const src = copySource(p, wi, dow); return src ? `<button class="pg-col-copy" data-act="pg-copyday" data-d="${dow}" data-from="${esc(src.id)}" title="Start from ${esc(src.name)} and change what you need">⧉ Copy ${esc(src.name)}</button>` : ""; })() || ""}`}</div>`);
   }
   return `<div class="pg-board" role="list">${cols.join("")}</div>`;
@@ -1057,9 +1062,15 @@ function fillFromLibrary(r){
   else r.exId = null;
 }
 
+/* Buttons that add something: a quick second tap on the same button is ignored, so a slow page can't make copies. */
+const ADDS = new Set(["pg-pasteday", "pg-pastesess", "pg-pasteweek", "pg-copyday", "pg-addday", "pg-addsess", "pg-addweek", "pg-cal-write"]);
+let lastAdd = null;
 async function onClick(el, e){
+  const act = el.getAttribute("data-act");
+  if (ADDS.has(act)){ const wk = el.closest("[data-wk]"), key = [act, ...["data-d", "data-w", "data-from"].map(k => el.getAttribute(k)), wk ? wk.getAttribute("data-wk") : ""].join("|");
+    if (lastAdd && lastAdd.key === key && Date.now() - lastAdd.t < 1500) return; lastAdd = { key, t: Date.now() }; }
   wkFrom(el);
-  const act = el.getAttribute("data-act"), si = +el.getAttribute("data-s"), ri = +el.getAttribute("data-r");
+  const si = +el.getAttribute("data-s"), ri = +el.getAttribute("data-r");
   if (act !== "pg-confirm" && !["pg-delweek", "pg-delprog", "pg-delsess", "pg-exdel"].includes(act)) PG.confirm = null;
   if (!["pg-more", "pg-confirm", "pg-repeat"].includes(act)) PG.more = null;
   const p = P(), wi = PG.week;
@@ -1681,6 +1692,7 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-cpy.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 .pg-paste{all:unset;box-sizing:border-box;width:100%;cursor:pointer;text-align:center;font-size:12px;font-weight:600;color:var(--accent);padding:7px 4px;margin:4px 0;border-radius:8px;border:1.5px dashed var(--accent);background:var(--accent-soft)}
 .pg-paste:hover,.pg-paste:focus-visible{border-style:solid}
+.pg-paste.pg-pasted{cursor:default;border-style:solid;opacity:.7}
 .pg-cal-d .pg-paste{font-size:11px;padding:5px 2px;margin-top:4px}
 .pg-clipbar{position:fixed;left:16px;right:150px;bottom:calc(18px + env(safe-area-inset-bottom));z-index:25;display:flex;align-items:center;gap:8px;justify-content:space-between;max-width:440px;padding:6px 6px 6px 14px;border-radius:18px;background:var(--surface);border:1.5px solid var(--accent);box-shadow:0 6px 20px rgba(0,0,0,.2);font-size:13px}
 .pg-clipbar>span{min-width:0;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
