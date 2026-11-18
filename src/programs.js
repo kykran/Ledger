@@ -542,7 +542,7 @@ function renderSession(p, wi, si, s, dates){
     const dl = !recOn && done.n && dates ? deltaFor(s, r) : null;
     const sum = !recOn && done.n ? `<span class="pg-done" title="Sets recorded">✓ ${done.n}/${Math.max(planned, done.total)}${done.top != null ? ` · ${done.top}` : ""}</span>` : "";
     const label = esc(r.name || "exercise");
-    return `<tr class="pg-g ${grpClass(r.group)}" data-r="${ri}"><td class="pg-gripcell"><button class="pg-grip" data-drag="row" data-s="${si}" data-r="${ri}" title="Drag to move this exercise" aria-label="Move ${label}. Drag, or use arrow keys">⠿</button></td>
+    return `<tr class="pg-g ${grpClass(r.group)}" data-r="${ri}"><td class="pg-gripcell"><button class="pg-grip" data-drag="row" data-s="${si}" data-r="${ri}" title="${dragKind(s, ri, "row") === "block" ? "Drag to move this superset together (unlink an exercise to move it alone)" : "Drag to move this exercise"}" aria-label="Move ${label}. Drag, or use arrow keys">⠿</button></td>
       <td><div class="pg-grpcell">${segStart[ri] ? `<button class="pg-bgrip" data-drag="block" data-s="${si}" data-r="${ri}" title="Drag to move block ${segStart[ri]}" aria-label="Move block ${segStart[ri]}. Drag, or use arrow keys">⇕</button>` : `<span class="pg-bgrip-sp"></span>`}<span class="gchip pg-lbl ${grpClass(r.group)}">${esc(r.group || "")}</span>${ri > 0 ? (() => { const on = letterOf(r.group) && letterOf(r.group) === letterOf(s.rows[ri - 1].group);
         return `<button class="pg-link ${on ? "on" : ""}" data-act="pg-link" data-s="${si}" data-r="${ri}" aria-pressed="${on}" title="${on ? "Linked as a superset with the exercise above. Click to unlink" : "Superset with the exercise above"}" aria-label="${on ? "Unlink " + label + " from the superset" : "Superset " + label + " with the exercise above"}">${LINK_SVG}</button>`; })() : `<span class="pg-link-sp"></span>`}</div></td>
       <td><div class="pg-exname"><input class="pg-in" list="pg-exlist" data-pg="row" data-s="${si}" data-r="${ri}" data-f="name" value="${esc(r.name)}" placeholder="Exercise" aria-label="Exercise">${hasVid ? `<button class="btn sm ghost" data-act="pg-vid" data-id="${esc(ex.id)}" title="Watch video" aria-label="Watch video">▶</button>` : ex && !p.shared ? `<button class="btn sm ghost pg-planonly pg-addvid" data-act="pg-exedit" data-id="${esc(ex.id)}" title="Add a video for this exercise" aria-label="Add a video for ${label}">+▶</button>` : ""}</div></td>
@@ -1744,6 +1744,13 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 
 /* ---------- drag to reorder (pointer events: mouse, finger or pen) ---------- */
 let DRAG = null;
+/* A superset or circuit (A1, A2...) is locked together: grabbing any of its exercises moves the whole block.
+ * Unlink an exercise (the link button) to move it on its own. */
+function dragKind(s, ri, kind){
+  if (kind !== "row") return kind;
+  const g = segments(s.rows || []).find(x => x.start <= ri && ri <= x.end);
+  return g && g.L && g.end > g.start ? "block" : "row";
+}
 function dragItems(){
   const s = P().weeks[PG.week].sessions[DRAG.si], tb = DRAG.tbody;
   const trOf = i => tb.querySelector(`tr.pg-g[data-r="${i}"]`);
@@ -1875,8 +1882,8 @@ function onPointerDown(e){
   wkFrom(h);
   if (h.getAttribute("data-drag") === "sess") return sessDragStart(e, h);
   e.preventDefault();
-  const si = +h.getAttribute("data-s"), ri = +h.getAttribute("data-r"), kind = h.getAttribute("data-drag");
-  const s = P().weeks[PG.week].sessions[si];
+  const si = +h.getAttribute("data-s"), ri = +h.getAttribute("data-r");
+  const s = P().weeks[PG.week].sessions[si], kind = dragKind(s, ri, h.getAttribute("data-drag"));
   const from = kind === "row" ? ri : segments(s.rows).findIndex(g => g.start <= ri && ri <= g.end);
   const tag = document.createElement("div"); tag.className = "pg-dragtag"; tag.hidden = true;
   tag.textContent = kind === "row" ? (s.rows[ri] && s.rows[ri].name) || "Exercise" : "Block " + (letterOf(s.rows[ri] && s.rows[ri].group) || ""); document.body.appendChild(tag);
@@ -1918,7 +1925,7 @@ function onDragKey(e){
   }
   const h = e.target.closest && e.target.closest("[data-drag]"); if (!h || (e.key !== "ArrowUp" && e.key !== "ArrowDown") || !P()) return;
   e.preventDefault();
-  const si = +h.getAttribute("data-s"), ri = +h.getAttribute("data-r"), kind = h.getAttribute("data-drag"), s = P().weeks[PG.week].sessions[si];
+  const si = +h.getAttribute("data-s"), ri = +h.getAttribute("data-r"), s = P().weeks[PG.week].sessions[si], kind = dragKind(s, ri, h.getAttribute("data-drag"));
   const n = kind === "row" ? s.rows.length : segments(s.rows).length;
   const from = kind === "row" ? ri : segments(s.rows).findIndex(g => g.start <= ri && ri <= g.end);
   const to = e.key === "ArrowUp" ? Math.max(0, from - 1) : Math.min(n, from + 2);
