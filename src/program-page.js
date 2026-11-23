@@ -1,4 +1,5 @@
-/* A client's private program page: their program and videos, homework (pick one, "Do this workout", it's logged on the day they do it),
+/* A client's private program page. Tabs: Program (each day of the week, homework included), Homework (only what to do on your own), Billing, Metrics.
+ * Their program and videos, homework (pick one, "Do this workout", it's logged on the day they do it),
  * sessions left / booked, bodyweight and progress charts.
  * Two ways in: the program link (/p/<token>), or the client app (/c/<key>), where the client signs in once with a 4-digit code
  * and can tap any session date to flag it for the trainer. ?demo=maya&app shows the client app on sample data (any code works). */
@@ -33,12 +34,11 @@ function currentWeek(p){
 function render(){
   document.title = `${V.first}'s program`;
   const head = `<div><h1>Hi ${esc(V.first)}</h1><p class="sub">${V.trainer ? `Your program from ${esc(V.trainer)}` : "Your program"}</p></div>
-    <div class="seg" role="group" aria-label="View">${[["program", "Program"], ["calendar", "Calendar"], ["metrics", "Metrics"], ...(V.sessions ? [["billing", "Billing"]] : [])].map(([k, l]) => `<button data-act="tab" data-k="${k}" aria-pressed="${st.tab === k}">${l}</button>`).join("")}</div>`;
+    <div class="seg" role="group" aria-label="View">${[["program", "Program"], ["homework", "Homework"], ...(V.sessions ? [["billing", "Billing"]] : []), ["metrics", "Metrics"]].map(([k, l]) => `<button data-act="tab" data-k="${k}" aria-pressed="${st.tab === k}">${l}</button>`).join("")}</div>`;
   const sessions = () => `<div class="sv">${appKey ? `<p class="note" style="margin:0">Something look wrong? Tap the date and let ${esc(V.trainer || "your trainer")} know.</p>` : ""}${sessionCards(V.sessions, { tap: !!appKey, flags: appKey ? flagMap() : {}, due: true })}</div>`;
-  const body = st.tab === "metrics" ? renderProgress() : st.tab === "billing" && V.sessions ? sessions() : st.tab === "calendar" ? renderCalendar() : renderProgram();
+  const body = st.tab === "metrics" ? renderProgress() : st.tab === "billing" && V.sessions ? sessions() : st.tab === "homework" ? renderHomeworkTab() : renderProgram();
   $m.innerHTML = head + homeTip() + body
     + `<footer>Trainer Tally${appKey ? ` · <button class="linkbtn" data-act="signout">Sign out</button>` : ""}</footer>` + (st.flag ? flagSheet() : st.add ? addSheet() : "");
-  if (st.tab === "calendar" && st.calScroll){ st.calScroll = false; const t = document.querySelector(".cal-wk.now"); if (t) t.scrollIntoView({ block: "start" }); }
 }
 
 /* ---------- client app: sign in, home screen tip, flagging a session ---------- */
@@ -92,8 +92,18 @@ function renderProgram(){
   const wk = p.weeks[Math.min(st.week, p.weeks.length - 1)];
   const pick = V.programs.length > 1 ? `<select data-act="prog" aria-label="Program">${V.programs.map((x, i) => `<option value="${i}" ${i === st.prog ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : `<h3>${esc(p.name)}</h3>`;
   const tabs = `<div class="tabs" role="tablist">${p.weeks.map((w, i) => `<button role="tab" aria-selected="${i === st.week}" data-act="week" data-i="${i}">${esc(w.label || "Week " + (i + 1))}</button>`).join("")}</div>`;
-  const studio = wk ? wk.sessions.filter(s => !s.homework) : [];
-  return sessionsStrip() + makeBtn() + renderHomework(p) + pick + tabs + (studio.length ? studio.map(s => renderSession(p, s)).join("") : `<div class="card"><div class="empty">${V.trainer ? `Your sessions with ${esc(V.trainer)}` : "Your sessions"} show here once they're written.</div></div>`);
+  // Every day the trainer wrote for the week, in order: sessions together and homework, each with its own label and colour.
+  const days = wk ? wk.sessions.filter(s => !s.byClient && (!s.homework || s.rows.length)) : [];
+  return pick + tabs + (days.length ? days.map(s => renderSession(p, s)).join("") : `<div class="card"><div class="empty">This week shows here once ${V.trainer ? esc(V.trainer) + " writes it" : "it's written"}.</div></div>`);
+}
+/* Homework tab: only what to do on your own this week, plus workouts the client made for themselves. */
+function renderHomeworkTab(){
+  if (!V.programs.length) return `<div class="card"><div class="empty">Your trainer hasn't added a program yet.</div></div>`;
+  const p = V.programs[Math.min(st.prog, V.programs.length - 1)], w = p.weeks[currentWeek(p)];
+  const pick = V.programs.length > 1 ? `<select data-act="prog" aria-label="Program">${V.programs.map((x, i) => `<option value="${i}" ${i === st.prog ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : "";
+  const mine = (w ? w.sessions : []).filter(s => s.byClient), hw = renderHomework(p);
+  return pick + (hw || `<div class="card"><div class="empty">No homework this week.</div></div>`) + makeBtn()
+    + (mine.length ? `<h3 style="margin-top:6px">Your own workouts</h3>` + mine.map(s => renderSession(p, s)).join("") : "");
 }
 /* Calendar: one week, a row per day. Sessions with the trainer sit on their booked days (same matching as the trainer's Calendar),
  * homework sits on the day it was done, and homework not done yet waits under the week. Tap one to open it right there. */
@@ -107,41 +117,6 @@ function bookedDates(){
   for (const m of v.months || []) all.push(...m.done.map(x => x.at), ...m.booked.map(x => x.at));
   return [...new Set(all)].map(x => new Date(x));
 }
-/* The full calendar: every week of the program (and any booked weeks after it), current week first in view.
- * Workouts the client added sit on their day. "+ Add" on a day suggests one from the sessions before and after it. */
-function renderCalendar(){
-  if (!V.programs.length) return `<div class="card"><div class="empty">Your trainer hasn't added a program yet.</div></div>`;
-  const p = V.programs[Math.min(st.prog, V.programs.length - 1)];
-  if (!p.startDate) return `<div class="card"><div class="empty">Nothing on the calendar yet.</div></div>`;
-  const z = weekZero(p), booked = bookedDates(), last = Math.max(0, ...booked.map(b => Math.floor((b - z) / (7 * 864e5) + 0.01)));
-  const n = Math.max(p.weeks.length, last + 1), cur = Math.floor((Date.now() - z) / (7 * 864e5));
-  const pick = V.programs.length > 1 ? `<select data-act="prog" aria-label="Program">${V.programs.map((x, i) => `<option value="${i}" ${i === st.prog ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : "";
-  return pick + `<p class="note" style="margin:0">Tap a workout to open it.${appKey ? " Tap <b>+ Add</b> on a day to get a workout that fits around your sessions." : ""}</p>`
-    + Array.from({ length: n }, (_, wi) => renderWeek(p, wi, booked, wi === cur)).join("");
-}
-function renderWeek(p, wi, booked, isNow){
-  const z = weekZero(p), w = p.weeks[wi], days = Array.from({ length: 7 }, (_, i) => new Date(z.getFullYear(), z.getMonth(), z.getDate() + wi * 7 + i));
-  const now = today(), sessions = w ? w.sessions || [] : [];
-  const hw = sessions.filter(s => s.homework && s.rows.length && !s.byClient), mine = sessions.filter(s => s.byClient);
-  const doneOn = {}; for (const l of V.logs) if (l.p === p.id) (doneOn[l.s] = doneOn[l.s] || new Set()).add(l.date);
-  const item = (s, key, label) => { const open = st.calOpen === key, done = doneOn[s.id];
-    return open ? `<div class="cal-open">${renderSession(p, s, key)}<button class="btn wide" data-act="calclose">Close</button></div>`
-      : `<button class="cal-it ${s.homework ? "hw" : "studio"} ${s.byClient ? "mine" : ""}" data-act="calgo" data-k="${esc(key)}"><b>${esc(s.name)}${done && s.homework ? " ✓" : ""}</b><span>${esc(label)}</span></button>`; };
-  const rows = days.map(d => {
-    const k = ymd(d), its = [];
-    for (const b of booked.filter(b => ymd(b) === k)){ const hit = sessionForDate(p, b, booked); const t = b.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-      its.push(hit && hit.weekIndex === wi ? item(hit.session, k + "|" + hit.session.id, `With ${V.trainer || "your trainer"} · ${t}`) : `<div class="cal-it studio flat"><b>Session</b><span>With ${esc(V.trainer || "your trainer")} · ${esc(t)}</span></div>`); }
-    for (const s of hw) if (doneOn[s.id] && doneOn[s.id].has(k)) its.push(item(s, k + "|" + s.id, "Homework · done"));
-    for (const s of mine) if (s.on === k) its.push(item(s, k + "|" + s.id, doneOn[s.id] ? "Your own workout · done" : "Your own workout"));
-    const add = appKey && k >= ymd(new Date(Date.now() - 7 * 864e5)) && w ? `<button class="cal-add" data-act="addopen" data-d="${k}" aria-label="Add a workout on ${esc(d.toDateString())}">+ Add</button>` : "";
-    const opened = st.calOpen && st.calOpen.startsWith(k + "|");
-    return `<div class="cal-day ${k === now ? "today" : ""} ${its.length ? "" : "empty"}"><div class="cal-d"><b>${d.toLocaleDateString("en-US", { weekday: "short" })}</b><span>${d.getDate()}</span></div><div class="cal-its">${its.join("")}${its.length ? (opened ? "" : add) : `<div class="cal-rest"><span class="muted small">Rest</span>${add}</div>`}</div></div>`;
-  }).join("");
-  const todo = hw.filter(s => !doneOn[s.id]);
-  return `<section class="card cal cal-wk ${isNow ? "now" : ""}"><div class="cal-h"><b>${esc(w ? w.label || "Week " + (wi + 1) : "After this program")}</b><span class="muted small">${esc(fmtR(days[0], days[6]))}${isNow ? " · this week" : ""}</span></div>${rows}
-    ${todo.length ? `<div class="cal-todo"><h3>Homework to do this week · any day</h3>${todo.map(s => item(s, "todo|" + s.id, "Homework · to do")).join("")}</div>` : ""}</section>`;
-}
-
 /* ---------- adding a workout from the calendar ---------- */
 /* The trainer sessions just before and after a day, so the suggestion fits around them. */
 function around(p, k){
@@ -184,7 +159,7 @@ function addSheet(){
   const body = A.busy && !W ? `<div class="skel" style="height:160px"></div><p class="note" style="margin:0;text-align:center">${A.ask ? "Putting your workout together…" : "Putting a workout together around your sessions…"}</p>`
     : W ? `<p class="note" style="margin:0">${esc(W.why || "")}</p>
       <div class="sug">${W.rows.map((r, i) => `<div class="sug-w"><div class="sug-r"><span class="gchip ${grpClass(r.group)}">${esc(r.group)}</span><span class="sug-n"><b>${esc(r.name)}</b>${r.swappedFrom ? `<span class="small swap-t">Instead of ${esc(r.swappedFrom)}</span>` : r.note ? `<span class="muted small">${esc(r.note)}</span>` : ""}</span><span class="rx">${esc(r.sets)} × ${esc(r.reps)}${r.weight ? ` @ ${esc(r.weight)}` : ""}</span><button class="btn sm" data-act="swapopen" data-w="add" data-r="${i}" aria-expanded="${isSwap("add", i)}">Swap</button><button class="btn sm" data-act="sugdel" data-i="${i}" aria-label="Take out ${esc(r.name)}">✕</button></div>${isSwap("add", i) ? swapPanel(r) : ""}</div>`).join("")}</div>
-      <div class="row"><button class="btn" data-act="addclose">Cancel</button><button class="btn" data-act="sugmore" ${A.busy ? "disabled" : ""}>${A.busy ? "Thinking…" : "Another idea"}</button><button class="btn primary" data-act="addsave" style="margin-left:auto" ${A.saving || !W.rows.length ? "disabled" : ""}>${A.saving ? "Adding…" : "Add to my calendar"}</button></div>`
+      <div class="row"><button class="btn" data-act="addclose">Cancel</button><button class="btn" data-act="sugmore" ${A.busy ? "disabled" : ""}>${A.busy ? "Thinking…" : "Another idea"}</button><button class="btn primary" data-act="addsave" style="margin-left:auto" ${A.saving || !W.rows.length ? "disabled" : ""}>${A.saving ? "Adding…" : "Add to my homework"}</button></div>`
     : `<div class="row"><button class="btn" data-act="addclose">Cancel</button><button class="btn primary" data-act="sugmore" style="margin-left:auto">Try again</button></div>`;
   return `<div class="scrim" data-act="addclose"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Add a workout"><h2>Workout for ${esc(when)}</h2>${eqLine()}${ask}${A.err ? `<p class="note warn" role="alert" style="margin:0">${esc(A.err)}</p>` : ""}${body}</div>`;
 }
@@ -229,20 +204,12 @@ function eqLine(){
   return `<div class="eq-h"><span class="small"><b>Equipment:</b> ${esc(names.join(", ") || "just my body")}</span><button class="linkbtn small" data-act="eqopen">Change</button></div>`;
 }
 
-const fmtR = (a, b) => a.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " – " + b.toLocaleDateString("en-US", a.getMonth() === b.getMonth() ? { day: "numeric" } : { month: "short", day: "numeric" });
-
-/* Sessions left (or this month) and the next booking, tapping through to the Sessions tab. */
-function sessionsStrip(){
-  if (!V.sessions) return "";
-  const L = sessionsLine(V.sessions);
-  return `<button class="strip ${L.warn ? "warn" : ""}" data-act="tab" data-k="billing"><span><b>${esc(L.text)}</b>${L.due ? ` <span class="due">${V.sessions.billing === "package" ? "package due" : "payment due"}</span>` : ""}${L.next ? `<span class="muted"> · next ${esc(L.next)}</span>` : ""}</span><span aria-hidden="true">›</span></button>`;
-}
 /* Homework isn't tied to a day: the client picks a workout, taps "Do this workout", and it's logged on the day they do it.
  * Shows this week's homework, or the latest week before it that has some. */
 function renderHomework(p){
   const now = currentWeek(p); let list = [];
   for (let i = now; i >= 0 && !list.length; i--) list = (p.weeks[i] ? p.weeks[i].sessions : []).filter(s => s.homework && s.rows.length && !s.byClient);
-  if (!list.length) return `<h3>Your sessions with ${esc(V.trainer || "your trainer")}</h3>`;
+  if (!list.length) return "";
   const lastOn = s => { const d = V.logs.filter(l => l.p === p.id && l.s === s.id).map(l => l.date).sort().pop(); return d || null; };
   const todo = list.filter(s => !lastOn(s)), done = list.filter(s => lastOn(s));
   const L = V.sessions ? sessionsLine(V.sessions) : null, by = L && L.next ? L.next.replace(/,? \d{1,2}:\d{2}.*$/, "") : "";
@@ -251,8 +218,7 @@ function renderHomework(p){
     : `<button class="hw-done" data-act="hwshow" data-s="${esc(s.id)}"><span class="hw-tick" aria-hidden="true">✓</span><span><b>${esc(s.name)}</b><span class="muted small" style="display:block">Done ${esc(lastOn(s) === today() ? "today" : fmt(lastOn(s)))}</span></span><span class="muted small">See or redo ›</span></button>`;
   return `<section class="hwbox" aria-label="Your homework"><div class="hwbox-h"><h2>Your homework</h2><span class="pill ${todo.length ? "" : "ok"}">${todo.length ? `${done.length} of ${list.length} done` : "All done ✓"}</span></div>
     <p class="hwbox-how">${todo.length ? `Do ${todo.length === 1 ? "this" : "these"} on your own${by ? ` before ${esc(by)}` : " this week"}. Tap <b>Start</b>, fill in your sets, then <b>Save</b>.` : `Nice work. That's everything ${esc(V.trainer || "your trainer")} set for this week.`}</p>
-    ${todo.map(s => renderSession(p, s)).join("")}${done.map(doneRow).join("")}</section>
-    <h3 style="margin-top:6px">Your sessions with ${esc(V.trainer || "your trainer")}</h3>`;
+    ${todo.map(s => renderSession(p, s)).join("")}${done.map(doneRow).join("")}</section>`;
 }
 
 /* ---------- equipment ---------- */
@@ -318,8 +284,8 @@ function renderSession(p, s, calKey){
     ${s.homework && s.rows.length ? (doing
       ? `<div class="row"><label class="lbl" for="d-${s.id}">Done on</label><input type="date" id="d-${s.id}" value="${st.doingOn || today()}" max="${today()}"><button class="btn" data-act="stop" style="margin-left:auto">Cancel</button><button class="btn primary" data-act="save" data-s="${s.id}">Save workout</button></div>`
       : doneOn ? `<div class="row"><button class="btn" data-act="edit" data-s="${s.id}" data-d="${esc(calDay && any.some(l => l.date === calDay) ? calDay : doneOn)}" style="flex:1">Change what I logged</button><button class="btn primary" data-act="do" data-s="${s.id}" style="flex:1">Do it again</button></div>`
-      : `<button class="btn primary wide" data-act="do" data-s="${s.id}">Start this homework</button>`) : ""}
-    ${s.byClient && !doing ? `<button class="linkbtn small" data-act="mine-del" data-s="${s.id}" style="align-self:flex-start">Remove from my calendar</button>` : ""}
+      : `<button class="btn primary wide" data-act="do" data-s="${s.id}">${s.byClient ? "Start this workout" : "Start this homework"}</button>`) : ""}
+    ${s.byClient && !doing ? `<button class="linkbtn small" data-act="mine-del" data-s="${s.id}" style="align-self:flex-start">Remove this workout</button>` : ""}
   </section>`;
 }
 
@@ -380,7 +346,7 @@ document.addEventListener("click", async e => {
     catch (x){ F.busy = false; render(); toast(x.message); }
     return;
   }
-  if (a === "tab"){ st.tab = el.getAttribute("data-k"); st.calOpen = null; st.doing = null; st.calScroll = st.tab === "calendar"; render(); if (st.tab !== "calendar") window.scrollTo({ top: 0 }); }
+  if (a === "tab"){ st.tab = el.getAttribute("data-k"); st.calOpen = null; st.doing = null; render(); window.scrollTo({ top: 0 }); }
   else if (a === "week"){ st.week = +el.getAttribute("data-i"); render(); }
   else if (a === "do" || a === "edit"){ const sid = el.getAttribute("data-s"); st.doing = sid; st.doingOn = a === "edit" ? el.getAttribute("data-d") : null; st.plain = false; st.swap = null; delete st.swaps[sid];
     st.again = a === "do" && Object.keys(logsFor(V.programs[st.prog].id, sid)).length > 0; st.vary = st.again;
@@ -413,13 +379,11 @@ document.addEventListener("click", async e => {
   else if (a === "sugdel"){ st.add.workout.rows.splice(+el.getAttribute("data-i"), 1); st.swap = null; render(); }
   else if (a === "addsave"){
     const A = st.add, p = V.programs[Math.min(st.prog, V.programs.length - 1)]; A.saving = true; render();
-    try { const j = await post({ action: "addWorkout", program_id: p.id, on_date: A.date, workout: A.workout }); st.add = null; toast("Added to your calendar"); await load(true); st.calOpen = A.date + "|" + (j.id || ""); render(); }
+    try { const j = await post({ action: "addWorkout", program_id: p.id, on_date: A.date, workout: A.workout }); st.add = null; toast("Added to your homework"); await load(true); st.tab = "homework"; render(); window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" }); }
     catch (x){ A.saving = false; A.err = x.message; render(); }
   }
-  else if (a === "mine-del"){ if (!confirm("Remove this workout from your calendar?")) return;
+  else if (a === "mine-del"){ if (!confirm("Remove this workout?")) return;
     try { await post({ action: "removeWorkout", session_id: el.getAttribute("data-s") }); st.calOpen = null; toast("Removed"); await load(true); } catch (x){ toast(x.message); } }
-  else if (a === "calgo"){ st.calOpen = el.getAttribute("data-k"); st.doing = null; render(); const c = document.querySelector(".cal-open"); if (c) c.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
-  else if (a === "calclose"){ st.calOpen = null; st.doing = null; render(); }
   else if (a === "open"){ const k = el.getAttribute("data-k"); st.open[k] = !st.open[k]; render(); }
   else if (a === "done"){ const s = el.getAttribute("data-s"), k = el.getAttribute("data-k"); const d = (st.draft[s][k] = st.draft[s][k] || {}); d.done = !d.done; el.setAttribute("aria-pressed", String(d.done)); }
   else if (a === "save"){
