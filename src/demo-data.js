@@ -51,7 +51,7 @@ export function buildDemo(now = new Date()){
     maya:   { name: "Maya Chen",     titles: ["Maya Chen", "PT Maya"], slots: [[1, 7], [4, 7]], cal: STUDIO_CAL },
     jordan: { name: "Jordan Reyes",  titles: ["Jordan Reyes"], slots: [[2, 18], [5, 18]], cal: STUDIO_CAL, since: new Date(Y, 2, 3) },
     priya:  { name: "Priya Patel",   titles: ["Priya Patel"], slots: [[1, 9], [3, 9], [5, 9]], cal: STUDIO_CAL },
-    sam:    { name: "Sam Okafor",    titles: ["Sam Okafor"], slots: [[3, 12], [6, 10]], cal: STUDIO_CAL },
+    sam:    { name: "Sam Okafor",    titles: ["Sam Okafor"], slots: [[3, 12], [6, 10]], cal: STUDIO_CAL, mins: 30 },
     rossi:  { name: "Elena + Marco", titles: ["Elena + Marco"], slots: [[2, 17], [4, 17]], cal: STUDIO_CAL },
     taylor: { name: "Taylor Brooks", titles: ["Taylor Brooks"], slots: [[2, 6], [4, 6]], cal: STUDIO_CAL, since: addDays(now, -40) },
     chris:  { name: "Chris Walsh",   titles: ["Chris Walsh"], slots: [[6, 8]], cal: ME },

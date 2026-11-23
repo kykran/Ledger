@@ -171,7 +171,15 @@ function saveSoon(p){
 function setSaveLabel(){ const el = document.getElementById("pg-save"); if (el) el.textContent = PG.save; }
 
 /* ---------- render ---------- */
+/* If drawing a client's page throws, show what broke (so it can be reported) and a way out, instead of a dead page. */
 function render(){
+  try { return renderPage(); }
+  catch (e){ console.error(e); lastErr = String(e && e.message || e);
+    return `<div class="card"><div class="empty"><b>This page hit a problem</b><span class="small muted">${esc(lastErr)}</span>
+      <div class="pg-acts"><button class="btn primary" data-act="pg-resetview">Reset the view</button><button class="btn" data-act="pg-back">← All clients</button></div></div></div>`; }
+}
+let lastErr = "";
+function renderPage(){
   if (!C.A.programs) return `<div class="card"><div class="empty">Programs are available in the hosted app.</div></div>`;
   if (!PG.ready){ load(); return `<div class="card"><div class="empty"><b>Loading programs…</b></div></div>`; }
   if (!PG.ready.ok) return PG.ready.code === "not_setup"
@@ -417,11 +425,15 @@ function zoom(from, change, to){
   const land = () => { const el = to(); if (el) el.scrollIntoView({ block: "center", inline: "center" }); return el; };
   const still = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
   if (!from || still){ change(); land(); return; }
-  if (document.startViewTransition){
-    from.style.viewTransitionName = "pg-zoom";
-    const vt = document.startViewTransition(() => { change(); const el = land(); if (el) el.style.viewTransitionName = "pg-zoom"; });
-    vt.finished.finally(() => { const el = to(); if (el) el.style.viewTransitionName = ""; });
-    return;
+  // View Transitions only in Chrome/Safari; a transition that never finishes leaves the whole page unclickable, so cut it short.
+  if (document.startViewTransition && !/Firefox\//.test(navigator.userAgent)){
+    try {
+      from.style.viewTransitionName = "pg-zoom";
+      const vt = document.startViewTransition(() => { change(); const el = land(); if (el) el.style.viewTransitionName = "pg-zoom"; });
+      const off = () => { const el = to(); if (el) el.style.viewTransitionName = ""; if (from) from.style.viewTransitionName = ""; };
+      vt.finished.then(off, off); setTimeout(() => { try { vt.skipTransition(); } catch (x){} }, 800);
+      return;
+    } catch (x){ from.style.viewTransitionName = ""; }
   }
   const r = from.getBoundingClientRect(); change(); const el = land(); if (!el || !el.animate) return;
   const t = el.getBoundingClientRect();
@@ -707,7 +719,13 @@ function recordBar(s, si){
   const R = recOf(s); let done = 0, total = 0;
   for (const r of s.rows || []){ if (!r.name) continue; const d = setsDone(s, r); done += d.n; total += Math.max(setCount(r), d.total, (R.extra[r.id] || 0)); }
   return `<div class="pg-recbar"><label class="small">Date <input type="date" class="pg-in" data-pg="recdate" data-s="${si}" value="${esc(R.date)}" style="width:auto"></label>
-    <span class="small muted" id="pg-recstat-${esc(s.id)}">${done}/${total} sets</span>${micButton(si, s)}</div>${voiceCard(s)}`;
+    <span class="small muted" id="pg-recstat-${esc(s.id)}">${done}/${total} sets</span>${micButton(si, s)}${saveButton(s, si)}</div>${voiceCard(s)}`;
+}
+/* A real Save button: every set is already saved as you go, but this sends the whole workout again and says so. */
+function saveButton(s, si){
+  const at = (PG.savedAt || {})[s.id], busy = PG.saving === s.id;
+  const t = at ? new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+  return `<button class="btn sm ${at && !busy ? "pg-saved" : "primary"} pg-savebtn" data-act="pg-savewk" data-s="${si}" ${busy ? "disabled" : ""} title="Save every set in this workout">${busy ? "Saving…" : at ? `✓ Saved ${esc(t)}` : "Save"}</button>`;
 }
 /* ---------- voice logging ---------- */
 function micButton(si, s){
@@ -751,10 +769,11 @@ function recordRows(p, s, si, r, ri){
       <div class="pg-edit-acts"><button class="btn sm ghost" data-act="pg-delrow" data-s="${si}" data-r="${ri}">Remove</button><button class="btn sm primary" data-act="pg-edrow-done">Done</button></div></div>` : "";
   const grip = p.shared ? "" : `<button class="pg-grip pg-rgrip" data-drag="row" data-s="${si}" data-r="${ri}" title="Drag to move this exercise" aria-label="Move ${esc(r.name || "exercise")}. Drag, or use arrow keys">⠿</button>`;
   return `<tr class="pg-recrow ${grpClass(r.group)}"><td colspan="2"></td><td colspan="6"><div class="pg-rhead">${grip}${head}</div>${editor}<div class="pg-logline">
-      <input class="pg-in pg-login ${have.length ? "on" : ""}" data-pg="logline" data-s="${si}" data-r="${ri}" value="${esc(shownLine(s, r, have))}" placeholder="${esc(typed || (timedPlan(r) ? "30s 30s 30s" : "135x8 135x8 145x6"))}" aria-label="${esc(r.name)} sets done, weight x reps, e.g. 215x5 215x5 225x4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next">
+      <input class="pg-in pg-login ${have.length ? "on" : ""}" data-pg="logline" data-s="${si}" data-r="${ri}" value="${esc(shownLine(s, r, have))}" placeholder="${esc(!have.length && recOf(s).date < today() && sessLogged(s) ? "not logged" : typed || (timedPlan(r) ? "30s 30s 30s" : "135x8 135x8 145x6"))}" aria-label="${esc(r.name)} sets done, weight x reps, e.g. 215x5 215x5 225x4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next">
       ${have.length ? `<span class="pg-logok" aria-label="${have.length} sets logged">✓ ${have.length}</span>${deltaBadge(deltaFor(s, r))}` : plan ? `<button class="btn sm" data-act="pg-asplanned" data-s="${si}" data-r="${ri}" title="Log every set as written: ${esc(plan)}">✓ As planned</button>` : ""}
     </div><div class="small muted pg-logprev" id="pg-lp-${esc(r.id)}">${last ? "Last time " + esc(last) : ""}</div></td></tr>`;
 }
+const sessLogged = s => (PG.logs[PG.clientId] || []).some(l => l.session_id === s.id && l.done);
 /* Show the line as it was typed ("3x8@44", "44x8 44x8 44x8") while it still matches what's saved; otherwise the saved sets. */
 const typedLines = {};
 function shownLine(s, r, have){
@@ -766,6 +785,7 @@ function commitLine(si, ri, value){
   const p = P(); if (!p) return;
   const s = p.weeks[PG.week].sessions[si], r = s && s.rows[ri]; if (!r) return;
   const list = parseSetLog(value, planOf(r)), line = String(value || "").trim(); typedLines[s.id + "|" + r.id] = line;
+  if (PG.savedAt) delete PG.savedAt[s.id];
   // A line with a note in it ("35x6 clean set. 35x5 added pause") is kept as typed, so the note stays.
   const hasNote = hasWords(line);
   if (hasNote ? (s.lines || {})[r.id] !== line : s.lines && r.id in s.lines){ if (hasNote) (s.lines = s.lines || {})[r.id] = line; else delete s.lines[r.id]; saveSoon(p); }
@@ -1092,6 +1112,7 @@ async function onClick(el, e){
       const f = p0 && !c0.shared && focusOf(c0, p0); if (f){ PG.week = f.weekIndex; PG.scrollTo = f.session.id; }
       loadClient(PG.clientId); redraw(); if (!f) window.scrollTo({ top: 0 }); break; }
     case "pg-back": PG.clientId = null; redraw(); break;
+    case "pg-resetview": PG.layout = "days"; PG.mode = "record"; PG.calOpen = null; PG.calPlan = false; PG.clip = null; PG.more = null; PG.editRow = null; PG.repeat = null; PG.scrollTo = null; try { localStorage.setItem("tt.pg.layout", "days"); localStorage.setItem("tt.pg.mode", "record"); } catch (x){} redraw(); break;
     case "pg-sub": PG.sub = el.getAttribute("data-v"); redraw(); break;
     case "pg-new": case "pg-newprog": {
       const name = act === "pg-new" ? (valIn("pg-newname").trim() || "Program") : "New program";
@@ -1176,6 +1197,15 @@ async function onClick(el, e){
         if (cur.weight == null) patch.weight = prev.weight ?? (isFinite(parseFloat(r.weight)) ? parseFloat(r.weight) : null);
       }
       putSet(si, ri, no, patch, true); redraw(); break; }
+    case "pg-savewk": { const s = p.weeks[wi].sessions[si]; if (!s) break;
+      for (const inp of document.querySelectorAll(`#main [data-wk="${wi}"] input[data-pg="logline"][data-s="${si}"], #main .pg-cal-open input[data-pg="logline"][data-s="${si}"]`)){ const ri2 = +inp.getAttribute("data-r"); clearTimeout(typeTimers[si + "|" + ri2 + "|" + wi]); if (inp.value.trim()) commitLine(si, ri2, inp.value); }
+      const rows = (PG.logs[PG.clientId] || []).filter(l => l.session_id === s.id).map(({ source, updated_at, user_id, ...row }) => row);
+      PG.saving = s.id; redraw();
+      Promise.all([rows.length ? C.A.programs.saveLogs(rows, p.shared ? p.ownerId : undefined) : null, p.shared ? null : C.A.programs.saveProgram(p)])
+        .then(() => { (PG.savedAt = PG.savedAt || {})[s.id] = Date.now(); })
+        .catch(() => C.toast("Couldn't save. Check your connection and tap Save again."))
+        .finally(() => { PG.saving = null; redraw(); });
+      break; }
     case "pg-asplanned": { const r = p.weeks[wi].sessions[si].rows[ri]; const n = Math.max(1, setCount(r) || 1), w = num(r.weight);
       commitLine(si, ri, fmtSetLog(Array.from({ length: n }, (_, k) => ({ reps: repsFor(r, k), weight: w, timed: timedPlan(r) })))); redraw(); break; }
     case "pg-layout": {
@@ -1309,6 +1339,9 @@ function onInput(t){
   if (k === "exurl"){ const pv = document.getElementById("ex-prev"); if (pv) pv.innerHTML = t.value.trim() ? videoEmbed(t.value.trim()) : ""; return true; }
   if (k === "qa"){ if (PG.qa && PG.qa.si !== +t.getAttribute("data-s")) PG.qa = null; if (PG.qa) PG.qa.hi = 0; qaRender(+t.getAttribute("data-s")); return true; }
   if (k === "logline"){ const p = P(), r = p && p.weeks[PG.week].sessions[si].rows[ri], el = r && document.getElementById("pg-lp-" + r.id);
+    // Save as you type (a second after you stop), so nothing waits on leaving the box.
+    const key = si + "|" + ri + "|" + PG.week, wk = PG.week, v = t.value; clearTimeout(typeTimers[key]);
+    typeTimers[key] = setTimeout(() => { if (PG.week !== wk) return; commitLine(si, ri, v); if (PG.savedAt){ const S = P() && P().weeks[wk].sessions[si]; if (S) delete PG.savedAt[S.id]; } }, 1000);
     if (el) el.textContent = t.value.trim() ? prevText(parseSetLog(t.value, planOf(r))) || "Type weight x reps for each set, e.g. 215x5 215x5 225x4" : (lastTime(r.name, p.weeks[PG.week].sessions[si].id) ? "Last time " + lastTime(r.name, p.weeks[PG.week].sessions[si].id) : ""); return true; }
   if (k === "set"){ const v = t.value === "" ? null : Number(t.value); putSet(+t.getAttribute("data-s"), +t.getAttribute("data-r"), +t.getAttribute("data-n"), { [t.getAttribute("data-f")]: v }); return true; }
   const p = P(); if (!p) return true;
@@ -1319,6 +1352,7 @@ function onInput(t){
   if (k === "row"){ p.weeks[PG.week].sessions[si].rows[ri][f] = t.value; saveSoon(p); return true; }
   return false;
 }
+const typeTimers = {};
 function onChange(t){
   wkFrom(t);
   const k = t.getAttribute("data-pg"); if (!k) return false;
@@ -1328,7 +1362,7 @@ function onChange(t){
     recOf(S).date = t.value || today();
     { const s = p.weeks[PG.week].sessions[si]; for (const l of (PG.logs[PG.clientId] || []).filter(x => x.session_id === s.id)){ const ri = s.rows.findIndex(r => r.id === l.row_id); if (ri >= 0) putSet(si, ri, l.set_no, {}); } }
     return true; }
-  if (k === "logline"){ commitLine(si, ri, t.value); setTimeout(() => redraw(), 0); return true; }
+  if (k === "logline"){ clearTimeout(typeTimers[si + "|" + ri + "|" + PG.week]); commitLine(si, ri, t.value); setTimeout(() => redraw(), 0); return true; }
   if (k === "prog" && t.getAttribute("data-f") === "startDate"){ redraw(); return true; }
   if (k === "wkstart"){ // which day a week starts on: this program, and the default for new ones
     const p = P(); if (!p || p.shared) return true; p.weekStart = +t.value; saveSoon(p);
@@ -1407,6 +1441,8 @@ tr.pg-drop-after td{box-shadow:inset 0 -3px 0 var(--accent)!important}
 .pg-rhead .pg-logname{flex:1;min-width:0}
 .pg-rgrip{margin:0 2px 0 -8px;padding:4px 3px!important}
 body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:none!important;-webkit-user-select:none!important}
+.pg-savebtn{margin-left:auto}
+.pg-savebtn.pg-saved{color:var(--pos);border-color:color-mix(in srgb,var(--pos) 45%,transparent)}
 .pg-recbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:color-mix(in srgb,var(--accent) 10%,var(--surface));border:1px solid color-mix(in srgb,var(--accent) 40%,var(--line));border-radius:10px;padding:8px 12px}
 .pg-weekbar{flex-wrap:nowrap;align-items:center}
 .pg-weekbar .pg-weeks{flex:1;min-width:0;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;scroll-snap-type:x proximity}
@@ -1515,7 +1551,7 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
   .pg-recdots{display:inline-flex;flex:0 0 auto}
   .pg-recacts:not(.open){display:none}
   .pg-recacts.open{justify-content:flex-start;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--surface2);width:100%}
-  .pg-sess.rec .pg-recbar{flex-wrap:nowrap;gap:8px}
+  .pg-sess.rec .pg-recbar{flex-wrap:wrap;gap:6px 8px}
   .pg-sess.rec .pg-recbar label{display:flex;gap:6px;align-items:center;white-space:nowrap}
   .pg-sess.rec .pg-recbar span{white-space:nowrap}
   .pg-sess.rec .pg-recbar .pg-mic{margin-left:auto;white-space:nowrap}
@@ -1937,6 +1973,10 @@ function onDragKey(e){
 
 function attach(ctx){
   C = ctx;
+  let errAt = 0; // a broken button shouldn't fail silently: say what went wrong, so it can be reported
+  const onErr = m => { if (!PG.clientId || Date.now() - errAt < 4000) return; errAt = Date.now(); try { C.toast("Something went wrong: " + String(m).slice(0, 140)); } catch (x){} };
+  window.addEventListener("error", e => onErr(e.message || e.error));
+  window.addEventListener("unhandledrejection", e => onErr(e.reason && e.reason.message || e.reason));
   document.addEventListener("toggle", e => { if (e.target.classList && e.target.classList.contains("pg-briefbox")) PG.briefOpen = e.target.open; else if (e.target.classList && e.target.classList.contains("pg-setup")) PG.setupOpen = e.target.open; }, true);
   if (C.A.programs && C.A.programs.voice){
     VOICE = createVoice({ api: b => C.A.programs.voice(b), onState: () => redraw(),
