@@ -46,7 +46,9 @@ const libByName = () => Object.fromEntries((PG.lib || []).map(e => [e.name.trim(
 const nameKey = n => String(n || "").trim().toLowerCase();
 /* Exercise names that count as one lift (spelling, short forms, word order), plus the trainer's own merges. */
 const merges = () => (C.S.prof && C.S.prof.liftMerges) || {};
-const lk = n => liftKey(n, merges());
+/* Memoized: Record calls this for every log on every row, and long histories run to thousands of sets. */
+let lkMemo = { m: null, c: new Map() };
+const lk = n => { const m = merges(); if (lkMemo.m !== m) lkMemo = { m, c: new Map() }; const s = String(n || ""); let k = lkMemo.c.get(s); if (k === undefined){ k = liftKey(s, m); lkMemo.c.set(s, k); } return k; };
 const myClients = () => C.S.allClients || C.S.clients || [];
 const twinOf = p => p.clientName ? myClients().find(c => [c.name, ...(c.aliases || [])].some(n => nameKey(n) === nameKey(p.clientName))) : null;
 const sharedClients = () => { const out = {}; for (const p of PG.shared){ if (twinOf(p)) continue; const id = "sh:" + p.ownerId + ":" + p.clientId; out[id] = out[id] || { id, name: p.clientName || "Client", shared: true, ownerId: p.ownerId, ownerName: p.ownerName, realId: p.clientId }; } return Object.values(out); };
@@ -706,14 +708,22 @@ function typedLineOf(progId, sid, rid){
   for (const p of PG.progs || []){ if (progId && p.id !== progId) continue; for (const w of p.weeks || []) for (const x of w.sessions || []) if (x.id === sid) return (x.lines || {})[rid] || ""; }
   return "";
 }
-function lastTime(name, excludeSid){
-  const key = lk(name); if (!key) return "";
+/* The most recent days (newest first) this client did a lift, any spelling of it: [{ day, text, name }]. */
+function recentTimes(name, excludeSid, n = 6){
+  const key = lk(name); if (!key) return [];
   const by = {};
-  for (const l of PG.logs[PG.clientId] || []){ if (l.session_id === excludeSid || lk(l.ex_name) !== key || (!l.done && l.reps == null && l.weight == null)) continue; const d = String(l.logged_on).slice(0, 10); (by[d] = by[d] || []).push(l); }
-  const day = Object.keys(by).sort().pop(); if (!day) return "";
-  const first = by[day][0], line = typedLineOf(first.program_id, first.session_id, first.row_id);
-  if (line) return fmtDay(day) + ": " + line;
-  return fmtDay(day) + ": " + by[day].sort((a, b) => a.set_no - b.set_no).map(l => l.weight != null ? `${l.weight}×${l.reps ?? "?"}${secsU(l)}` : l.timed ? `${l.reps ?? "?"}s` : `${l.reps ?? "?"} bw`).join(", ");
+  for (const l of PG.logs[PG.clientId] || []){ if (l.session_id === excludeSid || (!l.done && l.reps == null && l.weight == null) || lk(l.ex_name) !== key) continue; const d = String(l.logged_on).slice(0, 10); (by[d] = by[d] || []).push(l); }
+  return Object.keys(by).sort().reverse().slice(0, n).map(day => {
+    const ls = by[day], first = ls[0], line = typedLineOf(first.program_id, first.session_id, first.row_id);
+    const text = line || ls.sort((a, b) => a.set_no - b.set_no).map(l => l.weight != null ? `${l.weight}×${l.reps ?? "?"}${secsU(l)}` : l.timed ? `${l.reps ?? "?"}s` : `${l.reps ?? "?"} bw`).join(", ");
+    return { day, text, name: String(first.ex_name || "").trim() };
+  });
+}
+function lastTime(name, excludeSid){ const t = recentTimes(name, excludeSid, 1)[0]; return t ? fmtDay(t.day) + ": " + t.text : ""; }
+/* Last 6 times as a short list: date, then the sets. Shows the old spelling when it was logged under another name. */
+function histList(r, times){
+  const same = nameKey(r.name);
+  return `<ol class="pg-hist">${times.map(t => `<li><span class="pg-hday">${esc(fmtDay(t.day))}</span><span>${esc(t.text)}${t.name && nameKey(t.name) !== same ? ` <span class="muted">(${esc(t.name)})</span>` : ""}</span></li>`).join("")}</ol>`;
 }
 function recordBar(s, si){
   const R = recOf(s); let done = 0, total = 0;
@@ -761,17 +771,21 @@ function loggedSets(s, r){
 }
 const prevText = list => list.length ? `→ ${list.length} set${list.length === 1 ? "" : "s"}: ${list.map(x => x.weight != null ? `${x.weight} × ${x.reps ?? "?"}${secsU(x)}` : x.timed ? `${x.reps ?? "?"}s` : `${x.reps ?? "?"} bw`).join(", ")}` : "";
 function recordRows(p, s, si, r, ri){
-  const have = loggedSets(s, r), last = lastTime(r.name, s.id), plan = planText(r), typed = planLine(r);
+  const times = recentTimes(r.name, s.id), last = times[0] ? fmtDay(times[0].day) + ": " + times[0].text : "", open = PG.histRow === r.id;
+  const have = loggedSets(s, r), plan = planText(r), typed = planLine(r);
   const ed = PG.editRow === r.id;
   const head = `<button class="pg-logname" data-act="pg-edrow" data-s="${si}" data-r="${ri}" aria-expanded="${ed}" title="Edit this exercise"><span class="gchip">${esc(r.group || "·")}</span><b>${esc(r.name)}</b><span class="small muted">${esc(plan || "no sets written")}</span><span class="pg-pen" aria-hidden="true">✎</span></button>`;
   const f = (k, ph, extra = "") => `<label><span class="small muted">${ph}</span><input class="pg-in" data-pg="row" data-s="${si}" data-r="${ri}" data-f="${k}" value="${esc(k === "sr" ? fmtSetsReps(r) : r[k])}" placeholder="${k === "sr" ? "3x8" : ""}" ${extra}></label>`;
   const editor = ed ? `<div class="pg-edit">${f("name", "Exercise", `list="pg-exlist"`)}${f("sr", "Sets × reps", `inputmode="text"`)}${f("weight", "Weight")}${f("note", "Note")}
       <div class="pg-edit-acts"><button class="btn sm ghost" data-act="pg-delrow" data-s="${si}" data-r="${ri}">Remove</button><button class="btn sm primary" data-act="pg-edrow-done">Done</button></div></div>` : "";
   const grip = p.shared ? "" : `<button class="pg-grip pg-rgrip" data-drag="row" data-s="${si}" data-r="${ri}" title="Drag to move this exercise" aria-label="Move ${esc(r.name || "exercise")}. Drag, or use arrow keys">⠿</button>`;
-  return `<tr class="pg-recrow ${grpClass(r.group)}"><td colspan="2"></td><td colspan="6"><div class="pg-rhead">${grip}${head}</div>${editor}<div class="pg-logline">
+  const pop = times.length > 1 && !open && !ed ? `<div class="pg-hpop" aria-hidden="true"><div class="small muted">Last ${times.length} times</div>${histList(r, times)}</div>` : "";
+  return `<tr class="pg-recrow ${grpClass(r.group)}"><td colspan="2"></td><td colspan="6"><div class="pg-rhead">${grip}${head}${pop}</div>${editor}<div class="pg-logline">
       <input class="pg-in pg-login ${have.length ? "on" : ""}" data-pg="logline" data-s="${si}" data-r="${ri}" value="${esc(shownLine(s, r, have))}" placeholder="${esc(!have.length && recOf(s).date < today() && sessLogged(s) ? "not logged" : typed || (timedPlan(r) ? "30s 30s 30s" : "135x8 135x8 145x6"))}" aria-label="${esc(r.name)} sets done, weight x reps, e.g. 215x5 215x5 225x4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next">
       ${have.length ? `<span class="pg-logok" aria-label="${have.length} sets logged">✓ ${have.length}</span>${deltaBadge(deltaFor(s, r))}` : plan ? `<button class="btn sm" data-act="pg-asplanned" data-s="${si}" data-r="${ri}" title="Log every set as written: ${esc(plan)}">✓ As planned</button>` : ""}
-    </div><div class="small muted pg-logprev" id="pg-lp-${esc(r.id)}">${last ? "Last time " + esc(last) : ""}</div></td></tr>`;
+    </div>${times.length > 1
+      ? `<button class="small muted pg-logprev pg-lastbtn" data-act="pg-hist" data-rid="${esc(r.id)}" aria-expanded="${open}" title="${open ? "Hide" : "Show"} the last ${times.length} times"><span id="pg-lp-${esc(r.id)}">${last ? "Last time " + esc(last) : ""}</span><span class="pg-hmore">${open ? "▴ hide" : `${times.length} times ▾`}</span></button>${open ? histList(r, times.slice(1)) : ""}`
+      : `<div class="small muted pg-logprev" id="pg-lp-${esc(r.id)}">${last ? "Last time " + esc(last) : ""}</div>`}</td></tr>`;
 }
 const sessLogged = s => (PG.logs[PG.clientId] || []).some(l => l.session_id === s.id && l.done);
 /* Show the line as it was typed ("3x8@44", "44x8 44x8 44x8") while it still matches what's saved; otherwise the saved sets. */
@@ -1158,6 +1172,7 @@ async function onClick(el, e){
     case "pg-edrow": { const r = p.weeks[wi].sessions[si].rows[ri]; PG.editRow = PG.editRow === r.id ? null : r.id; redraw();
       if (PG.editRow){ const n = inWk(`.pg-edit input[data-f="sr"][data-s="${si}"][data-r="${ri}"]`); if (n){ n.focus(); try { n.select(); } catch (x){} } } break; }
     case "pg-edrow-done": PG.editRow = null; redraw(); break;
+    case "pg-hist": { const id = el.getAttribute("data-rid"); PG.histRow = PG.histRow === id ? null : id; redraw(); break; }
     case "pg-editsess": if (PG.layout === "cal" && PG.calOpen){ PG.calPlan = true; PG.editRow = null; redraw(); break; }
       { PG.mode = "plan"; try { localStorage.setItem("tt.pg.mode", "plan"); } catch (x){} PG.editRow = null; const sid = p.weeks[wi].sessions[si].id; redraw();
       const el = document.getElementById("pg-s-" + sid); if (el) el.scrollIntoView({ block: "start", behavior: "smooth" }); break; }
@@ -1702,6 +1717,19 @@ body.pg-is-dragging,body.pg-is-dragging *{cursor:grabbing!important;user-select:
 .pg-sess.rec .pg-login{padding:6px 10px}
 .pg-sess.rec .pg-logline .btn.sm{padding:5px 10px}
 .pg-sess.rec .pg-logprev{padding:3px 0 2px;min-height:0}
+/* Last 6 times: tap the "Last time" line (any screen), or hover the exercise name (mouse). */
+.pg-lastbtn{display:flex;gap:8px;align-items:baseline;width:100%;text-align:left;background:none;border:0;cursor:pointer;font:inherit;color:inherit}
+.pg-lastbtn>span:first-child{min-width:0}
+.pg-lastbtn:hover>span:first-child{text-decoration:underline;text-decoration-color:var(--line)}
+.pg-hmore{margin-left:auto;flex:0 0 auto;font-size:11px;padding:0 6px;border:1px solid var(--line);border-radius:999px;line-height:1.5}
+.pg-hist{list-style:none;margin:0 0 4px;padding:0;font-size:12px;font-variant-numeric:tabular-nums}
+.pg-hist li{display:flex;gap:10px;padding:1px 0;color:var(--muted)}
+.pg-hday{flex:0 0 7.5em;white-space:nowrap}
+.pg-rhead{position:relative}
+.pg-hpop{display:none;position:absolute;left:28px;top:100%;z-index:30;min-width:280px;max-width:min(460px,90vw);padding:8px 12px;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);pointer-events:none}
+.pg-hpop .pg-hist{margin:4px 0 0}
+.pg-hpop .pg-hist li{color:inherit}
+@media (hover:hover) and (pointer:fine){ .pg-rhead .pg-logname:hover ~ .pg-hpop{display:block} }
 .pg-sess.rec .pg-recbar{padding:5px 10px;gap:4px 10px}
 .pg-sess.rec .pg-recbar .pg-in[type=date]{padding:3px 6px}
 .pg-sess.rec .pg-recbar .btn.sm{padding:3px 9px}
