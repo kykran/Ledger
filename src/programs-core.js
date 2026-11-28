@@ -95,6 +95,8 @@ export function liftWords(name){
   if (s === "bench" || (had && s === "bench")) s = "bench press";
   // Dumbbell chest press is a dumbbell bench press.
   if (/\bdumbbell\b/.test(s)) s = s.replace(/\bchest press\b/, "bench press").replace(/\b(chest|bench)$/, "bench press");
+  // "Incline Dumbbell Press" is the incline dumbbell chest press.
+  if (/^(incline dumbbell|dumbbell incline) press$/.test(s)) s = "incline dumbbell bench press";
   return s.split(" ").filter(Boolean);
 }
 export const autoLiftKey = name => [...new Set(liftWords(name))].sort().join(" ");
