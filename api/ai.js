@@ -7,6 +7,7 @@
 // library and recent logs, asks Claude, and returns a draft. Nothing is saved here: the trainer
 // reviews the draft in the app and decides what to keep.
 import { admin, send, readJson, userFrom } from "./_lib.js";
+import { liftGroups, liftKey } from "../src/programs-core.js";
 
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001";
 const DIRECTIONS = { stability: "more stability and control (unilateral, anti-rotation, tempo, balance, controlled ranges)",
@@ -65,7 +66,8 @@ const fmtWeek = (w, i) => `${w.label || "Week " + (i + 1)}:\n${(w.sessions || []
 
 function logSummary(logs){
   const by = {};
-  for (const l of logs || []){ if (!l.ex_name) continue; const k = l.ex_name; const e = by[k] || (by[k] = []); e.push(l); }
+  const G = liftGroups(logs); // one entry per lift, whatever spelling was used
+  for (const l of logs || []){ if (!l.ex_name) continue; const k = G[liftKey(l.ex_name)].name; const e = by[k] || (by[k] = []); e.push(l); }
   return Object.entries(by).slice(0, 40).map(([name, ls]) => {
     ls.sort((a, b) => String(a.logged_on).localeCompare(String(b.logged_on)));
     const days = {}; for (const l of ls){ const d = String(l.logged_on).slice(0, 10); (days[d] = days[d] || []).push(l); }
